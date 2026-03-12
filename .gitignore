@@ -1,0 +1,25 @@
+# Godot 4+ generated files
+.godot/
+
+# Godot import files (auto-generated per machine)
+*.import
+*.uid
+
+# Exported builds
+export/
+export_presets.cfg
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
