@@ -3,6 +3,8 @@ extends RefCounted
 
 ## Manages dialogue audio playback (play, stop, loop).
 
+signal playback_finished()
+
 var _player: AudioStreamPlayer = null
 var _looping: bool = false
 var _owner: Node = null
@@ -48,7 +50,7 @@ func is_playing() -> bool:
 	return _player != null and _player.playing
 
 
-func resolve_audio_asset(audio_path: String, script: StoryFlowScript, manager: StoryFlowManager) -> AudioStream:
+func resolve_audio_asset(audio_path: String, script: StoryFlowScript, manager: Node) -> AudioStream:
 	# Check script resolved assets
 	if script and script.resolved_assets.has(audio_path):
 		var res = _try_load_asset(script.resolved_assets, audio_path)
@@ -81,3 +83,5 @@ func _try_load_asset(assets: Dictionary, key: String) -> Resource:
 func _on_audio_finished() -> void:
 	if _looping and _player:
 		_player.play()
+	else:
+		playback_finished.emit()

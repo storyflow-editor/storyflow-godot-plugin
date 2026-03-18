@@ -151,23 +151,36 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 			project.scripts[script_path] = script
 
 	# ------------------------------------------------------------------
-	# Save build directory path so the manager can re-import on load
+	# Copy all build files into the output directory (skip if same path)
 	# ------------------------------------------------------------------
-	DirAccess.make_dir_recursive_absolute(output_dir)
-	var meta_path := output_dir.path_join("storyflow_import_meta.json")
-	var meta := {
-		"build_dir": build_dir,
-		"output_dir": output_dir,
-		"imported_at": Time.get_datetime_string_from_system(),
-	}
-	var meta_file := FileAccess.open(meta_path, FileAccess.WRITE)
-	if meta_file:
-		meta_file.store_string(JSON.stringify(meta, "\t"))
-		meta_file.close()
-		print("StoryFlow: Saved import metadata to %s" % meta_path)
+	var norm_build := build_dir.replace("\\", "/").rstrip("/")
+	var norm_output := output_dir.replace("\\", "/").rstrip("/")
+	if norm_build != norm_output:
+		_copy_directory_recursive(build_dir, output_dir)
+
+	# Save metadata so the manager can reload from the local copy
+	if norm_build != norm_output:
+		var meta_path := output_dir.path_join("storyflow_import_meta.json")
+		var meta := {
+			"output_dir": output_dir,
+			"imported_at": Time.get_datetime_string_from_system(),
+		}
+		var meta_file := FileAccess.open(meta_path, FileAccess.WRITE)
+		if meta_file:
+			meta_file.store_string(JSON.stringify(meta, "\t"))
+			meta_file.close()
+			print("StoryFlow: Saved import metadata to %s" % meta_path)
 
 	print("StoryFlow: Successfully imported project with %d scripts" % project.scripts.size())
 	return project
+
+
+## Load a project from a local directory inside the Godot project (e.g. res://storyflow/).
+## This is used at runtime/startup to load previously imported data without copying files.
+## The local_dir should contain project.json/project.storyflow plus script JSON files.
+func load_project_local(local_dir: String) -> StoryFlowProject:
+	# Reuse import_project but with local_dir as both source and output (no copy needed)
+	return import_project(local_dir, local_dir)
 
 
 ## Import a project from an already-parsed JSON Dictionary (e.g. from WebSocket sync).
@@ -370,6 +383,10 @@ func _parse_node_data(type_string: String, node_obj: Dictionary) -> Dictionary:
 		data["audioLoop"] = data_src["audioLoop"]
 	if data_src.has("audioReset"):
 		data["audioReset"] = data_src["audioReset"]
+	if data_src.has("audioAdvanceOnEnd"):
+		data["audioAdvanceOnEnd"] = data_src["audioAdvanceOnEnd"]
+	if data_src.has("audioAllowSkip"):
+		data["audioAllowSkip"] = data_src["audioAllowSkip"]
 	if data_src.has("character"):
 		data["character"] = data_src["character"]
 
@@ -849,3 +866,41 @@ func _normalize_script_path(path: String) -> String:
 	if result.ends_with(".json"):
 		result = result.substr(0, result.length() - 5)
 	return result
+
+
+## Recursively copy all files from source directory to destination directory.
+func _copy_directory_recursive(src_dir: String, dst_dir: String) -> void:
+	DirAccess.make_dir_recursive_absolute(dst_dir)
+
+	var dir := DirAccess.open(src_dir)
+	if dir == null:
+		push_error("StoryFlow: Cannot open source directory %s" % src_dir)
+		return
+
+	dir.list_dir_begin()
+	var name := dir.get_next()
+	while name != "":
+		var src_path := src_dir.path_join(name)
+		var dst_path := dst_dir.path_join(name)
+		if dir.current_is_dir():
+			if name != "." and name != "..":
+				_copy_directory_recursive(src_path, dst_path)
+		else:
+			var err := DirAccess.copy_absolute(src_path, dst_path)
+			if err != OK:
+				push_error("StoryFlow: Failed to copy %s -> %s" % [src_path, dst_path])
+			else:
+				print("StoryFlow: Copied %s" % name)
+		name = dir.get_next()
+	dir.list_dir_end()
+
+
+## Create a .gdignore file in a directory so Godot ignores its contents.
+## This prevents "Files have been modified on disk" dialogs during sync.
+func _ensure_gdignore(dir_path: String) -> void:
+	var gdignore_path := dir_path.path_join(".gdignore")
+	if not FileAccess.file_exists(gdignore_path):
+		var f := FileAccess.open(gdignore_path, FileAccess.WRITE)
+		if f:
+			f.store_string("")
+			f.close()

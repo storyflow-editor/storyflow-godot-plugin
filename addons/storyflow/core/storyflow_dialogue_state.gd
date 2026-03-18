@@ -37,6 +37,12 @@ var text_blocks: Array[StoryFlowTextBlock] = []
 ## Whether the dialogue can be advanced without selecting an option.
 var can_advance: bool = false
 
+## Whether dialogue will auto-advance after audio finishes playing.
+var audio_advance_on_end: bool = false
+
+## Whether player can skip audio and advance early (only when audio_advance_on_end is true).
+var audio_allow_skip: bool = false
+
 
 func find_option(option_id: String) -> StoryFlowDialogueOption:
 	for opt in options:

@@ -5,7 +5,7 @@ extends RefCounted
 
 var _regex: RegEx = null
 var _context: StoryFlowExecutionContext = null
-var _manager: StoryFlowManager = null
+var _manager: Node = null
 
 
 func _init() -> void:
@@ -17,7 +17,7 @@ func set_context(context: StoryFlowExecutionContext) -> void:
 	_context = context
 
 
-func set_manager(manager: StoryFlowManager) -> void:
+func set_manager(manager: Node) -> void:
 	_manager = manager
 
 

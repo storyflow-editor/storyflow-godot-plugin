@@ -209,7 +209,7 @@ func evaluate_boolean_from_node(node_id: String, source_handle: String = "") -> 
 			result = _evaluate_run_script_output_bool(node_id, source_handle, data)
 
 		StoryFlowTypes.NodeType.GET_CHARACTER_VAR:
-			var char_result := _evaluate_character_variable(data)
+			var char_result := _evaluate_character_variable(data, node_id)
 			if char_result is StoryFlowVariant:
 				result = char_result.get_bool()
 
@@ -440,7 +440,7 @@ func evaluate_integer_from_node(node_id: String, source_handle: String = "") -> 
 			result = _evaluate_run_script_output_int(node_id, source_handle, data)
 
 		StoryFlowTypes.NodeType.GET_CHARACTER_VAR:
-			var char_result := _evaluate_character_variable(data)
+			var char_result := _evaluate_character_variable(data, node_id)
 			if char_result is StoryFlowVariant:
 				result = char_result.get_int()
 
@@ -559,7 +559,7 @@ func evaluate_float_from_node(node_id: String, source_handle: String = "") -> fl
 			result = _evaluate_run_script_output_float(node_id, source_handle, data)
 
 		StoryFlowTypes.NodeType.GET_CHARACTER_VAR:
-			var char_result := _evaluate_character_variable(data)
+			var char_result := _evaluate_character_variable(data, node_id)
 			if char_result is StoryFlowVariant:
 				result = char_result.get_float()
 
@@ -726,7 +726,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 			result = _evaluate_run_script_output_string(node_id, source_handle, data)
 
 		StoryFlowTypes.NodeType.GET_CHARACTER_VAR:
-			var char_result := _evaluate_character_variable(data)
+			var char_result := _evaluate_character_variable(data, node_id)
 			if char_result is StoryFlowVariant:
 				result = char_result.get_string()
 
@@ -793,7 +793,7 @@ func evaluate_enum_from_node(node_id: String, source_handle: String = "") -> Str
 				result = str(enum_values[0])
 
 		StoryFlowTypes.NodeType.GET_CHARACTER_VAR:
-			var char_result := _evaluate_character_variable(data)
+			var char_result := _evaluate_character_variable(data, node_id)
 			if char_result is StoryFlowVariant:
 				result = char_result.get_string()
 
@@ -1091,12 +1091,16 @@ func _resolve_run_script_output_var_name(source_handle: String, data: Dictionary
 # =============================================================================
 
 ## Evaluate a getCharacterVar node: find the character and return the variable's value.
-func _evaluate_character_variable(data: Dictionary) -> StoryFlowVariant:
+func _evaluate_character_variable(data: Dictionary, node_id: String = "") -> StoryFlowVariant:
 	var character_path: String = data.get("characterPath", "")
 
 	# Check for connected character input (override dropdown)
-	# The character input handle uses IN_CHARACTER_INPUT suffix
-	# For now, use the stored characterPath from node data
+	if not node_id.is_empty() and _context and _context.current_script:
+		var char_edge: Dictionary = _context.current_script.find_input_edge(node_id, StoryFlowHandles.IN_CHARACTER_INPUT)
+		if not char_edge.is_empty():
+			var source_node: Dictionary = _context.current_script.get_node(char_edge.get("source", ""))
+			if not source_node.is_empty():
+				character_path = evaluate_string_from_node(source_node.get("id", ""), char_edge.get("source_handle", ""))
 
 	if character_path.is_empty():
 		return StoryFlowVariant.new()

@@ -11,6 +11,7 @@ extends Control
 @onready var character_portrait: TextureRect = %CharacterPortrait
 @onready var options_container: VBoxContainer = %OptionsContainer
 @onready var advance_button: Button = %AdvanceButton
+@onready var background_image: TextureRect = %BackgroundImage
 
 ## Optional custom button scene for options. Falls back to plain Button if null.
 @export var option_button_scene: PackedScene
@@ -26,6 +27,7 @@ func initialize_with_component(component: StoryFlowComponent) -> void:
 	_component.dialogue_started.connect(_on_dialogue_started)
 	_component.dialogue_updated.connect(_on_dialogue_updated)
 	_component.dialogue_ended.connect(_on_dialogue_ended)
+	_component.background_image_changed.connect(_on_background_image_changed)
 
 
 func _ready() -> void:
@@ -49,6 +51,33 @@ func _on_dialogue_updated(state: StoryFlowDialogueState) -> void:
 func _on_dialogue_ended() -> void:
 	visible = false
 	_clear_options()
+	if background_image:
+		background_image.texture = null
+		background_image.visible = false
+
+
+func _on_background_image_changed(image_path: String) -> void:
+	if not background_image:
+		return
+	if image_path.is_empty():
+		background_image.texture = null
+		background_image.visible = false
+		return
+
+	# Try to resolve the image from the dialogue state or load directly
+	var tex: Texture2D = null
+	if _component:
+		var state := _component.get_current_dialogue()
+		if state and state.image:
+			tex = state.image
+	if not tex and not image_path.is_empty():
+		# Try loading from resolved assets or as a resource path
+		if ResourceLoader.exists(image_path):
+			var res = ResourceLoader.load(image_path)
+			if res is Texture2D:
+				tex = res
+	background_image.texture = tex
+	background_image.visible = tex != null
 
 
 # =============================================================================
@@ -56,10 +85,9 @@ func _on_dialogue_ended() -> void:
 # =============================================================================
 
 func _display_state(state: StoryFlowDialogueState) -> void:
-	# Title
+	# Title (hidden by default - override in subclass if needed)
 	if title_label:
-		title_label.text = state.title
-		title_label.visible = state.title != ""
+		title_label.visible = false
 
 	# Dialogue text
 	if text_label:
@@ -76,12 +104,26 @@ func _display_state(state: StoryFlowDialogueState) -> void:
 		character_portrait.texture = portrait
 		character_portrait.visible = portrait != null
 
+	# Background image from dialogue node (persists, resets, or changes per node)
+	if background_image:
+		background_image.texture = state.image
+		background_image.visible = state.image != null
+
 	# Options
 	_build_options(state.options)
 
 	# Advance button (for narrative-only dialogues)
 	if advance_button:
-		advance_button.visible = state.can_advance
+		if state.audio_advance_on_end and not state.audio_allow_skip:
+			# Audio will auto-advance, skip not allowed — hide button
+			advance_button.visible = false
+		elif state.audio_advance_on_end and state.audio_allow_skip:
+			# Audio will auto-advance but skip is allowed — show "Skip" button
+			advance_button.visible = true
+			advance_button.text = "Skip"
+		else:
+			advance_button.visible = state.can_advance
+			advance_button.text = "Continue"
 
 
 func _build_options(options: Array[StoryFlowDialogueOption]) -> void:

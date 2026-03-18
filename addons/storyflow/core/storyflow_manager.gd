@@ -1,4 +1,3 @@
-class_name StoryFlowManager
 extends Node
 
 # =============================================================================
@@ -18,7 +17,7 @@ func _ready() -> void:
 	_auto_load_project()
 
 
-## Attempt to load the project from the saved import metadata.
+## Attempt to load the project from the local copy in the output directory.
 func _auto_load_project() -> void:
 	if not FileAccess.file_exists(DEFAULT_IMPORT_META_PATH):
 		return
@@ -33,16 +32,16 @@ func _auto_load_project() -> void:
 		return
 
 	var meta: Dictionary = json.data
-	var build_dir: String = meta.get("build_dir", "")
 	var output_dir: String = meta.get("output_dir", "")
-	if build_dir.is_empty():
-		push_warning("[StoryFlow] Import metadata missing build_dir")
-		return
+	if output_dir.is_empty():
+		output_dir = DEFAULT_IMPORT_META_PATH.get_base_dir()
 
+	# Load from the local copy inside the project (output_dir IS the build dir now)
 	var importer := StoryFlowImporter.new()
-	var project := importer.import_project(build_dir, output_dir)
+	var project := importer.load_project_local(output_dir)
 	if project:
 		set_project(project)
+		print("[StoryFlow] Project loaded: %s (%d scripts)" % [project.title, project.scripts.size()])
 
 
 # =============================================================================
@@ -63,9 +62,9 @@ func has_project() -> bool:
 	return _project != null
 
 
-func get_script(path: String) -> StoryFlowScript:
+func get_storyflow_script(path: String) -> StoryFlowScript:
 	if _project:
-		return _project.get_script(path)
+		return _project.get_storyflow_script(path)
 	return null
 
 

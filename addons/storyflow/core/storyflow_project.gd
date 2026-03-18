@@ -23,7 +23,7 @@ var global_strings: Dictionary = {}
 var resolved_assets: Dictionary = {}
 
 
-func get_script(path: String) -> StoryFlowScript:
+func get_storyflow_script(path: String) -> StoryFlowScript:
 	return scripts.get(path, null)
 
 

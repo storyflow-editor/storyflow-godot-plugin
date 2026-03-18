@@ -74,12 +74,12 @@ func _import(source_file: String, save_path: String, options: Dictionary,
 		return err
 
 	# Notify the manager if it's loaded
-	var mgr := Engine.get_singleton("StoryFlowManager") if Engine.has_singleton("StoryFlowManager") else null
+	var mgr := Engine.get_singleton("StoryFlowRuntime") if Engine.has_singleton("StoryFlowRuntime") else null
 	if not mgr:
 		# Try the autoload path
 		var tree := EditorInterface.get_editor_main_screen().get_tree() if Engine.is_editor_hint() else null
 		if tree:
-			mgr = tree.root.get_node_or_null("/root/StoryFlowManager")
+			mgr = tree.root.get_node_or_null("/root/StoryFlowRuntime")
 	if mgr and mgr.has_method("set_project"):
 		mgr.set_project(project)
 

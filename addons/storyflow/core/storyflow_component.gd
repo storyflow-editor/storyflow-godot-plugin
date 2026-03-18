@@ -59,6 +59,8 @@ var _audio: StoryFlowAudioController = null
 var _dialogue_ui_instance: Control = null
 var _is_processing_chain: bool = false
 var _dialogue_dirty: bool = false
+var _waiting_for_audio_advance: bool = false
+var _audio_advance_allow_skip: bool = false
 
 ## NodeType enum value -> Callable
 var _node_handlers: Dictionary = {}
@@ -73,6 +75,7 @@ func _ready() -> void:
 	_text.set_context(_context)
 	_audio = StoryFlowAudioController.new()
 	_audio.initialize(self, dialogue_audio_bus, dialogue_volume_db)
+	_audio.playback_finished.connect(_on_dialogue_audio_finished)
 	_build_dispatch_table()
 
 
@@ -108,15 +111,15 @@ func start_dialogue_with_script(path: String) -> void:
 
 	var mgr := get_manager()
 	if not mgr:
-		_report_error("StoryFlowManager autoload not found")
+		_report_error("StoryFlowRuntime autoload not found")
 		return
 
 	var project: StoryFlowProject = mgr.get_project()
 	if not project:
-		_report_error("No StoryFlow project loaded. Import a project or set it via StoryFlowManager.")
+		_report_error("No StoryFlow project loaded. Import a project or set it via StoryFlowRuntime.")
 		return
 
-	var script_asset: StoryFlowScript = project.get_script(path)
+	var script_asset: StoryFlowScript = project.get_storyflow_script(path)
 	if not script_asset:
 		_report_error("Script not found: %s" % path)
 		return
@@ -144,12 +147,15 @@ func start_dialogue_with_script(path: String) -> void:
 	# Register with manager
 	mgr.register_dialogue_start()
 
-	# Create dialogue UI if configured
-	if dialogue_ui_scene:
+	# Create dialogue UI (use built-in default if none assigned)
+	var ui_scene: PackedScene = dialogue_ui_scene
+	if not ui_scene:
+		ui_scene = load("res://addons/storyflow/ui/storyflow_dialogue_ui.tscn") as PackedScene
+	if ui_scene:
 		if _dialogue_ui_instance:
 			_dialogue_ui_instance.queue_free()
 			_dialogue_ui_instance = null
-		_dialogue_ui_instance = dialogue_ui_scene.instantiate() as Control
+		_dialogue_ui_instance = ui_scene.instantiate() as Control
 		if _dialogue_ui_instance:
 			# Try to connect it if it has an initialize method
 			if _dialogue_ui_instance.has_method("initialize_with_component"):
@@ -237,6 +243,18 @@ func advance_dialogue() -> void:
 
 	if not _context.current_dialogue_state:
 		return
+
+	# Audio advance-on-end: block manual advance if skip is not allowed
+	if _waiting_for_audio_advance and not _audio_advance_allow_skip:
+		return
+
+	# Audio advance-on-end with skip: stop audio and proceed
+	if _waiting_for_audio_advance and _audio_advance_allow_skip:
+		if _audio:
+			_audio.stop()
+		_waiting_for_audio_advance = false
+		_audio_advance_allow_skip = false
+
 	var dialogue_node_id: String = _context.current_dialogue_state.node_id
 	var current_node: Dictionary = _context.current_script.get_node(dialogue_node_id)
 	if current_node.is_empty() or current_node.get("type", -1) != StoryFlowTypes.NodeType.DIALOGUE:
@@ -268,6 +286,9 @@ func advance_dialogue() -> void:
 func stop_dialogue() -> void:
 	if not _context.is_executing:
 		return
+
+	_waiting_for_audio_advance = false
+	_audio_advance_allow_skip = false
 
 	if stop_audio_on_dialogue_end and _audio:
 		_audio.stop()
@@ -330,9 +351,8 @@ func is_paused() -> bool:
 
 
 ## Get the StoryFlowManager autoload singleton.
-func get_manager() -> StoryFlowManager:
-	var node := get_node_or_null("/root/StoryFlowManager")
-	return node as StoryFlowManager
+func get_manager() -> Node:
+	return get_node_or_null("/root/StoryFlowRuntime")
 
 # =============================================================================
 # Variable Access (by display name)
@@ -784,9 +804,22 @@ func _handle_dialogue(node: Dictionary) -> void:
 	if is_fresh_entry and _audio:
 		var data: Dictionary = node.get("data", {})
 		if _context.current_dialogue_state.audio:
-			_audio.play(_context.current_dialogue_state.audio, data.get("audioLoop", false))
+			var audio_loop: bool = data.get("audioLoop", false)
+			_audio.play(_context.current_dialogue_state.audio, audio_loop)
+
+			# Set advance-on-end state (only for non-looped audio that actually played)
+			var advance_on_end: bool = data.get("audioAdvanceOnEnd", false)
+			_waiting_for_audio_advance = advance_on_end and not audio_loop and _audio.is_playing()
+			_audio_advance_allow_skip = _waiting_for_audio_advance and data.get("audioAllowSkip", false)
+
+			# If audio was expected to play but didn't, clear flags
+			if advance_on_end and not _audio.is_playing():
+				_waiting_for_audio_advance = false
+				_audio_advance_allow_skip = false
 		elif data.get("audioReset", false):
 			_audio.stop()
+			_waiting_for_audio_advance = false
+			_audio_advance_allow_skip = false
 
 	# Broadcast update
 	dialogue_updated.emit(_context.current_dialogue_state)
@@ -814,7 +847,7 @@ func _handle_run_script(node: Dictionary) -> void:
 	if not project:
 		return
 
-	var target_script: StoryFlowScript = project.get_script(target_script_path)
+	var target_script: StoryFlowScript = project.get_storyflow_script(target_script_path)
 	if not target_script:
 		_report_error("Script not found: %s" % target_script_path)
 		return
@@ -1540,8 +1573,16 @@ func _handle_set_character_var(node: Dictionary) -> void:
 	var mgr := get_manager()
 	if mgr:
 		var character: StoryFlowCharacter = mgr.get_runtime_character(character_path)
-		if character and character.variables.has(variable_name):
-			character.variables[variable_name]["value"] = new_value
+		if character:
+			# Handle built-in "Name" field
+			if variable_name.to_lower() == "name":
+				character.character_name = new_value.get_string("")
+			# Handle built-in "Image" field
+			elif variable_name.to_lower() == "image":
+				character.image_key = new_value.get_string("")
+			# Custom variable
+			elif character.variables.has(variable_name):
+				character.variables[variable_name]["value"] = new_value
 
 	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
 
@@ -1660,7 +1701,7 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 		var choice_id: String = choice.get("id", "")
 
 		# Check once-only
-		var once_only_key := dialogue_node["id"] + "-" + choice_id
+		var once_only_key: String = str(dialogue_node["id"]) + "-" + choice_id
 		if choice.get("onceOnly", false):
 			if mgr and mgr.is_option_used(once_only_key):
 				continue
@@ -1680,6 +1721,11 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 		var header_handle := StoryFlowHandles.source(dialogue_node["id"])
 		var header_edge: Dictionary = _context.current_script.find_connection_by_source_handle(header_handle)
 		state.can_advance = not header_edge.is_empty()
+
+	# Audio advance-on-end flags for UI
+	var audio_advance: bool = data.get("audioAdvanceOnEnd", false) and not data.get("audioLoop", false)
+	state.audio_advance_on_end = audio_advance
+	state.audio_allow_skip = audio_advance and data.get("audioAllowSkip", false)
 
 	return state
 
@@ -1784,6 +1830,13 @@ func _flush_deferred_dialogue_update() -> void:
 	if _dialogue_dirty and _context.is_waiting_for_input and _context.current_dialogue_state and _context.current_dialogue_state.is_valid:
 		_rebuild_and_emit_dialogue()
 	_dialogue_dirty = false
+
+
+func _on_dialogue_audio_finished() -> void:
+	if _waiting_for_audio_advance:
+		_waiting_for_audio_advance = false
+		_audio_advance_allow_skip = false
+		advance_dialogue()
 
 
 func _report_error(message: String) -> void:

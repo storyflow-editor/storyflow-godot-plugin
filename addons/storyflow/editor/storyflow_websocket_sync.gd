@@ -41,8 +41,7 @@ func is_connected_to_editor() -> bool:
 
 
 func request_sync() -> void:
-	if _is_connected and _socket:
-		_socket.send_text('{"type": "requestSync"}')
+	_send_message("request-sync")
 
 
 func set_output_dir(dir: String) -> void:
@@ -61,8 +60,8 @@ func poll() -> void:
 			if not _is_connected:
 				_is_connected = true
 				_reconnect_attempts = 0
+				_send_handshake()
 				connected.emit()
-				request_sync()
 
 			while _socket.get_available_packet_count() > 0:
 				var packet := _socket.get_packet()
@@ -84,6 +83,21 @@ func poll() -> void:
 				_socket.connect_to_url(url)
 
 
+func _send_message(type: String, payload: Dictionary = {}) -> void:
+	if not _is_connected or _socket == null:
+		return
+	var msg := { "type": type, "payload": payload }
+	_socket.send_text(JSON.stringify(msg))
+
+
+func _send_handshake() -> void:
+	_send_message("connect", {
+		"engine": "godot",
+		"version": Engine.get_version_info().get("string", ""),
+		"pluginVersion": "1.0.0",
+	})
+
+
 func _handle_message(text: String) -> void:
 	var parsed = JSON.parse_string(text)
 	if parsed == null or not parsed is Dictionary:
@@ -91,16 +105,31 @@ func _handle_message(text: String) -> void:
 
 	var msg_type: String = parsed.get("type", "")
 	match msg_type:
-		"project-updated", "sync-response":
-			_handle_sync(parsed)
+		"project-updated":
+			_handle_project_updated(parsed)
+		"pong":
+			pass
 
 
-func _handle_sync(data: Dictionary) -> void:
-	var project_data: Dictionary = data.get("data", {})
-	if project_data.is_empty():
+func _handle_project_updated(data: Dictionary) -> void:
+	# The editor sends { type: "project-updated", payload: { projectPath: "..." } }
+	# The projectPath is the absolute path to the StoryFlow project directory.
+	# The build files are in projectPath/build/
+	var payload: Dictionary = data.get("payload", {})
+	var project_path: String = payload.get("projectPath", "")
+
+	if project_path.is_empty():
+		push_warning("[StoryFlow] project-updated message missing projectPath")
 		return
 
+	# Build directory is projectPath/build
+	var build_dir: String = project_path.replace("\\", "/") + "/build"
+
+	print("[StoryFlow] Syncing from build directory: %s" % build_dir)
+
 	var importer := StoryFlowImporter.new()
-	var project := importer.import_project_from_json(project_data)
+	var project := importer.import_project(build_dir, _output_dir)
 	if project:
 		sync_complete.emit(project)
+	else:
+		push_error("[StoryFlow] Failed to import project from sync")
