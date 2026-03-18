@@ -47,6 +47,11 @@ func _build_ui() -> void:
 	header.text = "StoryFlow"
 	header.add_theme_font_size_override("font_size", 18)
 	header_row.add_child(header)
+	var version_label := Label.new()
+	version_label.text = "v" + StoryFlowWebSocketSync._get_plugin_version()
+	version_label.add_theme_font_size_override("font_size", 11)
+	version_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+	header_row.add_child(version_label)
 	root.add_child(header_row)
 
 	root.add_child(HSeparator.new())

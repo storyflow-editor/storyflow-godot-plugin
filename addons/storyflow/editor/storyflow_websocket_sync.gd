@@ -94,8 +94,15 @@ func _send_handshake() -> void:
 	_send_message("connect", {
 		"engine": "godot",
 		"version": Engine.get_version_info().get("string", ""),
-		"pluginVersion": "1.0.0",
+		"pluginVersion": _get_plugin_version(),
 	})
+
+
+static func _get_plugin_version() -> String:
+	var cfg := ConfigFile.new()
+	if cfg.load("res://addons/storyflow/plugin.cfg") == OK:
+		return cfg.get_value("plugin", "version", "unknown")
+	return "unknown"
 
 
 func _handle_message(text: String) -> void:
