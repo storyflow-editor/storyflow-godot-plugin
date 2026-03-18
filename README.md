@@ -101,10 +101,23 @@ If you prefer not to use live sync, you can import from a build directory:
 2. In the **StoryFlow** dock, set **Build Dir** to the `build/` folder path
 3. Click **Import Project**
 
+## Features
+
+- 160+ node types — dialogue, branching, variables, arrays, characters, audio, images
+- Built-in dialogue UI with auto-fallback when no custom UI assigned
+- Live text interpolation — `{varname}`, `{Character.Name}`
+- RunScript / RunFlow — nested scripts with parameters, outputs, and exit flows
+- ForEach loops across all array types
+- Audio advance-on-end with optional skip
+- Character variables with built-in Name/Image field support
+- Save/Load with slot-based persistence
+- WebSocket Live Sync with auto-reconnect
+- Toolbar button for quick Connect/Sync
+
 ## Documentation
 
-Full documentation available at [storyflow-editor.com](https://storyflow-editor.com).
+Full documentation at [storyflow-editor.com/integrations/godot](https://storyflow-editor.com/integrations/godot).
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+[MIT](LICENSE)
