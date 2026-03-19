@@ -8,7 +8,6 @@ var _project_path_edit: LineEdit
 var _output_path_edit: LineEdit
 var _import_button: Button
 var _status_label: Label
-var _sync_host_edit: LineEdit
 var _sync_port_edit: SpinBox
 var _connect_button: Button
 var _disconnect_button: Button
@@ -61,17 +60,6 @@ func _build_ui() -> void:
 	sync_header.text = "Live Sync"
 	sync_header.add_theme_font_size_override("font_size", 14)
 	root.add_child(sync_header)
-
-	var host_row := HBoxContainer.new()
-	var host_label := Label.new()
-	host_label.text = "Host:"
-	host_label.custom_minimum_size.x = 70
-	host_row.add_child(host_label)
-	_sync_host_edit = LineEdit.new()
-	_sync_host_edit.text = "localhost"
-	_sync_host_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	host_row.add_child(_sync_host_edit)
-	root.add_child(host_row)
 
 	var port_row := HBoxContainer.new()
 	var port_label := Label.new()
@@ -207,7 +195,7 @@ func _on_connect_pressed() -> void:
 	_ws_sync.connected.connect(_on_ws_connected)
 	_ws_sync.disconnected.connect(_on_ws_disconnected)
 	_ws_sync.sync_complete.connect(_on_ws_sync_complete)
-	_ws_sync.connect_to_editor(_sync_host_edit.text.strip_edges(), int(_sync_port_edit.value))
+	_ws_sync.connect_to_editor(int(_sync_port_edit.value))
 	_poll_timer.start()
 
 

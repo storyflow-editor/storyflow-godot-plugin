@@ -6,7 +6,6 @@ signal disconnected()
 signal sync_complete(project: StoryFlowProject)
 
 var _socket: WebSocketPeer = null
-var _host: String = "localhost"
 var _port: int = 9000
 var _is_connected: bool = false
 var _reconnect_attempts: int = 0
@@ -15,13 +14,12 @@ var _output_dir: String = "res://storyflow"
 const MAX_RECONNECT_ATTEMPTS := 5
 
 
-func connect_to_editor(host: String = "localhost", port: int = 9000) -> void:
-	_host = host
+func connect_to_editor(port: int = 9000) -> void:
 	_port = port
 	_reconnect_attempts = 0
 
 	_socket = WebSocketPeer.new()
-	var url := "ws://%s:%d" % [_host, _port]
+	var url := "ws://localhost:%d" % _port
 	var err := _socket.connect_to_url(url)
 	if err != OK:
 		push_error("[StoryFlow] WebSocket connection failed: %s" % error_string(err))
@@ -79,7 +77,7 @@ func poll() -> void:
 			# Auto-reconnect
 			if _reconnect_attempts < MAX_RECONNECT_ATTEMPTS:
 				_reconnect_attempts += 1
-				var url := "ws://%s:%d" % [_host, _port]
+				var url := "ws://localhost:%d" % _port
 				_socket.connect_to_url(url)
 
 
