@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Zip plugin
+        run: |
+          cd addons
+          zip -r ../StoryFlow-Plugin-v${{ steps.version.outputs.version }}-Godot.zip storyflow/
+
+      - name: Upload to R2
+        run: |
+          aws s3 cp \
+            StoryFlow-Plugin-v${{ steps.version.outputs.version }}-Godot.zip \
+            s3://${{ secrets.R2_BUCKET_NAME }}/StoryFlow-Plugin-v${{ steps.version.outputs.version }}-Godot.zip \
+            --endpoint-url https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      - name: Attach to GitHub Release
+        run: gh release upload ${{ github.ref_name }} StoryFlow-Plugin-v${{ steps.version.outputs.version }}-Godot.zip --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Open changelog PR on storyflow-web
+        run: |
+          CHANGELOG_FILE="changelogs/v${{ steps.version.outputs.version }}.md"
+          if [ ! -f "$CHANGELOG_FILE" ]; then
+            echo "No changelog file found at $CHANGELOG_FILE, skipping"
+            exit 0
+          fi
+
+          VERSION=${{ steps.version.outputs.version }}
+          BRANCH="changelog/godot-v${VERSION}"
+          DEST_PATH="src/content/changelog-godot/v${VERSION}.md"
+
+          cd /tmp
+          git clone --depth 1 --branch live \
+            https://x-access-token:${{ secrets.WEB_REPO_PAT }}@github.com/storyflow-editor/storyflow-web.git
+          cd storyflow-web
+
+          git checkout -b "$BRANCH"
+          cp $GITHUB_WORKSPACE/$CHANGELOG_FILE $DEST_PATH
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add $DEST_PATH
+          git commit -m "Add changelog: Godot v${VERSION}"
+          git push -u origin "$BRANCH"
+
+          gh pr create \
+            --repo storyflow-editor/storyflow-web \
+            --base live \
+            --head "$BRANCH" \
+            --title "Add changelog: Godot v${VERSION}" \
+            --body "Auto-generated from Godot plugin release v${VERSION}. Merge to deploy."
+        env:
+          GH_TOKEN: ${{ secrets.WEB_REPO_PAT }}
+
+  bump-version:
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Bump version
+        run: |
+          CURRENT=$(grep -oP 'version="\K[^"]+' addons/storyflow/plugin.cfg)
+          IFS='.' read -r major minor patch <<< "$CURRENT"
+          NEW="$major.$minor.$((patch + 1))"
+          sed -i "s/version=\"$CURRENT\"/version=\"$NEW\"/" addons/storyflow/plugin.cfg
+          echo "Bumped $CURRENT -> $NEW"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add addons/storyflow/plugin.cfg
+          git commit -m "Bump version to $(grep -oP 'version="\K[^"]+' addons/storyflow/plugin.cfg)"
+          git push
