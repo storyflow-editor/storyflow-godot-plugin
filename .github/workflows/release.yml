@@ -51,6 +51,7 @@ jobs:
             https://x-access-token:${{ secrets.WEB_REPO_PAT }}@github.com/storyflow-editor/storyflow-web.git
           cd storyflow-web
 
+          git push origin --delete "$BRANCH" 2>/dev/null || true
           git checkout -b "$BRANCH"
           cp $GITHUB_WORKSPACE/$CHANGELOG_FILE $DEST_PATH
           git config user.name "github-actions[bot]"
