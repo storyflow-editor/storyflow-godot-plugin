@@ -111,7 +111,7 @@ Contributions are welcome! Please read the guidelines below before submitting.
 4. Open a Pull Request targeting the `dev` branch
 5. We'll review and merge when ready
 
-Please open an [issue](https://github.com/StoryFlowEditor/storyflow-godot/issues) first for large changes so we can discuss the approach.
+Please open an [issue](https://github.com/storyflow-editor/storyflow-godot-plugin/issues) first for large changes so we can discuss the approach.
 
 ## Changelog
 
