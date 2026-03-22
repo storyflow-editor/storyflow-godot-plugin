@@ -23,7 +23,7 @@ jobs:
         run: |
           aws s3 cp \
             StoryFlow-Plugin-v${{ steps.version.outputs.version }}-Godot.zip \
-            s3://${{ secrets.R2_BUCKET_NAME }}/StoryFlow-Plugin-v${{ steps.version.outputs.version }}-Godot.zip \
+            s3://${{ secrets.R2_BUCKET_NAME }}/godot/StoryFlow-Plugin-v${{ steps.version.outputs.version }}-Godot.zip \
             --endpoint-url https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
