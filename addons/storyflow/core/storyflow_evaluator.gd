@@ -734,7 +734,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 			result = ""
 
 	_context.evaluation_depth -= 1
-	return result
+	return _resolve_string_key(result)
 
 
 # =============================================================================
@@ -1192,6 +1192,17 @@ func _get_data_string(data: Dictionary, key: String, fallback: String = "") -> S
 	if val is String:
 		return val
 	return fallback
+
+
+## Resolves a string key through the localized strings dictionary.
+## The JSON export stores all string-type values as keys into the strings table.
+## Returns the resolved text, or the raw value if the key is not found.
+func _resolve_string_key(value: String) -> String:
+	if value.is_empty():
+		return value
+	if _context and _context.current_script:
+		return _context.current_script.get_localized_string(value, _language_code)
+	return value
 
 
 ## Get a localized string from node data. The data value is used as a string

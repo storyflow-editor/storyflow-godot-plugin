@@ -6,6 +6,7 @@ extends RefCounted
 var _regex: RegEx = null
 var _context: StoryFlowExecutionContext = null
 var _manager: Node = null
+var _language_code: String = "en"
 
 
 func _init() -> void:
@@ -19,6 +20,10 @@ func set_context(context: StoryFlowExecutionContext) -> void:
 
 func set_manager(manager: Node) -> void:
 	_manager = manager
+
+
+func set_language_code(code: String) -> void:
+	_language_code = code
 
 
 # =============================================================================
@@ -95,11 +100,19 @@ func _get_variable_display_value(display_name: String) -> String:
 				var v: Dictionary = globals[var_id]
 				var val = v.get("value", null)
 				if val is StoryFlowVariant:
-					return val.to_display_string()
+					return _resolve_display_value(val)
 		return "{%s}" % display_name
 	else:
 		var v: Dictionary = result["variable"]
 		var val = v.get("value", null)
 		if val is StoryFlowVariant:
-			return val.to_display_string()
+			return _resolve_display_value(val)
 	return "{%s}" % display_name
+
+
+func _resolve_display_value(val: StoryFlowVariant) -> String:
+	var text := val.to_display_string()
+	# String-type values from the JSON export are localization keys — resolve them
+	if val.type == StoryFlowTypes.VariableType.STRING:
+		text = get_string(text, _language_code)
+	return text

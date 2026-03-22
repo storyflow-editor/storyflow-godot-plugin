@@ -143,6 +143,7 @@ func start_dialogue_with_script(path: String) -> void:
 
 	# Wire up text interpolator with manager reference
 	_text.set_manager(mgr)
+	_text.set_language_code(language_code)
 
 	# Register with manager
 	mgr.register_dialogue_start()

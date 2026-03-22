@@ -770,11 +770,13 @@ func _import_media_assets(
 			push_warning("StoryFlow: Source media file not found: %s" % source_path)
 			continue
 
-		# Copy file (overwrite if already present)
-		var err := DirAccess.copy_absolute(source_path, target_path)
-		if err != OK:
-			push_error("StoryFlow: Failed to copy %s -> %s (error %d)" % [source_path, target_path, err])
-			continue
+		# Copy file (overwrite if already present), but skip when source == target
+		# (happens during load_project_local where build_dir == output_dir)
+		if source_path != target_path:
+			var err := DirAccess.copy_absolute(source_path, target_path)
+			if err != OK:
+				push_error("StoryFlow: Failed to copy %s -> %s (error %d)" % [source_path, target_path, err])
+				continue
 
 		# Load the resource so the runtime gets actual Texture2D/AudioStream objects
 		# In-editor: trigger reimport so Godot recognizes the new file

@@ -84,9 +84,21 @@ func find_connections_to_node(node_id: String) -> Array:
 func find_input_edge(node_id: String, target_suffix: String) -> Dictionary:
 	var target_handle := StoryFlowHandles.target(node_id, target_suffix)
 	var incoming := find_connections_to_node(node_id)
+
+	# Try exact match first
 	for conn in incoming:
 		if conn.get("target_handle", "") == target_handle:
 			return conn
+
+	# Fallback: prefix match for handles with trailing option ID.
+	# The editor appends a numbered suffix to handles (e.g., "string-2", "string-array-1")
+	# while the runtime constants omit it (e.g., "string", "string-array").
+	var prefix := target_handle + "-"
+	for conn in incoming:
+		var th: String = conn.get("target_handle", "")
+		if not th.is_empty() and th.begins_with(prefix):
+			return conn
+
 	return {}
 
 
