@@ -164,6 +164,7 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 		var meta := {
 			"output_dir": output_dir,
 			"imported_at": Time.get_datetime_string_from_system(),
+			"script_paths": Array(project.get_all_script_paths()),
 		}
 		var meta_file := FileAccess.open(meta_path, FileAccess.WRITE)
 		if meta_file:

@@ -2,6 +2,7 @@
 extends EditorPlugin
 
 var _import_plugin: StoryFlowImportPlugin = null
+var _inspector_plugin: EditorInspectorPlugin = null
 var _editor_dock: StoryFlowEditorDock = null
 var _toolbar_button: Button = null
 var _icon: Texture2D = null
@@ -31,6 +32,10 @@ func _enter_tree() -> void:
 	_import_plugin = StoryFlowImportPlugin.new()
 	add_import_plugin(_import_plugin)
 
+	# Register inspector plugin for script_path dropdown
+	_inspector_plugin = preload("editor/storyflow_inspector_plugin.gd").new()
+	add_inspector_plugin(_inspector_plugin)
+
 	# Add editor dock
 	_editor_dock = preload("editor/storyflow_editor_dock.gd").new()
 	_editor_dock.name = "StoryFlow"
@@ -59,6 +64,10 @@ func _exit_tree() -> void:
 		remove_control_from_container(CONTAINER_TOOLBAR, _toolbar_button)
 		_toolbar_button.queue_free()
 		_toolbar_button = null
+
+	if _inspector_plugin:
+		remove_inspector_plugin(_inspector_plugin)
+		_inspector_plugin = null
 
 	if _import_plugin:
 		remove_import_plugin(_import_plugin)

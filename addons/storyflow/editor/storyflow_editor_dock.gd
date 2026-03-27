@@ -247,6 +247,7 @@ func request_sync() -> void:
 
 func _on_ws_sync_complete(project: StoryFlowProject) -> void:
 	_set_project_on_manager(project)
+	_update_import_meta(project)
 	_status_label.text = "Sync: %s (%d scripts)" % [project.title, project.scripts.size()]
 	_sync_status_label.text = "Status: Connected"
 
@@ -259,6 +260,35 @@ func _set_project_on_manager(project: StoryFlowProject) -> void:
 	if mgr and mgr.has_method("set_project"):
 		mgr.set_project(project)
 		print("[StoryFlow] Project set on manager: %s" % project.title)
+
+
+func _update_import_meta(project: StoryFlowProject) -> void:
+	var output_dir := _output_path_edit.text.strip_edges()
+	if output_dir.is_empty():
+		output_dir = "res://storyflow"
+
+	var meta_path := output_dir.path_join("storyflow_import_meta.json")
+	var meta := {}
+
+	# Preserve existing meta fields
+	if FileAccess.file_exists(meta_path):
+		var existing := FileAccess.open(meta_path, FileAccess.READ)
+		if existing:
+			var json := JSON.new()
+			if json.parse(existing.get_as_text()) == OK and json.data is Dictionary:
+				meta = json.data
+
+	meta["script_paths"] = Array(project.get_all_script_paths())
+	meta["synced_at"] = Time.get_datetime_string_from_system()
+	if not meta.has("output_dir"):
+		meta["output_dir"] = output_dir
+
+	DirAccess.make_dir_recursive_absolute(output_dir)
+
+	var file := FileAccess.open(meta_path, FileAccess.WRITE)
+	if file:
+		file.store_string(JSON.stringify(meta, "\t"))
+		file.close()
 
 
 func _on_poll_timer() -> void:
