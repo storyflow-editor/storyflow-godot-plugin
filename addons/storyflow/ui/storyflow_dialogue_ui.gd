@@ -109,6 +109,12 @@ func _display_state(state: StoryFlowDialogueState) -> void:
 		background_image.texture = state.image
 		background_image.visible = state.image != null
 
+	# Clear previous options/text blocks, then rebuild
+	_clear_options()
+
+	# Text blocks (non-interactive text displayed before options)
+	_build_text_blocks(state.text_blocks)
+
 	# Options
 	_build_options(state.options)
 
@@ -126,8 +132,17 @@ func _display_state(state: StoryFlowDialogueState) -> void:
 			advance_button.text = "Continue"
 
 
+func _build_text_blocks(text_blocks: Array[StoryFlowTextBlock]) -> void:
+	if not options_container:
+		return
+	for tb in text_blocks:
+		var lbl := Label.new()
+		lbl.text = tb.text
+		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		options_container.add_child(lbl)
+
+
 func _build_options(options: Array[StoryFlowDialogueOption]) -> void:
-	_clear_options()
 	if not options_container:
 		return
 

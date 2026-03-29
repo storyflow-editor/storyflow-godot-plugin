@@ -1687,9 +1687,13 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 		state.audio_key = audio_key
 		state.audio = _audio.resolve_audio_asset(audio_key, _context.current_script, mgr)
 
-	# Build text blocks (non-interactive, always visible)
+	# Build visible text blocks (non-interactive, filtered by visibility)
 	var text_blocks_data: Array = data.get("textBlocks", [])
 	for block in text_blocks_data:
+		# Check visibility condition (same mechanism as options)
+		if _evaluator and not _evaluator.evaluate_option_visibility(block, dialogue_node.get("id", "")):
+			continue
+
 		var block_text: String = block.get("text", "")
 		var tb := StoryFlowTextBlock.new()
 		tb.id = block.get("id", "")
