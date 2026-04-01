@@ -9,7 +9,7 @@ var _socket: WebSocketPeer = null
 var _port: int = 9000
 var _is_connected: bool = false
 var _reconnect_attempts: int = 0
-var _output_dir: String = "res://storyflow"
+var _output_dir: String = StoryFlowEditorDock.DEFAULT_OUTPUT_DIR
 
 const MAX_RECONNECT_ATTEMPTS := 5
 

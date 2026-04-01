@@ -4,6 +4,9 @@ extends Control
 
 signal connection_state_changed(is_connected: bool)
 
+const SETTINGS_PATH := "res://addons/storyflow/.storyflow_settings.cfg"
+const DEFAULT_OUTPUT_DIR := "res://storyflow"
+
 var _project_path_edit: LineEdit
 var _output_path_edit: LineEdit
 var _import_button: Button
@@ -20,6 +23,11 @@ var _poll_timer: Timer = null
 
 func _ready() -> void:
 	_build_ui()
+	_load_settings()
+
+
+func _exit_tree() -> void:
+	_save_settings()
 
 
 func _build_ui() -> void:
@@ -132,7 +140,7 @@ func _build_ui() -> void:
 	out_label.custom_minimum_size.x = 70
 	out_row.add_child(out_label)
 	_output_path_edit = LineEdit.new()
-	_output_path_edit.text = "res://storyflow"
+	_output_path_edit.text = DEFAULT_OUTPUT_DIR
 	_output_path_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	out_row.add_child(_output_path_edit)
 	root.add_child(out_row)
@@ -164,7 +172,6 @@ func _on_browse_build_dir() -> void:
 
 func _on_import_pressed() -> void:
 	var build_dir := _project_path_edit.text.strip_edges()
-	var output_dir := _output_path_edit.text.strip_edges()
 
 	if build_dir.is_empty():
 		_status_label.text = "Error: No build directory specified"
@@ -173,8 +180,10 @@ func _on_import_pressed() -> void:
 	_status_label.text = "Importing..."
 	_import_button.disabled = true
 
+	_save_settings()
+
 	var importer := StoryFlowImporter.new()
-	var project := importer.import_project(build_dir, output_dir)
+	var project := importer.import_project(build_dir, _get_output_dir())
 
 	if project:
 		_set_project_on_manager(project)
@@ -190,8 +199,10 @@ func _on_connect_pressed() -> void:
 	_connect_button.disabled = true
 	_disconnect_button.disabled = false
 
+	_save_settings()
+
 	_ws_sync = StoryFlowWebSocketSync.new()
-	_ws_sync.set_output_dir(_output_path_edit.text.strip_edges())
+	_ws_sync.set_output_dir(_get_output_dir())
 	_ws_sync.connected.connect(_on_ws_connected)
 	_ws_sync.disconnected.connect(_on_ws_disconnected)
 	_ws_sync.sync_complete.connect(_on_ws_sync_complete)
@@ -213,6 +224,8 @@ func _on_disconnect_pressed() -> void:
 
 func _on_sync_pressed() -> void:
 	if _ws_sync and _ws_sync.is_connected_to_editor():
+		_ws_sync.set_output_dir(_get_output_dir())
+		_save_settings()
 		_sync_status_label.text = "Status: Syncing..."
 		_ws_sync.request_sync()
 
@@ -263,9 +276,7 @@ func _set_project_on_manager(project: StoryFlowProject) -> void:
 
 
 func _update_import_meta(project: StoryFlowProject) -> void:
-	var output_dir := _output_path_edit.text.strip_edges()
-	if output_dir.is_empty():
-		output_dir = "res://storyflow"
+	var output_dir := _get_output_dir()
 
 	var meta_path := output_dir.path_join("storyflow_import_meta.json")
 	var meta := {}
@@ -294,3 +305,25 @@ func _update_import_meta(project: StoryFlowProject) -> void:
 func _on_poll_timer() -> void:
 	if _ws_sync:
 		_ws_sync.poll()
+
+
+func _get_output_dir() -> String:
+	var dir := _output_path_edit.text.strip_edges()
+	return dir if not dir.is_empty() else DEFAULT_OUTPUT_DIR
+
+
+func _save_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("dock", "port", int(_sync_port_edit.value))
+	cfg.set_value("dock", "output_dir", _output_path_edit.text)
+	cfg.set_value("dock", "build_dir", _project_path_edit.text)
+	cfg.save(SETTINGS_PATH)
+
+
+func _load_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(SETTINGS_PATH) != OK:
+		return
+	_sync_port_edit.value = cfg.get_value("dock", "port", 9000)
+	_output_path_edit.text = cfg.get_value("dock", "output_dir", DEFAULT_OUTPUT_DIR)
+	_project_path_edit.text = cfg.get_value("dock", "build_dir", "")

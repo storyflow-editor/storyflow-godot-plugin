@@ -23,3 +23,6 @@ Desktop.ini
 
 # Logs
 *.log
+
+# StoryFlow plugin local settings
+addons/storyflow/.storyflow_settings.cfg
