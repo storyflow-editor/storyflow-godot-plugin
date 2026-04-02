@@ -13,6 +13,7 @@ extends RefCounted
 var _context: StoryFlowExecutionContext = null
 var _global_variables: Dictionary = {} # id -> variable Dictionary
 var _characters: Dictionary = {} # normalized_path -> StoryFlowCharacter
+var _global_strings: Dictionary = {} # flattened "lang.key" -> value
 var _language_code: String = "en"
 
 
@@ -20,10 +21,11 @@ var _language_code: String = "en"
 # Initialization
 # =============================================================================
 
-func initialize(context: StoryFlowExecutionContext, global_variables: Dictionary, characters: Dictionary = {}, language_code: String = "en") -> void:
+func initialize(context: StoryFlowExecutionContext, global_variables: Dictionary, characters: Dictionary = {}, language_code: String = "en", global_strings: Dictionary = {}) -> void:
 	_context = context
 	_global_variables = global_variables
 	_characters = characters
+	_global_strings = global_strings
 	_language_code = language_code
 
 
@@ -853,10 +855,16 @@ func _evaluate_array_input_generic(node_id: String, handle_suffix: String, expec
 		return []
 
 	var source_type: StoryFlowTypes.NodeType = source_node.get("type", StoryFlowTypes.NodeType.UNKNOWN)
+	var source_data: Dictionary = source_node.get("data", {})
+
+	# Handle getCharacterVar nodes that can return arrays
+	if source_type == StoryFlowTypes.NodeType.GET_CHARACTER_VAR:
+		var variant := _evaluate_character_variable(source_data, source_id)
+		return variant.get_array()
+
 	if source_type != expected_get_array_type:
 		return []
 
-	var source_data: Dictionary = source_node.get("data", {})
 	var variable := _find_variable(source_data)
 	if not variable.is_empty():
 		var is_array: bool = variable.get("is_array", false)
@@ -931,8 +939,9 @@ func process_boolean_chain(node_id: String) -> void:
 
 		_:
 			# For all other boolean-producing types (comparisons, array contains,
-			# type conversions, etc.), delegate to evaluate_boolean_from_node which
-			# handles all node types and caches results.
+			# type conversions, etc.), clear cached output first to force fresh
+			# evaluation (matches HTML runtime which always overwrites cache).
+			node_state.cached_output = null
 			evaluate_boolean_from_node(node_id, "")
 
 	_context.evaluation_depth -= 1
@@ -1163,6 +1172,8 @@ func _get_data_bool(data: Dictionary, key: String, fallback: bool = false) -> bo
 	var val = data.get(key)
 	if val is bool:
 		return val
+	if val is StoryFlowVariant:
+		return val.get_bool(fallback)
 	return fallback
 
 
@@ -1173,6 +1184,8 @@ func _get_data_int(data: Dictionary, key: String, fallback: int = 0) -> int:
 		return val
 	if val is float:
 		return int(val)
+	if val is StoryFlowVariant:
+		return val.get_int(fallback)
 	return fallback
 
 
@@ -1183,6 +1196,8 @@ func _get_data_float(data: Dictionary, key: String, fallback: float = 0.0) -> fl
 		return val
 	if val is int:
 		return float(val)
+	if val is StoryFlowVariant:
+		return val.get_float(fallback)
 	return fallback
 
 
@@ -1191,6 +1206,8 @@ func _get_data_string(data: Dictionary, key: String, fallback: String = "") -> S
 	var val = data.get(key)
 	if val is String:
 		return val
+	if val is StoryFlowVariant:
+		return val.get_string(fallback)
 	return fallback
 
 
@@ -1200,17 +1217,22 @@ func _get_data_string(data: Dictionary, key: String, fallback: String = "") -> S
 func _resolve_string_key(value: String) -> String:
 	if value.is_empty():
 		return value
+	# Try script-local strings first
 	if _context and _context.current_script:
-		return _context.current_script.get_localized_string(value, _language_code)
+		var result := _context.current_script.get_localized_string(value, _language_code)
+		if result != value:
+			return result
+	# Try global strings (includes character strings)
+	var full_key := _language_code + "." + value
+	if _global_strings.has(full_key):
+		return _global_strings[full_key]
 	return value
 
 
 ## Get a localized string from node data. The data value is used as a string
-## table key, and the result is looked up in the script's strings dictionary.
+## table key, resolved through script-local then global strings.
 func _get_localized_data_string(data: Dictionary, key: String) -> String:
 	var val: String = _get_data_string(data, key)
 	if val.is_empty():
 		return ""
-	if _context and _context.current_script:
-		return _context.current_script.get_localized_string(val, _language_code)
-	return val
+	return _resolve_string_key(val)

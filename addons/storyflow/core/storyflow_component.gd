@@ -139,7 +139,7 @@ func start_dialogue_with_script(path: String) -> void:
 
 	# Create evaluator
 	_evaluator = StoryFlowEvaluator.new()
-	_evaluator.initialize(_context, mgr.get_global_variables(), mgr.get_runtime_characters(), language_code)
+	_evaluator.initialize(_context, mgr.get_global_variables(), mgr.get_runtime_characters(), language_code, project.global_strings)
 
 	# Wire up text interpolator with manager reference
 	_text.set_manager(mgr)
@@ -1365,15 +1365,24 @@ func _handle_for_each_loop(node: Dictionary) -> void:
 		node_state.loop_index = 0
 		node_state.loop_initialized = true
 
-		# Push loop context
+	if node_state.loop_index < node_state.loop_array.size():
+		# Clear evaluation caches from previous iteration so boolean chains re-evaluate
+		_context.clear_cached_outputs()
+
+		# Restore cached outputs for all active outer loops (nested forEach support)
+		for frame in _context.loop_stack:
+			var outer_state := _context.get_node_state(frame.node_id)
+			if outer_state.loop_initialized and outer_state.loop_index < outer_state.loop_array.size():
+				outer_state.cached_output = outer_state.loop_array[outer_state.loop_index]
+
+		# Set current element as cached output
+		node_state.cached_output = node_state.loop_array[node_state.loop_index]
+
+		# Push loop context for this iteration
 		var loop_frame := StoryFlowLoopFrame.new()
 		loop_frame.node_id = node_id
 		loop_frame.type = StoryFlowTypes.LoopType.FOR_EACH
 		_context.loop_stack.push_back(loop_frame)
-
-	if node_state.loop_index < node_state.loop_array.size():
-		# Set current element as cached output
-		node_state.cached_output = node_state.loop_array[node_state.loop_index]
 
 		# Execute loop body
 		_process_next_node(StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_LOOP_BODY))
@@ -1383,7 +1392,7 @@ func _handle_for_each_loop(node: Dictionary) -> void:
 		node_state.loop_array = []
 		node_state.cached_output = null
 
-		if _context.loop_stack.size() > 0:
+		if _context.loop_stack.size() > 0 and _context.loop_stack.back().node_id == node_id:
 			_context.loop_stack.pop_back()
 
 		# Continue after loop
@@ -1403,7 +1412,7 @@ func _continue_for_each_loop(node_id: String) -> void:
 	node_state.loop_index += 1
 
 	# Pop the loop context that was pushed for this iteration
-	if _context.loop_stack.size() > 0:
+	if _context.loop_stack.size() > 0 and _context.loop_stack.back().node_id == node_id:
 		_context.loop_stack.pop_back()
 
 	# Re-process the loop node to continue
