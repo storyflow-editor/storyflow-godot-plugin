@@ -604,10 +604,11 @@ func _parse_single_variable(var_id: String, var_obj: Dictionary) -> Dictionary:
 ## Character variables use a simpler format: { "VarName": { "type": "...", "value": ... } }
 func _parse_character_variables(raw: Dictionary) -> Dictionary:
 	var result: Dictionary = {}
-	for var_name in raw:
-		var var_obj = raw[var_name]
+	for var_key in raw:
+		var var_obj = raw[var_key]
 		if not var_obj is Dictionary:
 			continue
+		var var_name: String = var_obj.get("name", var_key)
 		var type_string: String = var_obj.get("type", "")
 		var var_type: StoryFlowTypes.VariableType = StoryFlowTypes.parse_variable_type(type_string)
 		var value: StoryFlowVariant = StoryFlowVariant.new()
