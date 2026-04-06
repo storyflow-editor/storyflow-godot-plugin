@@ -79,6 +79,7 @@ func _ready() -> void:
 	_build_dispatch_table()
 
 
+
 func _exit_tree() -> void:
 	if _audio:
 		_audio.stop()
@@ -462,6 +463,11 @@ func get_character_variable(character_path: String, variable_name: String) -> St
 	var character: StoryFlowCharacter = mgr.get_runtime_character(character_path)
 	if not character:
 		return StoryFlowVariant.new()
+
+	# Handle built-in "Name" field (stored as string table key — resolve it)
+	if variable_name.to_lower() == "name":
+		return StoryFlowVariant.from_string(_resolve_string(character.character_name))
+
 	var v: Dictionary = character.variables.get(variable_name, {})
 	var val = v.get("value", null)
 	if val is StoryFlowVariant:
@@ -491,7 +497,7 @@ func reset_variables() -> void:
 
 ## Get a localized string by key from the current script or global strings.
 func get_localized_string(key: String) -> String:
-	return _text.get_string(key, language_code)
+	return _resolve_string(key)
 
 # =============================================================================
 # Dispatch Table
@@ -1744,23 +1750,54 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 	return state
 
 # =============================================================================
+# String Resolution
+# =============================================================================
+
+func _resolve_string(key: String) -> String:
+	if key.is_empty():
+		return key
+	# During dialogue, the text interpolator has everything wired up
+	if _context.is_executing:
+		return _text.get_string(key, language_code)
+	# Outside dialogue, resolve through the project's global strings
+	var mgr := get_manager()
+	if mgr:
+		var project: StoryFlowProject = mgr.get_project()
+		if project:
+			return project.get_localized_string(key, language_code)
+	return key
+
+
+# =============================================================================
 # Variable Helpers
 # =============================================================================
 
 func _find_variable_by_display_name(display_name: String) -> Dictionary:
-	# Check local first
-	var result := _context.find_variable_by_name(display_name)
-	if not result.is_empty():
-		if result.get("is_global", false):
-			# Need to look up from manager
-			var mgr := get_manager()
-			if mgr:
-				var var_id: String = result["id"]
-				var globals: Dictionary = mgr.get_global_variables()
-				if globals.has(var_id):
-					return {"id": var_id, "variable": globals[var_id], "is_global": true}
-		else:
-			return result
+	# During active dialogue, the context has name indices built
+	if _context.is_executing:
+		var result := _context.find_variable_by_name(display_name)
+		if not result.is_empty():
+			if result.get("is_global", false):
+				var mgr := get_manager()
+				if mgr:
+					var var_id: String = result["id"]
+					var globals: Dictionary = mgr.get_global_variables()
+					if globals.has(var_id):
+						return {"id": var_id, "variable": globals[var_id], "is_global": true}
+			else:
+				return result
+		return {}
+
+	# Outside dialogue: scan manager's globals by display name
+	var mgr := get_manager()
+	if mgr:
+		var globals: Dictionary = mgr.get_global_variables()
+		for var_id in globals:
+			var v: Dictionary = globals[var_id]
+			if v.get("name", "") == display_name:
+				return {"id": var_id, "variable": v, "is_global": true}
+
+	push_warning("StoryFlow: Global variable '%s' not found" % display_name)
 	return {}
 
 
