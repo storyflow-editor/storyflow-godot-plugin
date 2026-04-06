@@ -13,7 +13,7 @@ var loop_array: Array = []
 ## Whether the loop has been initialized.
 var loop_initialized: bool = false
 
-## Output variable values from RunScript return (name → StoryFlowVariant).
+## Output variable values from RunScript return (variable_id → StoryFlowVariant).
 var output_values: Dictionary = {}
 
 ## Whether output_values has been populated.

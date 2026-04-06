@@ -466,6 +466,7 @@ func _parse_node_data(type_string: String, node_obj: Dictionary) -> Dictionary:
 						"id": p.get("id", ""),
 						"name": p.get("name", ""),
 						"type": p.get("type", ""),
+						"isArray": p.get("isArray", false),
 					})
 			data["scriptParameters"] = params
 		if iface.has("outputs"):

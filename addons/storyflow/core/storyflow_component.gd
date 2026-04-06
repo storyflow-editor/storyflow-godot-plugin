@@ -23,6 +23,12 @@ extends Node
 ## Optional dialogue UI scene; auto-instantiated when dialogue starts, freed when it ends.
 @export var dialogue_ui_scene: PackedScene = null
 
+@export_group("Debug")
+
+## Enable execution trace logging for cross-runtime comparison.
+## Output format: [SF-TRACE] <event type> <details>
+@export var trace_enabled: bool = true
+
 @export_group("Audio")
 
 ## Stop any playing dialogue audio when dialogue ends
@@ -141,6 +147,7 @@ func start_dialogue_with_script(path: String) -> void:
 	# Create evaluator
 	_evaluator = StoryFlowEvaluator.new()
 	_evaluator.initialize(_context, mgr.get_global_variables(), mgr.get_runtime_characters(), language_code, project.global_strings)
+	_evaluator.set_trace(_sf_trace)
 
 	# Wire up text interpolator with manager reference
 	_text.set_manager(mgr)
@@ -500,6 +507,22 @@ func get_localized_string(key: String) -> String:
 	return _resolve_string(key)
 
 # =============================================================================
+# Trace Logging
+# =============================================================================
+
+func _sf_trace(msg: String) -> void:
+	if trace_enabled:
+		print("[SF-TRACE] " + msg)
+
+
+static func _node_type_name(node_type: StoryFlowTypes.NodeType) -> String:
+	var keys := StoryFlowTypes.NodeType.keys()
+	var idx := int(node_type)
+	if idx >= 0 and idx < keys.size():
+		return keys[idx]
+	return "UNKNOWN"
+
+# =============================================================================
 # Dispatch Table
 # =============================================================================
 
@@ -651,6 +674,8 @@ func _process_node(node: Dictionary) -> void:
 	_context.current_node_id = node.get("id", "")
 
 	var node_type: StoryFlowTypes.NodeType = node.get("type", StoryFlowTypes.NodeType.UNKNOWN)
+	_sf_trace("NODE %s %s" % [node.get("id", ""), _node_type_name(node_type)])
+
 	if _node_handlers.has(node_type):
 		var handler: Callable = _node_handlers[node_type]
 		handler.call(node)
@@ -667,6 +692,9 @@ func _process_next_node(source_handle: String) -> void:
 		return
 
 	var target_id: String = edge.get("target", "")
+	var source_node_id: String = edge.get("source", "")
+	_sf_trace("EDGE %s:%s -> %s" % [source_node_id, source_handle, target_id])
+
 	var target_node: Dictionary = _context.current_script.get_node(target_id)
 	if target_node.is_empty():
 		_report_error("Target node not found: %s" % target_id)
@@ -718,18 +746,21 @@ func _handle_end(node: Dictionary) -> void:
 					# Exit handle not connected - stay in called script
 					return
 
-		# Gather output variable values BEFORE popping
-		var output_values: Dictionary = {}
+		# Gather output variable values from the called script (by name for mapping)
+		var output_by_name: Dictionary = {}
 		for var_id in _context.local_variables:
 			var v: Dictionary = _context.local_variables[var_id]
 			if v.get("is_output", false):
-				output_values[v.get("name", "")] = v.get("value", null)
+				var var_name: String = v.get("name", "")
+				if not var_name.is_empty():
+					output_by_name[var_name] = v.get("value", null)
 
 		# Pop call stack
 		var frame: StoryFlowCallFrame = _context.call_stack.pop_back()
 		var ended_script_path := ""
 		if _context.current_script:
 			ended_script_path = _context.current_script.script_path
+		_sf_trace('SCRIPT RETURN "%s"' % ended_script_path)
 		script_ended.emit(ended_script_path)
 
 		if frame.script_asset:
@@ -739,6 +770,24 @@ func _handle_end(node: Dictionary) -> void:
 
 			# Restore flow call stack
 			_context.flow_call_stack = frame.saved_flow_stack.duplicate()
+
+			# Map output values using the RunScript node's scriptOutputs.
+			# Edge handles use scriptInterface output IDs, not variable IDs.
+			# We match by name: scriptOutputs entry name ↔ variable name.
+			var output_values: Dictionary = {}
+			if output_by_name.size() > 0:
+				var rs_node: Dictionary = _context.current_script.get_node(frame.return_node_id)
+				var rs_data: Dictionary = rs_node.get("data", {})
+				var si_outputs: Array = rs_data.get("scriptOutputs", [])
+				for out_entry in si_outputs:
+					if out_entry is Dictionary:
+						var out_id: String = out_entry.get("id", "")
+						var out_name: String = out_entry.get("name", "")
+						if not out_id.is_empty() and output_by_name.has(out_name):
+							output_values[out_id] = output_by_name[out_name]
+				# Also store by variable name as fallback
+				for var_name in output_by_name:
+					output_values[var_name] = output_by_name[var_name]
 
 			# Store output values on the RunScript node's runtime state
 			if output_values.size() > 0:
@@ -779,6 +828,8 @@ func _handle_branch(node: Dictionary) -> void:
 	if _evaluator:
 		condition = _evaluator.evaluate_boolean_input(node.get("id", ""), StoryFlowHandles.IN_BOOLEAN_CONDITION, default_val)
 
+	_sf_trace("BRANCH %s condition=%s" % [node.get("id", ""), str(condition).to_lower()])
+
 	# Continue based on condition
 	var suffix: String = StoryFlowHandles.OUT_TRUE if condition else StoryFlowHandles.OUT_FALSE
 	var handle := StoryFlowHandles.source(node["id"], suffix)
@@ -807,11 +858,25 @@ func _handle_dialogue(node: Dictionary) -> void:
 	_context.current_dialogue_state = _build_dialogue_state(node)
 	_context.is_waiting_for_input = true
 
+	var data: Dictionary = node.get("data", {})
+
+	# Handle dialogue background image (three-state logic matching HTML runtime):
+	#   Has image → emit background_image_changed with the image key
+	#   No image + imageReset=true → emit with empty string to clear
+	#   No image + imageReset=false → do nothing (previous background persists)
+	var dialogue_image_key: String = data.get("image", "")
+	if dialogue_image_key != "":
+		_sf_trace('IMAGE "%s"' % dialogue_image_key)
+		background_image_changed.emit(dialogue_image_key)
+	elif data.get("imageReset", false):
+		_sf_trace('IMAGE ""')
+		background_image_changed.emit("")
+
 	# Handle dialogue audio only on fresh entry
 	if is_fresh_entry and _audio:
-		var data: Dictionary = node.get("data", {})
 		if _context.current_dialogue_state.audio:
 			var audio_loop: bool = data.get("audioLoop", false)
+			_sf_trace('AUDIO "%s"' % _context.current_dialogue_state.audio_key)
 			_audio.play(_context.current_dialogue_state.audio, audio_loop)
 
 			# Set advance-on-end state (only for non-looped audio that actually played)
@@ -867,27 +932,47 @@ func _handle_run_script(node: Dictionary) -> void:
 			var param_type: String = param.get("type", "")
 			var param_id: String = param.get("id", "")
 			var param_name: String = param.get("name", "")
-			var handle_suffix := param_type + "-param-" + param_id
+			var is_array: bool = param.get("isArray", false)
 
-			if _context.current_script.find_input_edge(node["id"], handle_suffix).is_empty():
-				continue
-
-			if param_type == "boolean":
-				param_values[param_name] = StoryFlowVariant.from_bool(
-					_evaluator.evaluate_boolean_input(node.get("id", ""), handle_suffix, false)
-				)
-			elif param_type == "integer":
-				param_values[param_name] = StoryFlowVariant.from_int(
-					_evaluator.evaluate_integer_input(node.get("id", ""), handle_suffix, 0)
-				)
-			elif param_type == "float":
-				param_values[param_name] = StoryFlowVariant.from_float(
-					_evaluator.evaluate_float_input(node.get("id", ""), handle_suffix, 0.0)
-				)
+			if is_array:
+				# Array parameters use "{type}-array-param-{id}" handle suffix
+				var handle_suffix := param_type + "-array-param-" + param_id
+				if _context.current_script.find_input_edge(node["id"], handle_suffix).is_empty():
+					continue
+				var arr: Array = []
+				match param_type:
+					"boolean": arr = _evaluator.evaluate_bool_array_input(node.get("id", ""), handle_suffix)
+					"integer": arr = _evaluator.evaluate_int_array_input(node.get("id", ""), handle_suffix)
+					"float": arr = _evaluator.evaluate_float_array_input(node.get("id", ""), handle_suffix)
+					"string": arr = _evaluator.evaluate_string_array_input(node.get("id", ""), handle_suffix)
+					"image": arr = _evaluator.evaluate_image_array_input(node.get("id", ""), handle_suffix)
+					"character": arr = _evaluator.evaluate_character_array_input(node.get("id", ""), handle_suffix)
+					"audio": arr = _evaluator.evaluate_audio_array_input(node.get("id", ""), handle_suffix)
+				var variant := StoryFlowVariant.new()
+				variant.set_array(arr)
+				param_values[param_name] = variant
 			else:
-				param_values[param_name] = StoryFlowVariant.from_string(
-					_evaluator.evaluate_string_input(node.get("id", ""), handle_suffix, "")
-				)
+				# Scalar parameters use "{type}-param-{id}" handle suffix
+				var handle_suffix := param_type + "-param-" + param_id
+				if _context.current_script.find_input_edge(node["id"], handle_suffix).is_empty():
+					continue
+
+				if param_type == "boolean":
+					param_values[param_name] = StoryFlowVariant.from_bool(
+						_evaluator.evaluate_boolean_input(node.get("id", ""), handle_suffix, false)
+					)
+				elif param_type == "integer":
+					param_values[param_name] = StoryFlowVariant.from_int(
+						_evaluator.evaluate_integer_input(node.get("id", ""), handle_suffix, 0)
+					)
+				elif param_type == "float":
+					param_values[param_name] = StoryFlowVariant.from_float(
+						_evaluator.evaluate_float_input(node.get("id", ""), handle_suffix, 0.0)
+					)
+				else:
+					param_values[param_name] = StoryFlowVariant.from_string(
+						_evaluator.evaluate_string_input(node.get("id", ""), handle_suffix, "")
+					)
 
 	# Push current state
 	var call_frame := StoryFlowCallFrame.new()
@@ -897,6 +982,8 @@ func _handle_run_script(node: Dictionary) -> void:
 	call_frame.saved_variables = StoryFlowVariant.deep_copy_variables(_context.local_variables)
 	call_frame.saved_flow_stack = _context.flow_call_stack.duplicate()
 	_context.call_stack.push_back(call_frame)
+
+	_sf_trace('SCRIPT CALL "%s"' % target_script_path)
 
 	# Switch to target script
 	_context.current_script = target_script
@@ -936,6 +1023,8 @@ func _handle_run_flow(node: Dictionary) -> void:
 	if not script_asset:
 		return
 
+	_sf_trace('SCRIPT CALL "%s"' % flow_id)
+
 	# Check if this is an exit flow
 	for fid in script_asset.flows:
 		var flow_def: Dictionary = script_asset.flows[fid]
@@ -974,22 +1063,72 @@ func _handle_entry_flow(node: Dictionary) -> void:
 # =============================================================================
 
 func _handle_get_bool(node: Dictionary) -> void:
+	var data: Dictionary = node.get("data", {})
+	var var_id: String = data.get("variable", "")
+	var is_global: bool = data.get("isGlobal", false)
+	var variable: Dictionary = _find_variable(var_id, is_global)
+	var val_str := "false"
+	if not variable.is_empty():
+		var val = variable.get("value", null)
+		if val is StoryFlowVariant:
+			val_str = str(val.get_bool()).to_lower()
+	_sf_trace('VAR GET "%s" global=%s value=%s' % [variable.get("name", var_id), str(is_global).to_lower(), val_str])
 	_process_next_node(StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_BOOLEAN))
 
 
 func _handle_get_int(node: Dictionary) -> void:
+	var data: Dictionary = node.get("data", {})
+	var var_id: String = data.get("variable", "")
+	var is_global: bool = data.get("isGlobal", false)
+	var variable: Dictionary = _find_variable(var_id, is_global)
+	var val_str := "0"
+	if not variable.is_empty():
+		var val = variable.get("value", null)
+		if val is StoryFlowVariant:
+			val_str = str(val.get_int())
+	_sf_trace('VAR GET "%s" global=%s value=%s' % [variable.get("name", var_id), str(is_global).to_lower(), val_str])
 	_process_next_node(StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_INTEGER))
 
 
 func _handle_get_float(node: Dictionary) -> void:
+	var data: Dictionary = node.get("data", {})
+	var var_id: String = data.get("variable", "")
+	var is_global: bool = data.get("isGlobal", false)
+	var variable: Dictionary = _find_variable(var_id, is_global)
+	var val_str := "0"
+	if not variable.is_empty():
+		var val = variable.get("value", null)
+		if val is StoryFlowVariant:
+			val_str = str(val.get_float())
+	_sf_trace('VAR GET "%s" global=%s value=%s' % [variable.get("name", var_id), str(is_global).to_lower(), val_str])
 	_process_next_node(StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOAT))
 
 
 func _handle_get_string(node: Dictionary) -> void:
+	var data: Dictionary = node.get("data", {})
+	var var_id: String = data.get("variable", "")
+	var is_global: bool = data.get("isGlobal", false)
+	var variable: Dictionary = _find_variable(var_id, is_global)
+	var val_str := ""
+	if not variable.is_empty():
+		var val = variable.get("value", null)
+		if val is StoryFlowVariant:
+			val_str = val.get_string()
+	_sf_trace('VAR GET "%s" global=%s value=%s' % [variable.get("name", var_id), str(is_global).to_lower(), val_str])
 	_process_next_node(StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_STRING))
 
 
 func _handle_get_enum(node: Dictionary) -> void:
+	var data: Dictionary = node.get("data", {})
+	var var_id: String = data.get("variable", "")
+	var is_global: bool = data.get("isGlobal", false)
+	var variable: Dictionary = _find_variable(var_id, is_global)
+	var val_str := ""
+	if not variable.is_empty():
+		var val = variable.get("value", null)
+		if val is StoryFlowVariant:
+			val_str = val.get_string()
+	_sf_trace('VAR GET "%s" global=%s value=%s' % [variable.get("name", var_id), str(is_global).to_lower(), val_str])
 	_process_next_node(StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_ENUM))
 
 # =============================================================================
@@ -1011,6 +1150,9 @@ func _handle_set_bool(node: Dictionary) -> void:
 
 	var variant := StoryFlowVariant.new()
 	variant.set_bool(new_value)
+	var var_name := _get_variable_name_from_node(node)
+	var is_global: bool = data.get("isGlobal", false)
+	_sf_trace('VAR SET "%s" global=%s value=%s' % [var_name, str(is_global).to_lower(), str(new_value).to_lower()])
 	_set_variable_on_node(node, variant)
 	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
 
@@ -1030,6 +1172,9 @@ func _handle_set_int(node: Dictionary) -> void:
 
 	var variant := StoryFlowVariant.new()
 	variant.set_int(new_value)
+	var var_name := _get_variable_name_from_node(node)
+	var is_global: bool = data.get("isGlobal", false)
+	_sf_trace('VAR SET "%s" global=%s value=%s' % [var_name, str(is_global).to_lower(), str(new_value)])
 	_set_variable_on_node(node, variant)
 	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
 
@@ -1049,6 +1194,9 @@ func _handle_set_float(node: Dictionary) -> void:
 
 	var variant := StoryFlowVariant.new()
 	variant.set_float(new_value)
+	var var_name := _get_variable_name_from_node(node)
+	var is_global: bool = data.get("isGlobal", false)
+	_sf_trace('VAR SET "%s" global=%s value=%s' % [var_name, str(is_global).to_lower(), str(new_value)])
 	_set_variable_on_node(node, variant)
 	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
 
@@ -1068,6 +1216,9 @@ func _handle_set_string(node: Dictionary) -> void:
 
 	var variant := StoryFlowVariant.new()
 	variant.set_string(new_value)
+	var var_name := _get_variable_name_from_node(node)
+	var is_global: bool = data.get("isGlobal", false)
+	_sf_trace('VAR SET "%s" global=%s value=%s' % [var_name, str(is_global).to_lower(), new_value])
 	_set_variable_on_node(node, variant)
 	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
 
@@ -1087,6 +1238,9 @@ func _handle_set_enum(node: Dictionary) -> void:
 
 	var variant := StoryFlowVariant.new()
 	variant.set_enum(new_value)
+	var var_name := _get_variable_name_from_node(node)
+	var is_global: bool = data.get("isGlobal", false)
+	_sf_trace('VAR SET "%s" global=%s value=%s' % [var_name, str(is_global).to_lower(), new_value])
 	_set_variable_on_node(node, variant)
 	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
 
@@ -1251,6 +1405,8 @@ func _handle_array_set(node: Dictionary) -> void:
 				new_array = _evaluator.evaluate_audio_array_input(node.get("id", ""), StoryFlowHandles.IN_AUDIO_ARRAY)
 		variant.set_array(new_array)
 
+	var _arr_var_name: String = variable.get("name", var_id)
+	_sf_trace('VAR SET "%s" global=%s value=%s' % [_arr_var_name, str(is_global).to_lower(), variant.to_display_string()])
 	_notify_variable_changed(variable, is_global)
 	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
 
@@ -1260,22 +1416,33 @@ func _handle_array_set(node: Dictionary) -> void:
 
 func _handle_array_modify(node: Dictionary) -> void:
 	var data: Dictionary = node.get("data", {})
-	var var_id: String = data.get("variable", "")
-	var is_global: bool = data.get("isGlobal", false)
-	var variable: Dictionary = _find_variable(var_id, is_global)
-	if variable.is_empty():
-		_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
-		return
-
-	var val = variable.get("value", null)
-	if not val is StoryFlowVariant:
-		_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
-		return
-
-	var variant: StoryFlowVariant = val
-	var arr: Array = variant.get_array()
+	var node_id: String = node.get("id", "")
 	var node_type: StoryFlowTypes.NodeType = node.get("type", StoryFlowTypes.NodeType.UNKNOWN)
 	var NT := StoryFlowTypes.NodeType
+
+	# Determine the array handle suffix based on element type (matches HTML runtime's '{type}-array-2')
+	var array_handle_suffix: String = _get_array_handle_suffix(node_type)
+
+	# Get the array via the input edge (same as HTML's getArrayInput)
+	var arr: Array = []
+	if _evaluator and not array_handle_suffix.is_empty():
+		arr = _evaluator.evaluate_string_array_input(node_id, array_handle_suffix)
+		# Use type-specific evaluator based on element type
+		match node_type:
+			NT.ADD_TO_BOOL_ARRAY, NT.REMOVE_FROM_BOOL_ARRAY, NT.CLEAR_BOOL_ARRAY:
+				arr = _evaluator.evaluate_bool_array_input(node_id, StoryFlowHandles.IN_BOOL_ARRAY)
+			NT.ADD_TO_INT_ARRAY, NT.REMOVE_FROM_INT_ARRAY, NT.CLEAR_INT_ARRAY:
+				arr = _evaluator.evaluate_int_array_input(node_id, StoryFlowHandles.IN_INT_ARRAY)
+			NT.ADD_TO_FLOAT_ARRAY, NT.REMOVE_FROM_FLOAT_ARRAY, NT.CLEAR_FLOAT_ARRAY:
+				arr = _evaluator.evaluate_float_array_input(node_id, StoryFlowHandles.IN_FLOAT_ARRAY)
+			NT.ADD_TO_STRING_ARRAY, NT.REMOVE_FROM_STRING_ARRAY, NT.CLEAR_STRING_ARRAY:
+				arr = _evaluator.evaluate_string_array_input(node_id, StoryFlowHandles.IN_STRING_ARRAY)
+			NT.ADD_TO_IMAGE_ARRAY, NT.REMOVE_FROM_IMAGE_ARRAY, NT.CLEAR_IMAGE_ARRAY:
+				arr = _evaluator.evaluate_image_array_input(node_id, StoryFlowHandles.IN_IMAGE_ARRAY)
+			NT.ADD_TO_CHARACTER_ARRAY, NT.REMOVE_FROM_CHARACTER_ARRAY, NT.CLEAR_CHARACTER_ARRAY:
+				arr = _evaluator.evaluate_character_array_input(node_id, StoryFlowHandles.IN_CHARACTER_ARRAY)
+			NT.ADD_TO_AUDIO_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY, NT.CLEAR_AUDIO_ARRAY:
+				arr = _evaluator.evaluate_audio_array_input(node_id, StoryFlowHandles.IN_AUDIO_ARRAY)
 
 	var inline_value = data.get("value", null)
 
@@ -1285,36 +1452,52 @@ func _handle_array_modify(node: Dictionary) -> void:
 			var dv := false
 			if inline_value is StoryFlowVariant:
 				dv = inline_value.get_bool(false)
+			elif inline_value is bool:
+				dv = inline_value
 			var elem := StoryFlowVariant.new()
-			elem.set_bool(_evaluator.evaluate_boolean_input(node.get("id", ""), StoryFlowHandles.IN_BOOLEAN, dv) if _evaluator else dv)
+			elem.set_bool(_evaluator.evaluate_boolean_input(node_id, StoryFlowHandles.IN_BOOLEAN, dv) if _evaluator else dv)
 			arr.append(elem)
 		NT.ADD_TO_INT_ARRAY:
 			var dv := 0
 			if inline_value is StoryFlowVariant:
 				dv = inline_value.get_int(0)
+			elif inline_value is int or inline_value is float:
+				dv = int(inline_value)
 			var elem := StoryFlowVariant.new()
-			elem.set_int(_evaluator.evaluate_integer_input(node.get("id", ""), StoryFlowHandles.IN_INTEGER, dv) if _evaluator else dv)
+			elem.set_int(_evaluator.evaluate_integer_input(node_id, StoryFlowHandles.IN_INTEGER, dv) if _evaluator else dv)
 			arr.append(elem)
 		NT.ADD_TO_FLOAT_ARRAY:
 			var dv := 0.0
 			if inline_value is StoryFlowVariant:
 				dv = inline_value.get_float(0.0)
+			elif inline_value is int or inline_value is float:
+				dv = float(inline_value)
 			var elem := StoryFlowVariant.new()
-			elem.set_float(_evaluator.evaluate_float_input(node.get("id", ""), StoryFlowHandles.IN_FLOAT, dv) if _evaluator else dv)
+			elem.set_float(_evaluator.evaluate_float_input(node_id, StoryFlowHandles.IN_FLOAT, dv) if _evaluator else dv)
 			arr.append(elem)
 		NT.ADD_TO_STRING_ARRAY:
 			var dv := ""
 			if inline_value is StoryFlowVariant:
-				dv = _text.get_string(inline_value.get_string(""), language_code)
+				var raw: String = inline_value.get_string("")
+				dv = _resolve_string(raw)
+			elif inline_value is String:
+				dv = _resolve_string(inline_value)
+			var eval_result: String = _evaluator.evaluate_string_input(node_id, StoryFlowHandles.IN_STRING, dv) if _evaluator else dv
+			# If evaluator returned empty but we have a resolved default, use the default
+			# (the input edge may evaluate a localization key that the string evaluator can't resolve)
+			if eval_result.is_empty() and not dv.is_empty():
+				eval_result = dv
 			var elem := StoryFlowVariant.new()
-			elem.set_string(_evaluator.evaluate_string_input(node.get("id", ""), StoryFlowHandles.IN_STRING, dv) if _evaluator else dv)
+			elem.set_string(eval_result)
 			arr.append(elem)
 		NT.ADD_TO_IMAGE_ARRAY, NT.ADD_TO_CHARACTER_ARRAY, NT.ADD_TO_AUDIO_ARRAY:
 			var dv := ""
 			if inline_value is StoryFlowVariant:
 				dv = inline_value.get_string("")
+			elif inline_value is String:
+				dv = inline_value
 			var elem := StoryFlowVariant.new()
-			elem.set_string(_evaluator.evaluate_string_input(node.get("id", ""), StoryFlowHandles.IN_STRING, dv) if _evaluator else dv)
+			elem.set_string(_evaluator.evaluate_string_input(node_id, StoryFlowHandles.IN_STRING, dv) if _evaluator else dv)
 			arr.append(elem)
 
 		# Remove operations
@@ -1324,7 +1507,7 @@ func _handle_array_modify(node: Dictionary) -> void:
 			var dv := 0
 			if inline_value is StoryFlowVariant:
 				dv = inline_value.get_int(0)
-			var idx: int = _evaluator.evaluate_integer_input(node.get("id", ""), StoryFlowHandles.IN_INTEGER, dv) if _evaluator else dv
+			var idx: int = _evaluator.evaluate_integer_input(node_id, StoryFlowHandles.IN_INTEGER, dv) if _evaluator else dv
 			if idx >= 0 and idx < arr.size():
 				arr.remove_at(idx)
 
@@ -1334,8 +1517,104 @@ func _handle_array_modify(node: Dictionary) -> void:
 		NT.CLEAR_CHARACTER_ARRAY, NT.CLEAR_AUDIO_ARRAY:
 			arr.clear()
 
-	_notify_variable_changed(variable, is_global)
-	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
+	# Store the result array on this node's cached output (matches HTML's setNodeOutputValue).
+	# Downstream nodes connected to this array modify node's output can read the result.
+	var result_variant := StoryFlowVariant.new()
+	result_variant.set_array(arr)
+	var node_state := _context.get_node_state(node_id)
+	node_state.cached_output = result_variant
+
+	# Write back: trace the array input edge to find the source variable and update it
+	# (matches HTML runtime's updateConnectedArrayVariable)
+	_update_connected_array_variable(node, array_handle_suffix, arr)
+
+	_handle_set_node_end(node, StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_FLOW))
+
+
+## Trace the array input edge back to the source node to find and update the variable.
+## Matches HTML runtime's updateConnectedArrayVariable(node, handleSuffix, newArray).
+func _update_connected_array_variable(node: Dictionary, array_handle_suffix: String, new_array: Array) -> void:
+	if not _context or not _context.current_script:
+		return
+	var node_id: String = node.get("id", "")
+	var edge := _context.current_script.find_input_edge(node_id, array_handle_suffix)
+	if edge.is_empty():
+		return
+
+	var source_id: String = edge.get("source", "")
+	var source_node := _context.current_script.get_node(source_id)
+	if source_node.is_empty():
+		return
+
+	var source_data: Dictionary = source_node.get("data", {})
+	var source_type: StoryFlowTypes.NodeType = source_node.get("type", StoryFlowTypes.NodeType.UNKNOWN)
+
+	# Handle character variable arrays
+	if source_type == StoryFlowTypes.NodeType.GET_CHARACTER_VAR or source_type == StoryFlowTypes.NodeType.SET_CHARACTER_VAR:
+		var char_path: String = source_data.get("characterPath", "")
+		var var_name: String = source_data.get("variableName", "")
+		var mgr := get_manager()
+		if mgr and not char_path.is_empty() and not var_name.is_empty():
+			var character: StoryFlowCharacter = mgr.get_runtime_character(char_path)
+			if character and character.variables.has(var_name):
+				var cv: Dictionary = character.variables[var_name]
+				var val = cv.get("value", null)
+				if val is StoryFlowVariant:
+					val.set_array(new_array)
+					_sf_trace('VAR SET "%s.%s" global=true value=[%d elements]' % [char_path, var_name, new_array.size()])
+		return
+
+	# Handle local/global script variable arrays
+	var is_global: bool = source_data.get("isGlobal", false)
+	var var_name: String = source_data.get("variableName", "")
+	if var_name.is_empty():
+		var_name = source_data.get("variable", "")
+
+	# Find the variable by name in the appropriate scope
+	if is_global:
+		var mgr := get_manager()
+		if mgr:
+			var globals: Dictionary = mgr.get_global_variables()
+			for gid in globals:
+				var gv: Dictionary = globals[gid]
+				if gv.get("name", "") == var_name:
+					var val = gv.get("value", null)
+					if val is StoryFlowVariant:
+						val.set_array(new_array)
+						_sf_trace('VAR SET "%s" global=true value=[%d elements]' % [var_name, new_array.size()])
+						_notify_variable_changed(gv, true)
+					return
+	else:
+		for lid in _context.local_variables:
+			var lv: Dictionary = _context.local_variables[lid]
+			if lv.get("name", "") == var_name:
+				var val = lv.get("value", null)
+				if val is StoryFlowVariant:
+					val.set_array(new_array)
+					_sf_trace('VAR SET "%s" global=false value=[%d elements]' % [var_name, new_array.size()])
+					_notify_variable_changed(lv, false)
+				return
+
+
+## Get the array input handle suffix for a given array modify node type.
+func _get_array_handle_suffix(node_type: StoryFlowTypes.NodeType) -> String:
+	var NT := StoryFlowTypes.NodeType
+	match node_type:
+		NT.ADD_TO_BOOL_ARRAY, NT.REMOVE_FROM_BOOL_ARRAY, NT.CLEAR_BOOL_ARRAY:
+			return StoryFlowHandles.IN_BOOL_ARRAY
+		NT.ADD_TO_INT_ARRAY, NT.REMOVE_FROM_INT_ARRAY, NT.CLEAR_INT_ARRAY:
+			return StoryFlowHandles.IN_INT_ARRAY
+		NT.ADD_TO_FLOAT_ARRAY, NT.REMOVE_FROM_FLOAT_ARRAY, NT.CLEAR_FLOAT_ARRAY:
+			return StoryFlowHandles.IN_FLOAT_ARRAY
+		NT.ADD_TO_STRING_ARRAY, NT.REMOVE_FROM_STRING_ARRAY, NT.CLEAR_STRING_ARRAY:
+			return StoryFlowHandles.IN_STRING_ARRAY
+		NT.ADD_TO_IMAGE_ARRAY, NT.REMOVE_FROM_IMAGE_ARRAY, NT.CLEAR_IMAGE_ARRAY:
+			return StoryFlowHandles.IN_IMAGE_ARRAY
+		NT.ADD_TO_CHARACTER_ARRAY, NT.REMOVE_FROM_CHARACTER_ARRAY, NT.CLEAR_CHARACTER_ARRAY:
+			return StoryFlowHandles.IN_CHARACTER_ARRAY
+		NT.ADD_TO_AUDIO_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY, NT.CLEAR_AUDIO_ARRAY:
+			return StoryFlowHandles.IN_AUDIO_ARRAY
+	return ""
 
 # =============================================================================
 # Node Handlers - ForEach Loop
@@ -1383,6 +1662,9 @@ func _handle_for_each_loop(node: Dictionary) -> void:
 
 		# Set current element as cached output
 		node_state.cached_output = node_state.loop_array[node_state.loop_index]
+
+		var _loop_element: StoryFlowVariant = node_state.loop_array[node_state.loop_index]
+		_sf_trace("LOOP %s index=%d value=%s" % [node_id, node_state.loop_index, _loop_element.to_display_string() if _loop_element else "null"])
 
 		# Push loop context for this iteration
 		var loop_frame := StoryFlowLoopFrame.new()
@@ -1441,6 +1723,7 @@ func _handle_set_image(node: Dictionary) -> void:
 	if _evaluator:
 		new_value = _evaluator.evaluate_string_input(node.get("id", ""), "image", default_val)
 
+	_sf_trace('IMAGE "%s"' % new_value)
 	var variant := StoryFlowVariant.new()
 	variant.set_string(new_value)
 	_set_variable_on_node(node, variant)
@@ -1463,6 +1746,7 @@ func _handle_set_background_image(node: Dictionary) -> void:
 			if not source_node.is_empty():
 				image_path = _evaluator.evaluate_string_from_node(source_node.get("id", ""), edge.get("source_handle", ""))
 
+	_sf_trace('IMAGE "%s"' % image_path)
 	background_image_changed.emit(image_path)
 	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_OUTPUT))
 
@@ -1480,6 +1764,7 @@ func _handle_set_audio(node: Dictionary) -> void:
 	if _evaluator:
 		new_value = _evaluator.evaluate_string_input(node.get("id", ""), "audio", default_val)
 
+	_sf_trace('AUDIO "%s"' % new_value)
 	var variant := StoryFlowVariant.new()
 	variant.set_string(new_value)
 	_set_variable_on_node(node, variant)
@@ -1502,6 +1787,7 @@ func _handle_play_audio(node: Dictionary) -> void:
 			if not source_node.is_empty():
 				audio_path = _evaluator.evaluate_string_from_node(source_node.get("id", ""), edge.get("source_handle", ""))
 
+	_sf_trace('AUDIO "%s"' % audio_path)
 	var loop: bool = data.get("audioLoop", false)
 	audio_play_requested.emit(audio_path, loop)
 	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_OUTPUT))
@@ -1522,6 +1808,9 @@ func _handle_set_character(node: Dictionary) -> void:
 
 	var variant := StoryFlowVariant.new()
 	variant.set_string(new_value)
+	var var_name := _get_variable_name_from_node(node)
+	var is_global: bool = data.get("isGlobal", false)
+	_sf_trace('VAR SET "%s" global=%s value=%s' % [var_name, str(is_global).to_lower(), new_value])
 	_set_variable_on_node(node, variant)
 	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
 
@@ -1584,6 +1873,8 @@ func _handle_set_character_var(node: Dictionary) -> void:
 				new_value.set_float(inline_value)
 			elif inline_value is String:
 				new_value.set_string(inline_value)
+
+	_sf_trace('VAR SET "%s.%s" global=%s value=%s' % [character_path, variable_name, "true", new_value.to_display_string()])
 
 	# Set the character variable via the manager
 	var mgr := get_manager()
@@ -1655,8 +1946,10 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 			var char_data := StoryFlowCharacterData.new()
 			char_data.name = _text.get_string(character.character_name, language_code)
 
-			# Resolve character portrait to actual Texture2D
+			# Resolve character portrait to actual Texture2D (reads from mutable
+			# runtime character, so SetCharacterVar "Image" changes are reflected)
 			if character.image_key != "":
+				_sf_trace('CHAR IMAGE "%s"' % character.image_key)
 				char_data.image = _resolve_image_asset(character.image_key, null, character)
 
 			# Build character variables for interpolation
@@ -1799,6 +2092,14 @@ func _find_variable_by_display_name(display_name: String) -> Dictionary:
 
 	push_warning("StoryFlow: Global variable '%s' not found" % display_name)
 	return {}
+
+
+func _get_variable_name_from_node(node: Dictionary) -> String:
+	var data: Dictionary = node.get("data", {})
+	var var_id: String = data.get("variable", "")
+	var is_global: bool = data.get("isGlobal", false)
+	var variable: Dictionary = _find_variable(var_id, is_global)
+	return variable.get("name", var_id)
 
 
 func _find_variable(var_id: String, is_global: bool) -> Dictionary:

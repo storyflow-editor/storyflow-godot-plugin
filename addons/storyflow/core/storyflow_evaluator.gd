@@ -16,6 +16,9 @@ var _characters: Dictionary = {} # normalized_path -> StoryFlowCharacter
 var _global_strings: Dictionary = {} # flattened "lang.key" -> value
 var _language_code: String = "en"
 
+## Callable for trace logging, set by the component. Signature: func(msg: String) -> void
+var _trace_fn: Callable = Callable()
+
 
 # =============================================================================
 # Initialization
@@ -27,6 +30,16 @@ func initialize(context: StoryFlowExecutionContext, global_variables: Dictionary
 	_characters = characters
 	_global_strings = global_strings
 	_language_code = language_code
+
+
+## Set the trace logging callable. Called by StoryFlowComponent to wire up trace output.
+func set_trace(trace_callable: Callable) -> void:
+	_trace_fn = trace_callable
+
+
+func _sf_trace(msg: String) -> void:
+	if _trace_fn.is_valid():
+		_trace_fn.call(msg)
 
 
 # =============================================================================
@@ -226,6 +239,8 @@ func evaluate_boolean_from_node(node_id: String, source_handle: String = "") -> 
 	# Cache result
 	var cached_variant := StoryFlowVariant.from_bool(result)
 	node_state.cached_output = cached_variant
+
+	_sf_trace("EVAL %s %s result=%s" % [node_id, StoryFlowComponent._node_type_name(node_type), str(result).to_lower()])
 
 	_context.evaluation_depth -= 1
 	return result
@@ -449,6 +464,8 @@ func evaluate_integer_from_node(node_id: String, source_handle: String = "") -> 
 		_:
 			result = 0
 
+	_sf_trace("EVAL %s %s result=%s" % [node_id, StoryFlowComponent._node_type_name(node_type), str(result)])
+
 	_context.evaluation_depth -= 1
 	return result
 
@@ -567,6 +584,8 @@ func evaluate_float_from_node(node_id: String, source_handle: String = "") -> fl
 
 		_:
 			result = 0.0
+
+	_sf_trace("EVAL %s %s result=%s" % [node_id, StoryFlowComponent._node_type_name(node_type), str(result)])
 
 	_context.evaluation_depth -= 1
 	return result
@@ -735,8 +754,11 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 		_:
 			result = ""
 
+	var resolved_result := _resolve_string_key(result)
+	_sf_trace("EVAL %s %s result=%s" % [node_id, StoryFlowComponent._node_type_name(node_type), resolved_result])
+
 	_context.evaluation_depth -= 1
-	return _resolve_string_key(result)
+	return resolved_result
 
 
 # =============================================================================
@@ -805,6 +827,8 @@ func evaluate_enum_from_node(node_id: String, source_handle: String = "") -> Str
 		_:
 			result = ""
 
+	_sf_trace("EVAL %s %s result=%s" % [node_id, StoryFlowComponent._node_type_name(node_type), result])
+
 	_context.evaluation_depth -= 1
 	return result
 
@@ -861,6 +885,31 @@ func _evaluate_array_input_generic(node_id: String, handle_suffix: String, expec
 	if source_type == StoryFlowTypes.NodeType.GET_CHARACTER_VAR:
 		var variant := _evaluate_character_variable(source_data, source_id)
 		return variant.get_array()
+
+	# Handle array modify nodes (add/remove/clear) that output their result array.
+	# The HTML runtime stores the result via setNodeOutputValue; we use the node's cached output.
+	var NT := StoryFlowTypes.NodeType
+	if source_type in [
+		NT.ADD_TO_BOOL_ARRAY, NT.ADD_TO_INT_ARRAY, NT.ADD_TO_FLOAT_ARRAY,
+		NT.ADD_TO_STRING_ARRAY, NT.ADD_TO_IMAGE_ARRAY, NT.ADD_TO_CHARACTER_ARRAY, NT.ADD_TO_AUDIO_ARRAY,
+		NT.REMOVE_FROM_BOOL_ARRAY, NT.REMOVE_FROM_INT_ARRAY, NT.REMOVE_FROM_FLOAT_ARRAY,
+		NT.REMOVE_FROM_STRING_ARRAY, NT.REMOVE_FROM_IMAGE_ARRAY, NT.REMOVE_FROM_CHARACTER_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY,
+		NT.CLEAR_BOOL_ARRAY, NT.CLEAR_INT_ARRAY, NT.CLEAR_FLOAT_ARRAY,
+		NT.CLEAR_STRING_ARRAY, NT.CLEAR_IMAGE_ARRAY, NT.CLEAR_CHARACTER_ARRAY, NT.CLEAR_AUDIO_ARRAY,
+		NT.SET_BOOL_ARRAY, NT.SET_INT_ARRAY, NT.SET_FLOAT_ARRAY,
+		NT.SET_STRING_ARRAY, NT.SET_IMAGE_ARRAY, NT.SET_CHARACTER_ARRAY, NT.SET_AUDIO_ARRAY]:
+		var ns := _context.get_node_state(source_id)
+		if ns.cached_output != null and ns.cached_output is StoryFlowVariant:
+			return ns.cached_output.get_array()
+		return []
+
+	# Handle forEach loop nodes that output their current element array
+	if source_type in [NT.FOR_EACH_BOOL_LOOP, NT.FOR_EACH_INT_LOOP, NT.FOR_EACH_FLOAT_LOOP,
+		NT.FOR_EACH_STRING_LOOP, NT.FOR_EACH_IMAGE_LOOP, NT.FOR_EACH_CHARACTER_LOOP, NT.FOR_EACH_AUDIO_LOOP]:
+		var ns := _context.get_node_state(source_id)
+		if ns.cached_output != null and ns.cached_output is StoryFlowVariant:
+			return ns.cached_output.get_array()
+		return []
 
 	if source_type != expected_get_array_type:
 		return []
@@ -936,6 +985,11 @@ func process_boolean_chain(node_id: String) -> void:
 				var cond_source_id: String = cond_edge.get("source", "")
 				if cond_source_id != "":
 					process_boolean_chain(cond_source_id)
+
+		StoryFlowTypes.NodeType.RUN_SCRIPT:
+			# RunScript output depends on source handle to extract variable ID.
+			# Only clear the cache so the real evaluation (with correct handle) gets a fresh read.
+			node_state.cached_output = null
 
 		_:
 			# For all other boolean-producing types (comparisons, array contains,
@@ -1035,64 +1089,58 @@ func _evaluate_float_comparison(node_id: String, data: Dictionary, comparison_ty
 # RunScript Output Helpers (Private)
 # =============================================================================
 
-func _evaluate_run_script_output_bool(node_id: String, source_handle: String, data: Dictionary) -> bool:
+func _evaluate_run_script_output_bool(node_id: String, source_handle: String, _data: Dictionary) -> bool:
 	var node_state := _context.get_node_state(node_id)
 	if node_state.has_output_values and not source_handle.is_empty():
-		var var_name := _resolve_run_script_output_var_name(source_handle, data)
-		if not var_name.is_empty() and node_state.output_values.has(var_name):
-			var val = node_state.output_values[var_name]
+		var var_id := _extract_run_script_output_var_id(source_handle)
+		if not var_id.is_empty() and node_state.output_values.has(var_id):
+			var val = node_state.output_values[var_id]
 			if val is StoryFlowVariant:
 				return val.get_bool()
 	return false
 
 
-func _evaluate_run_script_output_int(node_id: String, source_handle: String, data: Dictionary) -> int:
+func _evaluate_run_script_output_int(node_id: String, source_handle: String, _data: Dictionary) -> int:
 	var node_state := _context.get_node_state(node_id)
 	if node_state.has_output_values and not source_handle.is_empty():
-		var var_name := _resolve_run_script_output_var_name(source_handle, data)
-		if not var_name.is_empty() and node_state.output_values.has(var_name):
-			var val = node_state.output_values[var_name]
+		var var_id := _extract_run_script_output_var_id(source_handle)
+		if not var_id.is_empty() and node_state.output_values.has(var_id):
+			var val = node_state.output_values[var_id]
 			if val is StoryFlowVariant:
 				return val.get_int()
 	return 0
 
 
-func _evaluate_run_script_output_float(node_id: String, source_handle: String, data: Dictionary) -> float:
+func _evaluate_run_script_output_float(node_id: String, source_handle: String, _data: Dictionary) -> float:
 	var node_state := _context.get_node_state(node_id)
 	if node_state.has_output_values and not source_handle.is_empty():
-		var var_name := _resolve_run_script_output_var_name(source_handle, data)
-		if not var_name.is_empty() and node_state.output_values.has(var_name):
-			var val = node_state.output_values[var_name]
+		var var_id := _extract_run_script_output_var_id(source_handle)
+		if not var_id.is_empty() and node_state.output_values.has(var_id):
+			var val = node_state.output_values[var_id]
 			if val is StoryFlowVariant:
 				return val.get_float()
 	return 0.0
 
 
-func _evaluate_run_script_output_string(node_id: String, source_handle: String, data: Dictionary) -> String:
+func _evaluate_run_script_output_string(node_id: String, source_handle: String, _data: Dictionary) -> String:
 	var node_state := _context.get_node_state(node_id)
 	if node_state.has_output_values and not source_handle.is_empty():
-		var var_name := _resolve_run_script_output_var_name(source_handle, data)
-		if not var_name.is_empty() and node_state.output_values.has(var_name):
-			var val = node_state.output_values[var_name]
+		var var_id := _extract_run_script_output_var_id(source_handle)
+		if not var_id.is_empty() and node_state.output_values.has(var_id):
+			var val = node_state.output_values[var_id]
 			if val is StoryFlowVariant:
 				return val.get_string()
 	return ""
 
 
-## Given a RunScript source handle like "source-{nodeId}-out-{varId}", resolve
-## the UUID portion to the variable name using the node's scriptOutputs list.
-func _resolve_run_script_output_var_name(source_handle: String, data: Dictionary) -> String:
+## Extract the variable ID from a RunScript source handle.
+## Handle format: "source-{nodeId}-out-{varId}" → returns varId.
+## Matches HTML runtime regex /-out-(.+)$/.
+func _extract_run_script_output_var_id(source_handle: String) -> String:
 	var out_idx := source_handle.find("-out-")
 	if out_idx == -1:
 		return ""
-
-	var var_id := source_handle.substr(out_idx + 5) # skip "-out-"
-	var script_outputs: Array = data.get("scriptOutputs", [])
-	for output in script_outputs:
-		if output is Dictionary and output.get("id", "") == var_id:
-			return output.get("name", "")
-
-	return ""
+	return source_handle.substr(out_idx + 5) # skip "-out-"
 
 
 # =============================================================================
