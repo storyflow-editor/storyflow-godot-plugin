@@ -781,73 +781,88 @@ func _import_media_assets(
 				push_error("StoryFlow: Failed to copy %s -> %s (error %d)" % [source_path, target_path, err])
 				continue
 
-		# Fix mismatched extensions: some exporters save PNG data with .jpg extension.
-		# Detect the actual format from the file header and rename if needed.
-		target_path = _fix_image_extension(target_path)
+		# Load resources directly from file buffers, bypassing Godot's import
+		# pipeline entirely. This avoids stale .import cache issues on
+		# re-launch and handles mismatched extensions (PNG data as .jpg).
+		var resource: Resource = null
+		if asset_type == "image":
+			resource = _load_image_direct(target_path)
+		elif asset_type == "audio":
+			resource = _load_audio_direct(target_path)
+		else:
+			resource = ResourceLoader.load(target_path)
 
-		# Tell the editor about the new file so it generates an .import entry
-		if Engine.is_editor_hint():
-			EditorInterface.get_resource_filesystem().update_file(target_path)
-
-		# Try loading via ResourceLoader (works for PNGs, audio, and Godot-compatible JPGs)
-		var resource = ResourceLoader.load(target_path)
 		if resource:
 			out_resolved[asset_id] = resource
 		else:
-			# Fallback: store the path so a deferred load can be attempted later
 			out_resolved[asset_id] = target_path
-			push_warning("StoryFlow: Could not load resource %s (may need editor reimport)" % target_path)
+			push_warning("StoryFlow: Could not load resource %s" % target_path)
 
 		print("StoryFlow: Imported media %s -> %s" % [asset_path, target_path])
 
 
-## Fix mismatched image file extensions by detecting the actual format from the file header.
-## Some image generators/exporters save PNG data with a .jpg extension, which causes
-## Godot's format-specific decoder to fail. Renames the file if the extension doesn't
-## match the actual content.
-func _fix_image_extension(path: String) -> String:
-	var ext := path.get_extension().to_lower()
-	if ext not in ["jpg", "jpeg", "png", "webp"]:
-		return path
-
-	var file := FileAccess.open(path, FileAccess.READ)
+## Load an image directly from file buffer, detecting the actual format from
+## the file header (not the extension). This handles mismatched extensions
+## like PNG data saved as .jpg.
+func _load_image_direct(file_path: String) -> ImageTexture:
+	var file := FileAccess.open(file_path, FileAccess.READ)
 	if not file:
-		return path
-
-	# Read first 8 bytes to detect actual format
-	var header := file.get_buffer(8)
+		return null
+	var buffer := file.get_buffer(file.get_length())
 	file.close()
+	if buffer.size() < 4:
+		return null
 
-	if header.size() < 4:
-		return path
-
-	var actual_ext := ""
-
-	# PNG: starts with 89 50 4E 47 (‰PNG)
-	if header[0] == 0x89 and header[1] == 0x50 and header[2] == 0x4E and header[3] == 0x47:
-		actual_ext = "png"
-	# JPEG: starts with FF D8 FF
-	elif header[0] == 0xFF and header[1] == 0xD8 and header[2] == 0xFF:
-		actual_ext = "jpg"
-	# WebP: starts with RIFF....WEBP
-	elif header[0] == 0x52 and header[1] == 0x49 and header[2] == 0x46 and header[3] == 0x46:
-		if header.size() >= 8 and header[4] == 0x57 and header[5] == 0x45 and header[6] == 0x42 and header[7] == 0x50:
-			actual_ext = "webp"
-
-	if actual_ext.is_empty() or actual_ext == ext:
-		return path
-	if ext in ["jpg", "jpeg"] and actual_ext in ["jpg", "jpeg"]:
-		return path
-
-	# Extension doesn't match content — rename
-	var new_path := path.get_basename() + "." + actual_ext
-	var err := DirAccess.rename_absolute(path, new_path)
-	if err == OK:
-		print("StoryFlow: Fixed mismatched extension: %s -> %s (content is %s)" % [path.get_file(), new_path.get_file(), actual_ext.to_upper()])
-		return new_path
+	var image := Image.new()
+	var err: int = ERR_FILE_UNRECOGNIZED
+	# Detect actual format from magic bytes
+	if buffer[0] == 0x89 and buffer[1] == 0x50 and buffer[2] == 0x4E and buffer[3] == 0x47:
+		err = image.load_png_from_buffer(buffer)
+	elif buffer[0] == 0xFF and buffer[1] == 0xD8 and buffer[2] == 0xFF:
+		err = image.load_jpg_from_buffer(buffer)
+	elif buffer[0] == 0x52 and buffer[1] == 0x49 and buffer[2] == 0x46 and buffer[3] == 0x46:
+		err = image.load_webp_from_buffer(buffer)
 	else:
-		push_warning("StoryFlow: Could not rename %s to fix extension (error %d)" % [path, err])
-		return path
+		err = image.load(file_path)
+	if err != OK:
+		return null
+	return ImageTexture.create_from_image(image)
+
+
+## Load an audio file directly from file buffer, bypassing Godot's import
+## pipeline. Supports MP3 and WAV formats.
+func _load_audio_direct(file_path: String) -> AudioStream:
+	var file := FileAccess.open(file_path, FileAccess.READ)
+	if not file:
+		return null
+	var buffer := file.get_buffer(file.get_length())
+	file.close()
+	if buffer.size() < 4:
+		return null
+
+	var ext := file_path.get_extension().to_lower()
+
+	# MP3: check for ID3 tag (49 44 33) or MPEG sync word (FF FB/FA/F3/F2)
+	if ext == "mp3" or (buffer[0] == 0x49 and buffer[1] == 0x44 and buffer[2] == 0x33) or (buffer[0] == 0xFF and (buffer[1] & 0xE0) == 0xE0):
+		var stream := AudioStreamMP3.new()
+		stream.data = buffer
+		return stream
+
+	# WAV: RIFF header with WAVE
+	if ext == "wav" or (buffer[0] == 0x52 and buffer[1] == 0x49 and buffer[2] == 0x46 and buffer[3] == 0x46):
+		var stream := AudioStreamWAV.new()
+		# WAV requires ResourceLoader for proper parsing — fall back
+		var res = ResourceLoader.load(file_path)
+		if res:
+			return res
+
+	# OGG: check for OggS header
+	if ext == "ogg" or (buffer[0] == 0x4F and buffer[1] == 0x67 and buffer[2] == 0x67 and buffer[3] == 0x53):
+		var res = ResourceLoader.load(file_path)
+		if res:
+			return res
+
+	return null
 
 
 # =============================================================================

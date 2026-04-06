@@ -63,6 +63,8 @@ var persistent_background_image: String = ""
 
 ## Persistent dialogue image (carries over between dialogues unless reset)
 var persistent_image: String = ""
+## Cached resolved Texture2D for cross-script persistence (asset IDs are per-file)
+var persistent_image_texture: Texture2D = null
 
 # =============================================================================
 # Recursion Protection
@@ -140,6 +142,7 @@ func reset() -> void:
 	current_dialogue_state = null
 	persistent_background_image = ""
 	persistent_image = ""
+	persistent_image_texture = null
 	evaluation_depth = 0
 	processing_depth = 0
 	node_runtime_states.clear()

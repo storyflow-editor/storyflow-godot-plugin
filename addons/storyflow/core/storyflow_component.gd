@@ -1747,6 +1747,14 @@ func _handle_set_background_image(node: Dictionary) -> void:
 				image_path = _evaluator.evaluate_string_from_node(source_node.get("id", ""), edge.get("source_handle", ""))
 
 	_sf_trace('IMAGE "%s"' % image_path)
+	# Persist image for subsequent dialogues and resolve while still in the
+	# correct script context (asset IDs are per-file, so cross-script lookups
+	# would fail without the cached texture).
+	_context.persistent_image = image_path
+	if image_path != "":
+		_context.persistent_image_texture = _resolve_image_asset(image_path, null, null)
+	else:
+		_context.persistent_image_texture = null
 	background_image_changed.emit(image_path)
 	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_OUTPUT))
 
@@ -1789,6 +1797,12 @@ func _handle_play_audio(node: Dictionary) -> void:
 
 	_sf_trace('AUDIO "%s"' % audio_path)
 	var loop: bool = data.get("audioLoop", false)
+	# Resolve and play the audio (same as dialogue audio handling)
+	if _audio and audio_path != "":
+		var mgr := get_manager()
+		var stream: AudioStream = _audio.resolve_audio_asset(audio_path, _context.current_script, mgr)
+		if stream:
+			_audio.play(stream, loop)
 	audio_play_requested.emit(audio_path, loop)
 	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_OUTPUT))
 
@@ -1980,14 +1994,20 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 		state.image_key = image_key
 		state.image = _resolve_image_asset(image_key, project, null)
 		_context.persistent_image = image_key
+		_context.persistent_image_texture = state.image
 	elif data.get("imageReset", false):
 		state.image = null
 		state.image_key = ""
 		_context.persistent_image = ""
+		_context.persistent_image_texture = null
 	else:
 		state.image_key = _context.persistent_image
 		if _context.persistent_image != "":
 			state.image = _resolve_image_asset(_context.persistent_image, project, null)
+			# Fallback to cached texture when asset can't be resolved in current
+			# script (asset IDs are per-file, so cross-script lookups may fail)
+			if state.image == null and _context.persistent_image_texture:
+				state.image = _context.persistent_image_texture
 
 	# Resolve audio asset
 	var audio_key: String = data.get("audio", "")
@@ -2232,8 +2252,58 @@ func _try_load_asset(assets: Dictionary, key: String) -> Resource:
 	if val is Resource:
 		return val
 	if val is String and not val.is_empty():
-		var loaded = ResourceLoader.load(val)
+		# Try direct buffer-based loading first (bypasses Godot's import cache)
+		var loaded: Resource = _load_image_direct(val)
+		if not loaded:
+			loaded = _load_audio_direct(val)
+		if not loaded:
+			loaded = ResourceLoader.load(val)
 		if loaded is Resource:
 			assets[key] = loaded
 			return loaded
 	return null
+
+
+## Load an image directly from file buffer, detecting the actual format from
+## the file header (not the extension). This handles mismatched extensions
+## like PNG data saved as .jpg.
+func _load_image_direct(file_path: String) -> ImageTexture:
+	var file := FileAccess.open(file_path, FileAccess.READ)
+	if not file:
+		return null
+	var buffer := file.get_buffer(file.get_length())
+	file.close()
+	if buffer.size() < 4:
+		return null
+
+	var image := Image.new()
+	var err: int = ERR_FILE_UNRECOGNIZED
+	# Detect actual format from magic bytes
+	if buffer[0] == 0x89 and buffer[1] == 0x50 and buffer[2] == 0x4E and buffer[3] == 0x47:
+		err = image.load_png_from_buffer(buffer)
+	elif buffer[0] == 0xFF and buffer[1] == 0xD8 and buffer[2] == 0xFF:
+		err = image.load_jpg_from_buffer(buffer)
+	elif buffer[0] == 0x52 and buffer[1] == 0x49 and buffer[2] == 0x46 and buffer[3] == 0x46:
+		err = image.load_webp_from_buffer(buffer)
+	else:
+		err = image.load(file_path)
+	if err != OK:
+		return null
+	return ImageTexture.create_from_image(image)
+
+
+## Load an audio file directly from buffer, bypassing Godot's import pipeline.
+func _load_audio_direct(file_path: String) -> AudioStream:
+	var ext := file_path.get_extension().to_lower()
+	if ext != "mp3":
+		return null
+	var file := FileAccess.open(file_path, FileAccess.READ)
+	if not file:
+		return null
+	var buffer := file.get_buffer(file.get_length())
+	file.close()
+	if buffer.size() < 4:
+		return null
+	var stream := AudioStreamMP3.new()
+	stream.data = buffer
+	return stream
