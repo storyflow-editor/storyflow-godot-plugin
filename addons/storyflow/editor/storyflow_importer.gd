@@ -770,6 +770,21 @@ func _import_media_assets(
 
 		# Check source exists
 		if not FileAccess.file_exists(source_path):
+			# Fallback: asset may already exist in output from a previous full sync
+			# (e.g. data-only sync skips copying assets but they were imported before)
+			if FileAccess.file_exists(target_path):
+				var resource: Resource = null
+				if asset_type == "image":
+					resource = _load_image_direct(target_path)
+				elif asset_type == "audio":
+					resource = _load_audio_direct(target_path)
+				else:
+					resource = ResourceLoader.load(target_path)
+				if resource:
+					out_resolved[asset_id] = resource
+				else:
+					out_resolved[asset_id] = target_path
+				continue
 			push_warning("StoryFlow: Source media file not found: %s" % source_path)
 			continue
 
