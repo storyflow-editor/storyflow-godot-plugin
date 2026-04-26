@@ -1,5 +1,5 @@
 class_name StoryFlowComponent
-extends Node
+extends Node2D
 
 ## Main runtime component for executing StoryFlow dialogues.
 ##
@@ -62,7 +62,7 @@ var _context: StoryFlowExecutionContext = null
 var _evaluator: StoryFlowEvaluator = null
 var _text: StoryFlowTextInterpolator = null
 var _audio: StoryFlowAudioController = null
-var _dialogue_ui_instance: Control = null
+var _dialogue_ui_instance: Node = null
 var _is_processing_chain: bool = false
 var _dialogue_dirty: bool = false
 var _waiting_for_audio_advance: bool = false
@@ -164,11 +164,19 @@ func start_dialogue_with_script(path: String) -> void:
 		if _dialogue_ui_instance:
 			_dialogue_ui_instance.queue_free()
 			_dialogue_ui_instance = null
-		_dialogue_ui_instance = ui_scene.instantiate() as Control
-		if _dialogue_ui_instance:
-			# Try to connect it if it has an initialize method
-			if _dialogue_ui_instance.has_method("initialize_with_component"):
-				_dialogue_ui_instance.call("initialize_with_component", self)
+		var ui_root: Node = ui_scene.instantiate()
+		if ui_root:
+			if ui_root.has_method("initialize_with_component"):
+				ui_root.call("initialize_with_component", self)
+			# Wrap Control roots in a CanvasLayer so screen-space UIs stay
+			# decoupled from the component's Node2D world transform.
+			if ui_root is Control:
+				var canvas := CanvasLayer.new()
+				canvas.name = "DialogueUICanvas"
+				canvas.add_child(ui_root)
+				_dialogue_ui_instance = canvas
+			else:
+				_dialogue_ui_instance = ui_root
 			add_child(_dialogue_ui_instance)
 
 	# Broadcast start events
