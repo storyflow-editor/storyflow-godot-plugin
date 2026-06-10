@@ -1,0 +1,11 @@
+; Engine configuration file.
+; Minimal project definition so the repository can be opened in Godot for
+; plugin development and so the headless test suite can run (see tests/).
+; This file is NOT part of the released plugin - the release workflow only
+; packages addons/storyflow/.
+config_version=5
+
+[application]
+
+config/name="StoryFlow Godot Plugin"
+config/features=PackedStringArray("4.3")

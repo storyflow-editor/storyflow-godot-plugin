@@ -690,6 +690,12 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 			var input := evaluate_enum_input(node_id, StoryFlowHandles.IN_ENUM, _get_data_string(data, "value"))
 			result = input
 
+		StoryFlowTypes.NodeType.INT_TO_ENUM:
+			result = _evaluate_int_to_enum(node_id, data)
+
+		StoryFlowTypes.NodeType.STRING_TO_ENUM:
+			result = _evaluate_string_to_enum(node_id, data)
+
 		StoryFlowTypes.NodeType.GET_IMAGE, \
 		StoryFlowTypes.NodeType.SET_IMAGE:
 			var variable := _find_variable(data)
@@ -835,19 +841,10 @@ func evaluate_enum_from_node(node_id: String, source_handle: String = "") -> Str
 			result = evaluate_enum_input(node_id, StoryFlowHandles.IN_ENUM, _get_data_string(data, "value"))
 
 		StoryFlowTypes.NodeType.INT_TO_ENUM:
-			var int_val := evaluate_integer_input(node_id, StoryFlowHandles.IN_INTEGER, _get_data_int(data, "value", 0))
-			var enum_values: Array = data.get("enumValues", [])
-			if enum_values.size() > 0:
-				var clamped_index := clampi(int_val, 0, enum_values.size() - 1)
-				result = str(enum_values[clamped_index])
+			result = _evaluate_int_to_enum(node_id, data)
 
 		StoryFlowTypes.NodeType.STRING_TO_ENUM:
-			var str_val := evaluate_string_input(node_id, StoryFlowHandles.IN_STRING, _get_data_string(data, "value"))
-			var enum_values: Array = data.get("enumValues", [])
-			if enum_values.has(str_val):
-				result = str_val
-			elif enum_values.size() > 0:
-				result = str(enum_values[0])
+			result = _evaluate_string_to_enum(node_id, data)
 
 		StoryFlowTypes.NodeType.GET_CHARACTER_VAR, \
 		StoryFlowTypes.NodeType.SET_CHARACTER_VAR:
@@ -865,6 +862,60 @@ func evaluate_enum_from_node(node_id: String, source_handle: String = "") -> Str
 
 	_context.evaluation_depth -= 1
 	return result
+
+
+func _evaluate_int_to_enum(node_id: String, data: Dictionary) -> String:
+	var int_val := evaluate_integer_input(node_id, StoryFlowHandles.IN_INTEGER, _get_data_int(data, "value", 0))
+	var enum_values := _resolve_conversion_enum_values(node_id, data)
+	if enum_values.is_empty():
+		return ""
+	var clamped_index := clampi(int_val, 0, enum_values.size() - 1)
+	return str(enum_values[clamped_index])
+
+
+func _evaluate_string_to_enum(node_id: String, data: Dictionary) -> String:
+	var str_val := evaluate_string_input(node_id, StoryFlowHandles.IN_STRING, _get_data_string(data, "value"))
+	var enum_values := _resolve_conversion_enum_values(node_id, data)
+	if enum_values.has(str_val):
+		return str_val
+	if enum_values.size() > 0:
+		return str(enum_values[0])
+	return ""
+
+
+## Find the enum value list an intToEnum/stringToEnum node converts into.
+## The node's own data wins when present, but editor exports store no data on
+## conversion nodes at all - mirror the HTML runtime and resolve the values
+## from the node the enum output feeds: the target's variable for
+## getEnum/setEnum, otherwise the target node's own enumValues.
+func _resolve_conversion_enum_values(node_id: String, data: Dictionary) -> Array:
+	var own_values: Array = data.get("enumValues", [])
+	if own_values.size() > 0:
+		return own_values
+
+	if not _context or not _context.current_script:
+		return []
+
+	var enum_out_prefix := StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_ENUM)
+	for conn in _context.current_script.find_connections_from_node(node_id):
+		var source_handle: String = conn.get("source_handle", "")
+		if not source_handle.begins_with(enum_out_prefix):
+			continue
+		var target_node := _context.current_script.get_node(conn.get("target", ""))
+		if target_node.is_empty():
+			continue
+		var target_data: Dictionary = target_node.get("data", {})
+		var target_type: StoryFlowTypes.NodeType = target_node.get("type", StoryFlowTypes.NodeType.UNKNOWN)
+		if target_type == StoryFlowTypes.NodeType.GET_ENUM or target_type == StoryFlowTypes.NodeType.SET_ENUM:
+			var variable := _find_variable(target_data)
+			var variable_values: Array = variable.get("enum_values", [])
+			if variable_values.size() > 0:
+				return variable_values
+		var target_values: Array = target_data.get("enumValues", [])
+		if target_values.size() > 0:
+			return target_values
+
+	return []
 
 
 # =============================================================================

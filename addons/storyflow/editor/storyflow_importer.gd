@@ -523,6 +523,11 @@ func _parse_node_data(type_string: String, node_obj: Dictionary) -> Dictionary:
 	# -- Enum --------------------------------------------------------------
 	if data_src.has("enumVariable"):
 		data["enumVariable"] = data_src["enumVariable"]
+	if data_src.has("enumValues"):
+		var enum_values: Array = []
+		for ev in data_src["enumValues"]:
+			enum_values.append(str(ev))
+		data["enumValues"] = enum_values
 
 	# -- Random branch options (dedicated field) ---------------------------
 	if data_src.has("randomBranchOptions"):
