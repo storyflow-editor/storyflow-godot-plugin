@@ -1,6 +1,14 @@
 class_name StoryFlowTextInterpolator
 extends RefCounted
 
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowCharacterData = preload("res://addons/storyflow/core/storyflow_character_data.gd")
+const StoryFlowExecutionContext = preload("res://addons/storyflow/core/storyflow_execution_context.gd")
+const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
+const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
+const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.gd")
+
 ## Handles variable interpolation in dialogue text and string table lookups.
 
 var _regex: RegEx = null

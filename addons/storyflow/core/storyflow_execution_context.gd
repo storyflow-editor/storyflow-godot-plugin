@@ -1,6 +1,15 @@
 class_name StoryFlowExecutionContext
 extends RefCounted
 
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowCallFrame = preload("res://addons/storyflow/core/storyflow_call_frame.gd")
+const StoryFlowDialogueState = preload("res://addons/storyflow/core/storyflow_dialogue_state.gd")
+const StoryFlowLoopFrame = preload("res://addons/storyflow/core/storyflow_loop_frame.gd")
+const StoryFlowNodeRuntimeState = preload("res://addons/storyflow/core/storyflow_node_runtime_state.gd")
+const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
+const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
+
 # =============================================================================
 # Depth Limits
 # =============================================================================

@@ -1,5 +1,14 @@
 extends Node
 
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
+const StoryFlowImporter = preload("res://addons/storyflow/editor/storyflow_importer.gd")
+const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
+const StoryFlowSaveData = preload("res://addons/storyflow/core/storyflow_save_data.gd")
+const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
+const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.gd")
+
 # =============================================================================
 # Project
 # =============================================================================

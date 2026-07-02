@@ -1,6 +1,27 @@
 class_name StoryFlowComponent
 extends Node
 
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowAudioController = preload("res://addons/storyflow/core/storyflow_audio_controller.gd")
+const StoryFlowCallFrame = preload("res://addons/storyflow/core/storyflow_call_frame.gd")
+const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
+const StoryFlowCharacterData = preload("res://addons/storyflow/core/storyflow_character_data.gd")
+const StoryFlowDialogueOption = preload("res://addons/storyflow/core/storyflow_dialogue_option.gd")
+const StoryFlowDialogueState = preload("res://addons/storyflow/core/storyflow_dialogue_state.gd")
+const StoryFlowEvaluator = preload("res://addons/storyflow/core/storyflow_evaluator.gd")
+const StoryFlowExecutionContext = preload("res://addons/storyflow/core/storyflow_execution_context.gd")
+const StoryFlowHandles = preload("res://addons/storyflow/core/storyflow_handles.gd")
+const StoryFlowLoopFrame = preload("res://addons/storyflow/core/storyflow_loop_frame.gd")
+const StoryFlowNodeRuntimeState = preload("res://addons/storyflow/core/storyflow_node_runtime_state.gd")
+const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
+const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
+const StoryFlowTextBlock = preload("res://addons/storyflow/core/storyflow_text_block.gd")
+const StoryFlowTextInterpolator = preload("res://addons/storyflow/core/storyflow_text_interpolator.gd")
+const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
+const StoryFlowVariableChangeInfo = preload("res://addons/storyflow/core/storyflow_variable_change_info.gd")
+const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.gd")
+
 ## Main runtime component for executing StoryFlow dialogues.
 ##
 ## Add this node to any scene that should run StoryFlow scripts. Configure

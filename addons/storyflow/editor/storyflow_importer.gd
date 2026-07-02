@@ -1,5 +1,13 @@
 class_name StoryFlowImporter
 extends RefCounted
+
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
+const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
+const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
+const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
+const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.gd")
 ## JSON importer for StoryFlow project and script files exported by the
 ## StoryFlow Editor.  Reads the build directory structure, creates
 ## StoryFlowProject / StoryFlowScript / StoryFlowCharacter resources and

@@ -1,6 +1,10 @@
 class_name StoryFlowScript
 extends RefCounted
 
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowHandles = preload("res://addons/storyflow/core/storyflow_handles.gd")
+
 var script_path: String = ""
 
 ## node_id → Dictionary with keys: "id", "type" (NodeType enum), "type_string", "data" (Dictionary)

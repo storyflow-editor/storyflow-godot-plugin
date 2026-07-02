@@ -1,6 +1,11 @@
 class_name StoryFlowProject
 extends RefCounted
 
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
+const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
+
 var version: String = ""
 var api_version: String = ""
 var title: String = ""
