@@ -138,7 +138,7 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 	for script_file in script_files:
 		var filename := script_file.get_file()
 		# Skip non-script files
-		if filename in ["project.json", "project.storyflow", "global-variables.json", "characters.json"]:
+		if filename in ["project.json", "project.storyflow", "global-variables.json", "characters.json", "storyflow_import_meta.json"]:
 			continue
 
 		var relative := _make_relative(script_file, build_dir)
@@ -893,7 +893,6 @@ func _import_media_assets(
 				type_dir = "media"
 
 		var target_dir := output_dir.path_join(type_dir)
-		DirAccess.make_dir_recursive_absolute(target_dir)
 
 		# Build a safe file name (keep extension)
 		var filename := source_path.get_file()
@@ -916,12 +915,21 @@ func _import_media_assets(
 				else:
 					out_resolved[asset_id] = target_path
 				continue
+			# Exported games pack only Godot's imported versions of media (no raw
+			# bytes for FileAccess); those are reachable solely through the
+			# resource remap via ResourceLoader.
+			var imported := _load_imported_resource(source_path, target_path)
+			if imported:
+				out_resolved[asset_id] = imported
+				continue
 			push_warning("StoryFlow: Source media file not found: %s" % source_path)
 			continue
 
 		# Copy file (overwrite if already present), but skip when source == target
-		# (happens during load_project_local where build_dir == output_dir)
+		# (happens during load_project_local where build_dir == output_dir, and
+		# res:// is read-only in exported games anyway)
 		if source_path != target_path:
+			DirAccess.make_dir_recursive_absolute(target_dir)
 			var err := DirAccess.copy_absolute(source_path, target_path)
 			if err != OK:
 				push_error("StoryFlow: Failed to copy %s -> %s (error %d)" % [source_path, target_path, err])
@@ -945,6 +953,18 @@ func _import_media_assets(
 			push_warning("StoryFlow: Could not load resource %s" % target_path)
 
 		print("StoryFlow: Imported media %s -> %s" % [asset_path, target_path])
+
+
+## Load a media file through Godot's import remap. In exported games the raw
+## file bytes are not packed; only the imported resource (CompressedTexture2D,
+## AudioStreamWAV, AudioStreamMP3, ...) is, and only ResourceLoader reaches it.
+func _load_imported_resource(source_path: String, target_path: String) -> Resource:
+	for path in [target_path, source_path]:
+		if ResourceLoader.exists(path):
+			var res := ResourceLoader.load(path)
+			if res:
+				return res
+	return null
 
 
 ## Load an image directly from file buffer, detecting the actual format from
@@ -1112,14 +1132,3 @@ func _copy_directory_recursive(src_dir: String, dst_dir: String) -> void:
 				print("StoryFlow: Copied %s" % name)
 		name = dir.get_next()
 	dir.list_dir_end()
-
-
-## Create a .gdignore file in a directory so Godot ignores its contents.
-## This prevents "Files have been modified on disk" dialogs during sync.
-func _ensure_gdignore(dir_path: String) -> void:
-	var gdignore_path := dir_path.path_join(".gdignore")
-	if not FileAccess.file_exists(gdignore_path):
-		var f := FileAccess.open(gdignore_path, FileAccess.WRITE)
-		if f:
-			f.store_string("")
-			f.close()
