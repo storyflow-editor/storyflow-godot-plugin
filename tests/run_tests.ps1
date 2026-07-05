@@ -27,4 +27,6 @@ if ($LASTEXITCODE -ne 0) { $failed = 1 }
 if ($LASTEXITCODE -ne 0) { $failed = 1 }
 & $GodotExe --headless --path $repoRoot --script res://tests/test_modulo_nodes.gd
 if ($LASTEXITCODE -ne 0) { $failed = 1 }
+& $GodotExe --headless --path $repoRoot --script res://tests/test_character_interpolation.gd
+if ($LASTEXITCODE -ne 0) { $failed = 1 }
 exit $failed
