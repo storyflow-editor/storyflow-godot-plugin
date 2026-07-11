@@ -399,6 +399,16 @@ func _parse_node_data(type_string: String, node_obj: Dictionary) -> Dictionary:
 	if data_src.has("character"):
 		data["character"] = data_src["character"]
 
+	# Dialogue tags (presentation cues fired when the node is entered).
+	# Optional and additive: older files lack the key entirely. Guard that the
+	# value is an array (a non-array 'tags' would otherwise iterate garbage — an
+	# int iterates as a range), then coerce each entry to a string defensively.
+	if data_src.has("tags") and data_src["tags"] is Array:
+		var tags: Array = []
+		for tag in data_src["tags"]:
+			tags.append(str(tag))
+		data["tags"] = tags
+
 	# Text blocks
 	if data_src.has("textBlocks"):
 		var text_blocks: Array = []

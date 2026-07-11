@@ -40,6 +40,10 @@ var options: Array[StoryFlowDialogueOption] = []
 ## Non-interactive text blocks.
 var text_blocks: Array[StoryFlowTextBlock] = []
 
+## Presentation tags authored on this dialogue node, in authored order.
+## Empty when the node has no tags.
+var tags: Array[String] = []
+
 ## Whether the dialogue can be advanced without selecting an option.
 var can_advance: bool = false
 
