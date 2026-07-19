@@ -62,6 +62,13 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 			var extra_strings := _flatten_strings(global_vars_json["strings"])
 			for key in extra_strings:
 				project.global_strings[key] = extra_strings[key]
+		# Global image/audio variable assets live in this file's own "assets" section
+		# (json-export-strategy addAsset). Import them into the project pool — the shared
+		# final fallback for both image and audio resolution — so a global Image/Audio
+		# variable's asset key resolves at runtime instead of showing the default.
+		if global_vars_json.has("assets"):
+			var global_assets := _parse_assets_dict(global_vars_json["assets"])
+			_import_media_assets(build_dir, output_dir, global_assets, project.resolved_assets)
 
 	# ------------------------------------------------------------------
 	# Global strings  (inline)
@@ -84,10 +91,17 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 					push_warning("StoryFlow: Character string key '%s' overwrites existing global string" % key)
 				project.global_strings[key] = char_strings[key]
 
-		# Parse character asset metadata for later media import
+		# Parse character asset metadata for media import
 		var character_media_assets: Dictionary = {}
 		if characters_json.has("assets"):
 			character_media_assets = _parse_assets_dict(characters_json["assets"])
+
+		# Import ALL character-scoped media into the project pool. This "assets" dict holds
+		# the portraits AND the custom image/audio-typed character-variable and character-map
+		# values. project.resolved_assets is the shared final fallback for both image
+		# (component) and audio (audio controller) resolution — and audio has no
+		# character-level pool, so those assets MUST land here to resolve at all.
+		_import_media_assets(build_dir, output_dir, character_media_assets, project.resolved_assets)
 
 		# Create per-character resources
 		if characters_json.has("characters"):
@@ -106,10 +120,11 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 				if char_data.has("variables"):
 					character.variables = _parse_character_variables(char_data["variables"])
 
-				# Import character media (portrait image)
-				if character.image_key != "" and character_media_assets.has(character.image_key):
-					var single_asset: Dictionary = { character.image_key: character_media_assets[character.image_key] }
-					_import_media_assets(build_dir, output_dir, single_asset, character.resolved_assets)
+				# The portrait is checked in the character pool first at runtime. Reuse the
+				# resource already imported into the project pool above instead of copying
+				# and decoding the same file a second time.
+				if character.image_key != "" and project.resolved_assets.has(character.image_key):
+					character.resolved_assets[character.image_key] = project.resolved_assets[character.image_key]
 
 				project.characters[normalized_path] = character
 				print("StoryFlow: Imported character '%s'" % char_path)
