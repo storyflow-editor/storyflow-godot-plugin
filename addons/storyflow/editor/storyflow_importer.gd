@@ -29,6 +29,15 @@ var _error_count: int = 0
 ## directory skips them so each media file is written once per import.
 var _copied_media_sources: Dictionary = {}
 
+## Paths (simplified) this import published under output_dir, used as a set. The
+## blanket copy must never mistake one of them for a redundant duplicate: when an
+## asset's build-relative directory is itself named images/, audio/ or media/,
+## the blanket destination IS the file the asset import just wrote.
+var _published_media_targets: Dictionary = {}
+
+## Destination root of the current import, never removed by the duplicate cleanup.
+var _output_root: String = ""
+
 # =============================================================================
 # Public API
 # =============================================================================
@@ -46,6 +55,8 @@ func get_error_count() -> int:
 func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 	_error_count = 0
 	_copied_media_sources.clear()
+	_published_media_targets.clear()
+	_output_root = output_dir
 
 	# Read project.storyflow (or project.json for backwards compat)
 	var project_json: Dictionary = _load_json_file(build_dir.path_join("project.storyflow"))
@@ -1027,8 +1038,10 @@ func _import_media_assets(
 				continue
 
 		# This media file is now published under output_dir; the blanket copy of
-		# the build directory must not write a second copy of it.
+		# the build directory must not write a second copy of it, and must not
+		# delete this one when both land on the same path.
 		_copied_media_sources[source_path.simplify_path()] = true
+		_published_media_targets[target_path.simplify_path()] = true
 
 		# Load resources directly from file buffers, bypassing Godot's import
 		# pipeline entirely. This avoids stale .import cache issues on
@@ -1263,6 +1276,12 @@ static func _file_size(path: String) -> int:
 ## Missing is the normal case and not an error; a failed removal is, because the
 ## leftover shadows the copy the runtime should be resolving.
 func _remove_redundant_copy(path: String) -> void:
+	# Never delete what this import just published. An asset stored under a
+	# build-relative images/, audio/ or media/ directory lands on exactly the
+	# path the asset import wrote, and deleting it would lose the media entirely.
+	if _published_media_targets.has(path.simplify_path()):
+		return
+
 	if not FileAccess.file_exists(path):
 		return
 
@@ -1274,6 +1293,41 @@ func _remove_redundant_copy(path: String) -> void:
 		return
 
 	print("StoryFlow: Removed duplicate media copy %s" % path)
+
+	# Tidy up what the removed file leaves behind. Both steps are best effort:
+	# under res:// Godot keeps an .import sidecar next to every media file, and
+	# the directory that held the duplicate is usually empty afterwards. Failing
+	# to clean either one does not affect the imported project, so it is not
+	# reported as an import failure.
+	var sidecar := path + ".import"
+	if FileAccess.file_exists(sidecar):
+		DirAccess.remove_absolute(sidecar)
+	_remove_dir_if_empty(path.get_base_dir())
+
+
+## Remove a directory the duplicate cleanup just emptied. The destination root
+## of the import is never removed, and a directory that still holds anything is
+## left alone.
+func _remove_dir_if_empty(dir_path: String) -> void:
+	if _as_dir_prefix(dir_path) == _as_dir_prefix(_output_root):
+		return
+
+	var dir := DirAccess.open(dir_path)
+	if dir == null:
+		return
+
+	var is_empty := true
+	dir.list_dir_begin()
+	var name := dir.get_next()
+	while name != "":
+		if name != "." and name != "..":
+			is_empty = false
+			break
+		name = dir.get_next()
+	dir.list_dir_end()
+
+	if is_empty:
+		DirAccess.remove_absolute(dir_path)
 
 
 ## True when one of the directories contains the other, or they are the same.

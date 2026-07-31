@@ -41,6 +41,7 @@ func _initialize() -> void:
 	_test_sync_reports_error_count()
 	_test_unchanged_files_are_not_rewritten()
 	_test_media_is_written_once_per_sync()
+	_test_media_whose_build_path_matches_the_asset_directory()
 	# Runaway-recursion guard last: without it this scenario never returns.
 	_test_nested_output_is_refused()
 
@@ -278,6 +279,8 @@ func _test_media_is_written_once_per_sync() -> void:
 	# and the in-place reload below would copy it over the fresh one.
 	DirAccess.make_dir_recursive_absolute(out.path_join("assets"))
 	_write_text(out.path_join("assets/pic.png"), "stale copy from an older sync")
+	# Under res:// Godot leaves an .import sidecar next to every media file.
+	_write_text(out.path_join("assets/pic.png.import"), "[remap]\n")
 	var second := ImporterScript.new()
 	_check("re-import with a leftover duplicate succeeds", second.import_project(build, out) != null)
 	_check("re-import reports no errors (got %d)" % second.get_error_count(),
@@ -285,12 +288,43 @@ func _test_media_is_written_once_per_sync() -> void:
 	_check("a duplicate left by an older import is removed",
 		_count_files(out, "pic.png") == 1)
 
+	_check("the orphaned .import sidecar goes with it",
+		not FileAccess.file_exists(out.path_join("assets/pic.png.import")))
+	_check("the emptied duplicate directory is cleaned up",
+		not DirAccess.dir_exists_absolute(out.path_join("assets")))
+
 	# Export correctness: the runtime reloads the output directory in place and
 	# must still resolve the asset from the single remaining copy.
 	var reloaded := ImporterScript.new().load_project_local(out)
 	_check("reloading the output directory succeeds", reloaded != null)
 	var script = reloaded.scripts.get("Main") if reloaded else null
 	_check("the asset still resolves to a resource after the reload",
+		script != null and script.resolved_assets.get("pic") is Resource)
+
+
+## The asset import publishes media into images/, audio/ or media/. When the
+## build-relative path already lives in a directory of that name, the blanket
+## copy's destination IS the file the asset import just published: it must never
+## be mistaken for a redundant duplicate and deleted.
+func _test_media_whose_build_path_matches_the_asset_directory() -> void:
+	var build := _temp("media_same_dir/build")
+	var out := _temp("media_same_dir/out")
+	_write_build(build, "images/pic.png")
+
+	var importer := ImporterScript.new()
+	var project := importer.import_project(build, out)
+	_check("import of media under images/ succeeds", project != null)
+	_check("import of media under images/ reports no errors (got %d)" % importer.get_error_count(),
+		importer.get_error_count() == 0)
+	_check("the published media file survives the sync",
+		FileAccess.file_exists(out.path_join("images/pic.png")))
+	_check("media is still written exactly once (got %d copies)" % _count_files(out, "pic.png"),
+		_count_files(out, "pic.png") == 1)
+
+	var reloaded := ImporterScript.new().load_project_local(out)
+	_check("reloading after an images/ layout sync succeeds", reloaded != null)
+	var script = reloaded.scripts.get("Main") if reloaded else null
+	_check("the images/ layout asset still resolves after the reload",
 		script != null and script.resolved_assets.get("pic") is Resource)
 
 
