@@ -24,16 +24,20 @@ const IMPORT_META_TEMP_SUFFIX := ".tmp"
 ## dock reports the total so a partially failed sync is not shown as a success.
 var _error_count: int = 0
 
-## Source paths (simplified) already published by [method _import_media_assets]
-## during the current import, used as a set. The blanket copy of the build
-## directory skips them so each media file is written once per import.
-var _copied_media_sources: Dictionary = {}
+## Source paths (simplified) already published under output_dir by this import —
+## media handled by [method _import_media_assets] and the project file handled by
+## [method _publish_project_file] — used as a set. The blanket copy of the build
+## directory skips them so each file is written once per import, at the path the
+## runtime actually reads.
+var _copied_sources: Dictionary = {}
 
 ## Paths (simplified) this import published under output_dir, used as a set. The
 ## blanket copy must never mistake one of them for a redundant duplicate: when an
 ## asset's build-relative directory is itself named images/, audio/ or media/,
-## the blanket destination IS the file the asset import just wrote.
-var _published_media_targets: Dictionary = {}
+## the blanket destination IS the file the asset import just wrote — and the
+## published project.json must never be deleted in favor of a stale build-side
+## copy of the same name.
+var _published_targets: Dictionary = {}
 
 ## Destination root of the current import, never removed by the duplicate cleanup.
 var _output_root: String = ""
@@ -54,14 +58,16 @@ func get_error_count() -> int:
 ## Returns the imported [StoryFlowProject], or [code]null[/code] on failure.
 func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 	_error_count = 0
-	_copied_media_sources.clear()
-	_published_media_targets.clear()
+	_copied_sources.clear()
+	_published_targets.clear()
 	_output_root = output_dir
 
 	# Read project.storyflow (or project.json for backwards compat)
-	var project_json: Dictionary = _load_json_file(build_dir.path_join("project.storyflow"))
+	var project_file := build_dir.path_join("project.storyflow")
+	var project_json: Dictionary = _load_json_file(project_file)
 	if project_json.is_empty():
-		project_json = _load_json_file(build_dir.path_join("project.json"))
+		project_file = build_dir.path_join("project.json")
+		project_json = _load_json_file(project_file)
 	if project_json.is_empty():
 		push_error("StoryFlow: Failed to load project file from %s" % build_dir)
 		return null
@@ -213,6 +219,7 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 	# ------------------------------------------------------------------
 	var norm_build := build_dir.replace("\\", "/").rstrip("/")
 	var norm_output := output_dir.replace("\\", "/").rstrip("/")
+	_publish_project_file(project_file, build_dir, output_dir)
 	if norm_build != norm_output:
 		_copy_directory_recursive(build_dir, output_dir)
 
@@ -228,6 +235,36 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 
 	print("StoryFlow: Successfully imported project with %d scripts" % project.scripts.size())
 	return project
+
+
+## Publish the project file this import parsed into the output directory under
+## the project.json name.
+##
+## Exported games pack .json files as raw bytes, but a .storyflow file is
+## unreadable at runtime either way: unimported it is not packed at all, and
+## imported it is replaced by StoryFlowImportPlugin's marker resource (which
+## carries no project data). Publishing the data as project.json is what lets
+## [code]StoryFlowManager._auto_load_project[/code] find it in an exported game.
+##
+## Both candidate source names are marked as copied so the blanket copy neither
+## writes a raw project.storyflow into the output directory nor overwrites the
+## published file with a stale build-side project.json, and so it removes the
+## project.storyflow an older plugin version copied there. On a failed copy
+## nothing is marked, leaving the blanket verbatim copy as the fallback; the
+## failure is already counted by [method _copy_file].
+##
+## Also runs when build_dir == output_dir (a build dropped straight into the
+## output directory, and every load_project_local call): there the copy is
+## content-skipped when project.json is already current, which keeps it a no-op
+## on the read-only res:// of an exported game.
+func _publish_project_file(project_file: String, build_dir: String, output_dir: String) -> void:
+	var target := output_dir.path_join("project.json")
+	if _copy_file(project_file, target, "project.json") != OK:
+		return
+	_copied_sources[build_dir.path_join("project.storyflow").simplify_path()] = true
+	_copied_sources[build_dir.path_join("project.json").simplify_path()] = true
+	_published_targets[target.simplify_path()] = true
+	_published_targets[target.simplify_path().to_lower()] = true
 
 
 ## Load a project from a local directory inside the Godot project (e.g. res://storyflow/).
@@ -1040,15 +1077,15 @@ func _import_media_assets(
 		# This media file is now published under output_dir; the blanket copy of
 		# the build directory must not write a second copy of it, and must not
 		# delete this one when both land on the same path.
-		_copied_media_sources[source_path.simplify_path()] = true
-		_published_media_targets[target_path.simplify_path()] = true
+		_copied_sources[source_path.simplify_path()] = true
+		_published_targets[target_path.simplify_path()] = true
 		# Case-folded spelling as well: on a case-insensitive filesystem the
 		# blanket copy reaches this same file under a differently cased path
 		# (a build directory named Images/ against the images/ published here).
 		# The extra key only ever declines a deletion, so on a case-sensitive
 		# filesystem, where such a path really is a different file, the worst it
 		# can cause is a second copy — the safe direction.
-		_published_media_targets[target_path.simplify_path().to_lower()] = true
+		_published_targets[target_path.simplify_path().to_lower()] = true
 
 		# Load resources directly from file buffers, bypassing Godot's import
 		# pipeline entirely. This avoids stale .import cache issues on
@@ -1279,7 +1316,8 @@ static func _file_size(path: String) -> int:
 	return size
 
 
-## Delete a duplicate media copy an older import left in the output directory.
+## Delete a stale copy an older import left in the output directory — a media
+## duplicate at its build-relative path, or a verbatim project.storyflow.
 ## Missing is the normal case and not an error; a failed removal is, because the
 ## leftover shadows the copy the runtime should be resolving.
 func _remove_redundant_copy(path: String) -> void:
@@ -1289,7 +1327,7 @@ func _remove_redundant_copy(path: String) -> void:
 	# The case-folded spelling counts as the same file, because that is how a
 	# case-insensitive filesystem resolves it.
 	var simplified := path.simplify_path()
-	if _published_media_targets.has(simplified) or _published_media_targets.has(simplified.to_lower()):
+	if _published_targets.has(simplified) or _published_targets.has(simplified.to_lower()):
 		return
 
 	if not FileAccess.file_exists(path):
@@ -1297,12 +1335,12 @@ func _remove_redundant_copy(path: String) -> void:
 
 	var err := DirAccess.remove_absolute(path)
 	if err != OK:
-		push_error("StoryFlow: Failed to remove duplicate media copy %s: %s (error %d)" % [
+		push_error("StoryFlow: Failed to remove stale copy %s: %s (error %d)" % [
 			path, error_string(err), err])
 		_error_count += 1
 		return
 
-	print("StoryFlow: Removed duplicate media copy %s" % path)
+	print("StoryFlow: Removed stale copy %s" % path)
 
 	# Tidy up what the removed file leaves behind. Both steps are best effort:
 	# under res:// Godot keeps an .import sidecar next to every media file, and
@@ -1389,8 +1427,9 @@ func _copy_directory_recursive(src_dir: String, dst_dir: String) -> void:
 					_error_count += 1
 				else:
 					_copy_directory_recursive(src_path, dst_path)
-		elif _copied_media_sources.has(src_path.simplify_path()):
-			# Media the asset import already published under output_dir: it is
+		elif _copied_sources.has(src_path.simplify_path()):
+			# A file this import already published under output_dir (media into
+			# its asset directory, the project file as project.json): it is
 			# resolved from that copy at runtime, so a second copy at the
 			# build-relative path is pure duplication. A duplicate written by an
 			# older version is removed, because the runtime reloads the output

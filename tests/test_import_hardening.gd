@@ -40,6 +40,8 @@ func _initialize() -> void:
 	_test_meta_failure_is_counted()
 	_test_sync_reports_error_count()
 	_test_unchanged_files_are_not_rewritten()
+	_test_project_file_is_published_as_json()
+	_test_legacy_project_json_builds_still_publish()
 	_test_media_is_written_once_per_sync()
 	_test_media_whose_build_path_matches_the_asset_directory()
 	_test_media_whose_build_path_differs_only_in_case()
@@ -232,7 +234,7 @@ func _test_unchanged_files_are_not_rewritten() -> void:
 	_check("first import succeeds", first.import_project(build, out) != null)
 	var stamps := {
 		"notes.txt": _modified_time(out.path_join("notes.txt")),
-		"project.storyflow": _modified_time(out.path_join("project.storyflow")),
+		"project.json": _modified_time(out.path_join("project.json")),
 		"images/pic.png": _modified_time(out.path_join("images/pic.png")),
 	}
 	_check("first import produced the files", not stamps.values().has(0))
@@ -255,6 +257,99 @@ func _test_unchanged_files_are_not_rewritten() -> void:
 	_check("third import succeeds", third.import_project(build, out) != null)
 	_check("a changed file of identical length is still copied",
 		_read_text(out.path_join("notes.txt")) == "world")
+
+
+## Exported games pack .json files as raw bytes but leave .storyflow files
+## unreadable: an unimported one is not packed at all, an imported one is
+## replaced by the import plugin's marker resource, and neither is reachable
+## through FileAccess. The sync must therefore publish the project file into the
+## output directory under the project.json name, and remove the raw
+## project.storyflow an older plugin version copied there — otherwise exported
+## games silently fail to auto-load the project.
+func _test_project_file_is_published_as_json() -> void:
+	var build := _temp("project_json/build")
+	var out := _temp("project_json/out")
+	_write_build(build, "")
+
+	var importer := ImporterScript.new()
+	var project := importer.import_project(build, out)
+	_check("import from a project.storyflow build succeeds", project != null)
+	_check("publishing import reports no errors (got %d)" % importer.get_error_count(),
+		importer.get_error_count() == 0)
+	_check("the project file is published as project.json",
+		_read_text(out.path_join("project.json")) == _read_text(build.path_join("project.storyflow")))
+	_check("no raw project.storyflow lands in the output directory",
+		not FileAccess.file_exists(out.path_join("project.storyflow")))
+
+	# An older plugin version copied project.storyflow verbatim, and under res://
+	# the import plugin left an .import sidecar next to it. An exported game never
+	# sees either, so a re-sync must clean them up the same way it removes stale
+	# media duplicates.
+	_write_text(out.path_join("project.storyflow"), "stale copy from an older sync")
+	_write_text(out.path_join("project.storyflow.import"), "[remap]\n")
+	var second := ImporterScript.new()
+	_check("re-import over a stale project.storyflow succeeds",
+		second.import_project(build, out) != null)
+	_check("re-import reports no errors (got %d)" % second.get_error_count(),
+		second.get_error_count() == 0)
+	_check("the stale project.storyflow is removed",
+		not FileAccess.file_exists(out.path_join("project.storyflow")))
+	_check("its orphaned .import sidecar goes with it",
+		not FileAccess.file_exists(out.path_join("project.storyflow.import")))
+	_check("the published project.json survives the cleanup",
+		_read_text(out.path_join("project.json")) == _read_text(build.path_join("project.storyflow")))
+
+	# The output directory is exactly what an exported game reloads at startup.
+	var reloaded := ImporterScript.new().load_project_local(out)
+	_check("reloading the output directory succeeds", reloaded != null)
+	_check("the reloaded project keeps its scripts",
+		reloaded != null and reloaded.scripts.has("Main"))
+
+	# A build dropped straight into the output directory (build == output) must
+	# publish project.json as well — that layout is otherwise never blanket-copied
+	# — while leaving the user's source project.storyflow in place.
+	var dropin := _temp("project_json_dropin")
+	_write_build(dropin, "")
+	var dropin_project := ImporterScript.new().load_project_local(dropin)
+	_check("loading a dropped-in build succeeds", dropin_project != null)
+	_check("the dropped-in project file is also published as project.json",
+		_read_text(dropin.path_join("project.json")) == _read_text(dropin.path_join("project.storyflow")))
+	_check("the dropped-in source project.storyflow is left in place",
+		FileAccess.file_exists(dropin.path_join("project.storyflow")))
+
+
+## A build that still ships the legacy project.json name must keep working, and
+## when both names are present the published project.json must hold the content
+## of the file the import actually parsed — project.storyflow wins, and the
+## stale build-side project.json must not overwrite it.
+func _test_legacy_project_json_builds_still_publish() -> void:
+	var legacy_build := _temp("project_json_legacy/build")
+	var legacy_out := _temp("project_json_legacy/out")
+	_write_build(legacy_build, "")
+	var storyflow_content := _read_text(legacy_build.path_join("project.storyflow"))
+	DirAccess.remove_absolute(legacy_build.path_join("project.storyflow"))
+	_write_text(legacy_build.path_join("project.json"), storyflow_content)
+
+	var importer := ImporterScript.new()
+	_check("import from a legacy project.json build succeeds",
+		importer.import_project(legacy_build, legacy_out) != null)
+	_check("legacy import reports no errors (got %d)" % importer.get_error_count(),
+		importer.get_error_count() == 0)
+	_check("the legacy project file is published as project.json",
+		_read_text(legacy_out.path_join("project.json")) == storyflow_content)
+
+	var both_build := _temp("project_json_both/build")
+	var both_out := _temp("project_json_both/out")
+	_write_build(both_build, "")
+	_write_text(both_build.path_join("project.json"), "{\"stale\": true}")
+
+	var both := ImporterScript.new()
+	_check("import from a build with both project files succeeds",
+		both.import_project(both_build, both_out) != null)
+	_check("both-names import reports no errors (got %d)" % both.get_error_count(),
+		both.get_error_count() == 0)
+	_check("project.storyflow wins over the stale build-side project.json",
+		_read_text(both_out.path_join("project.json")) == _read_text(both_build.path_join("project.storyflow")))
 
 
 ## Media used to be written twice per sync: once into images/ by the asset
@@ -376,7 +471,7 @@ func _test_nested_output_is_refused() -> void:
 	var project := importer.import_project(build, out)
 	_check("import with a nested output directory returns", project != null)
 	_check("files outside the nested directory are still copied",
-		FileAccess.file_exists(out.path_join("project.storyflow")))
+		FileAccess.file_exists(out.path_join("project.json")))
 	_check("the output directory was not copied into itself",
 		not DirAccess.dir_exists_absolute(out.path_join("out")))
 	_check("the refused copy is counted (got %d)" % importer.get_error_count(),
