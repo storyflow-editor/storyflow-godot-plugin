@@ -13,9 +13,25 @@ const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.
 ## StoryFlowProject / StoryFlowScript / StoryFlowCharacter resources and
 ## optionally copies media assets into the Godot project.
 
+## Metadata file the manager reads to auto-discover a previously imported project.
+const IMPORT_META_FILENAME := "storyflow_import_meta.json"
+
+## Suffix of the staging file used to publish the metadata atomically.
+const IMPORT_META_TEMP_SUFFIX := ".tmp"
+
+## Non-fatal write failures recorded during the current import: media copies,
+## build-directory copies, directory creation and the metadata write. The editor
+## dock reports the total so a partially failed sync is not shown as a success.
+var _error_count: int = 0
+
 # =============================================================================
 # Public API
 # =============================================================================
+
+## Number of non-fatal write failures recorded during the last [method import_project].
+## Each one was also pushed as an error, so the Output log holds the details.
+func get_error_count() -> int:
+	return _error_count
 
 ## Import a full StoryFlow project from an exported build directory.
 ##
@@ -23,6 +39,8 @@ const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.
 ## [param output_dir] Godot res:// path where imported resources will be saved.
 ## Returns the imported [StoryFlowProject], or [code]null[/code] on failure.
 func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
+	_error_count = 0
+
 	# Read project.storyflow (or project.json for backwards compat)
 	var project_json: Dictionary = _load_json_file(build_dir.path_join("project.storyflow"))
 	if project_json.is_empty():
@@ -153,7 +171,7 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 	for script_file in script_files:
 		var filename := script_file.get_file()
 		# Skip non-script files
-		if filename in ["project.json", "project.storyflow", "global-variables.json", "characters.json", "storyflow_import_meta.json"]:
+		if filename in ["project.json", "project.storyflow", "global-variables.json", "characters.json", IMPORT_META_FILENAME]:
 			continue
 
 		var relative := _make_relative(script_file, build_dir)
@@ -183,17 +201,13 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 
 	# Save metadata so the manager can reload from the local copy
 	if norm_build != norm_output:
-		var meta_path := output_dir.path_join("storyflow_import_meta.json")
 		var meta := {
 			"output_dir": output_dir,
 			"imported_at": Time.get_datetime_string_from_system(),
 			"script_paths": Array(project.get_all_script_paths()),
 		}
-		var meta_file := FileAccess.open(meta_path, FileAccess.WRITE)
-		if meta_file:
-			meta_file.store_string(JSON.stringify(meta, "\t"))
-			meta_file.close()
-			print("StoryFlow: Saved import metadata to %s" % meta_path)
+		if write_import_meta(output_dir, meta) != OK:
+			_error_count += 1
 
 	print("StoryFlow: Successfully imported project with %d scripts" % project.scripts.size())
 	return project
@@ -362,6 +376,55 @@ func import_script(json_data: Dictionary) -> StoryFlowScript:
 	# Build connection index maps for O(1) lookups at runtime
 	script.build_indices()
 	return script
+
+
+## Publish [param meta] as storyflow_import_meta.json inside [param output_dir].
+##
+## The JSON is staged in a sibling temp file and only then renamed over the
+## target, so an interrupted or failing write cannot leave a truncated metadata
+## file behind — a truncated one breaks project auto-discovery on the next
+## launch ([code]StoryFlowManager._auto_load_project[/code]). Every failure is
+## pushed as an error and leaves the previously published file untouched.
+##
+## Shared by the importer and the editor dock; the caller owns the payload.
+## Returns [code]OK[/code] only when the target was replaced.
+static func write_import_meta(output_dir: String, meta: Dictionary) -> Error:
+	var meta_path := output_dir.path_join(IMPORT_META_FILENAME)
+	var temp_path := meta_path + IMPORT_META_TEMP_SUFFIX
+
+	var dir_err := DirAccess.make_dir_recursive_absolute(output_dir)
+	if dir_err != OK:
+		push_error("StoryFlow: Cannot create output directory %s: %s (error %d)" % [
+			output_dir, error_string(dir_err), dir_err])
+		return dir_err
+
+	var file := FileAccess.open(temp_path, FileAccess.WRITE)
+	if file == null:
+		var open_err := FileAccess.get_open_error()
+		if open_err == OK:
+			open_err = FAILED
+		push_error("StoryFlow: Cannot stage import metadata %s: %s (error %d)" % [
+			temp_path, error_string(open_err), open_err])
+		return open_err
+
+	file.store_string(JSON.stringify(meta, "\t"))
+	var store_err := file.get_error()
+	file.close()
+	if store_err != OK:
+		push_error("StoryFlow: Failed to write import metadata %s: %s (error %d)" % [
+			temp_path, error_string(store_err), store_err])
+		DirAccess.remove_absolute(temp_path)
+		return store_err
+
+	var rename_err := DirAccess.rename_absolute(temp_path, meta_path)
+	if rename_err != OK:
+		push_error("StoryFlow: Failed to publish import metadata %s: %s (error %d)" % [
+			meta_path, error_string(rename_err), rename_err])
+		DirAccess.remove_absolute(temp_path)
+		return rename_err
+
+	print("StoryFlow: Saved import metadata to %s" % meta_path)
+	return OK
 
 
 # =============================================================================
@@ -954,10 +1017,17 @@ func _import_media_assets(
 		# (happens during load_project_local where build_dir == output_dir, and
 		# res:// is read-only in exported games anyway)
 		if source_path != target_path:
-			DirAccess.make_dir_recursive_absolute(target_dir)
+			var dir_err := DirAccess.make_dir_recursive_absolute(target_dir)
+			if dir_err != OK:
+				push_error("StoryFlow: Failed to create media directory %s: %s (error %d)" % [
+					target_dir, error_string(dir_err), dir_err])
+				_error_count += 1
+				continue
 			var err := DirAccess.copy_absolute(source_path, target_path)
 			if err != OK:
-				push_error("StoryFlow: Failed to copy %s -> %s (error %d)" % [source_path, target_path, err])
+				push_error("StoryFlow: Failed to copy %s -> %s: %s (error %d)" % [
+					source_path, target_path, error_string(err), err])
+				_error_count += 1
 				continue
 
 		# Load resources directly from file buffers, bypassing Godot's import
@@ -1134,11 +1204,19 @@ func _normalize_script_path(path: String) -> String:
 
 ## Recursively copy all files from source directory to destination directory.
 func _copy_directory_recursive(src_dir: String, dst_dir: String) -> void:
-	DirAccess.make_dir_recursive_absolute(dst_dir)
+	var dir_err := DirAccess.make_dir_recursive_absolute(dst_dir)
+	if dir_err != OK:
+		push_error("StoryFlow: Failed to create directory %s: %s (error %d)" % [
+			dst_dir, error_string(dir_err), dir_err])
+		_error_count += 1
+		return
 
 	var dir := DirAccess.open(src_dir)
 	if dir == null:
-		push_error("StoryFlow: Cannot open source directory %s" % src_dir)
+		var open_err := DirAccess.get_open_error()
+		push_error("StoryFlow: Cannot open source directory %s: %s (error %d)" % [
+			src_dir, error_string(open_err), open_err])
+		_error_count += 1
 		return
 
 	dir.list_dir_begin()
@@ -1152,7 +1230,9 @@ func _copy_directory_recursive(src_dir: String, dst_dir: String) -> void:
 		else:
 			var err := DirAccess.copy_absolute(src_path, dst_path)
 			if err != OK:
-				push_error("StoryFlow: Failed to copy %s -> %s" % [src_path, dst_path])
+				push_error("StoryFlow: Failed to copy %s -> %s: %s (error %d)" % [
+					src_path, dst_path, error_string(err), err])
+				_error_count += 1
 			else:
 				print("StoryFlow: Copied %s" % name)
 		name = dir.get_next()

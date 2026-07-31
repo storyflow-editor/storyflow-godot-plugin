@@ -31,4 +31,6 @@ if ($LASTEXITCODE -ne 0) { $failed = 1 }
 if ($LASTEXITCODE -ne 0) { $failed = 1 }
 & $GodotExe --headless --path $repoRoot --script res://tests/test_dialogue_tags.gd
 if ($LASTEXITCODE -ne 0) { $failed = 1 }
+& $GodotExe --headless --path $repoRoot --script res://tests/test_import_hardening.gd
+if ($LASTEXITCODE -ne 0) { $failed = 1 }
 exit $failed

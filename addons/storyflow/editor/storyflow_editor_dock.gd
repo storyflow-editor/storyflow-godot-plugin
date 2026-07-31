@@ -187,7 +187,12 @@ func _on_import_pressed() -> void:
 
 	if project:
 		_set_project_on_manager(project)
-		_status_label.text = "Import complete: %s" % project.title
+		var errors := importer.get_error_count()
+		if errors > 0:
+			_status_label.text = "Import complete: %s, %d errors. Check Output log." % [
+				project.title, errors]
+		else:
+			_status_label.text = "Import complete: %s" % project.title
 	else:
 		_status_label.text = "Import failed. Check Output log."
 
@@ -258,10 +263,14 @@ func request_sync() -> void:
 	_on_sync_pressed()
 
 
-func _on_ws_sync_complete(project: StoryFlowProject) -> void:
+func _on_ws_sync_complete(project: StoryFlowProject, error_count: int) -> void:
 	_set_project_on_manager(project)
-	_update_import_meta(project)
-	_status_label.text = "Sync: %s (%d scripts)" % [project.title, project.scripts.size()]
+	var errors := error_count + _update_import_meta(project)
+	if errors > 0:
+		_status_label.text = "Sync: %s (%d scripts), %d errors. Check Output log." % [
+			project.title, project.scripts.size(), errors]
+	else:
+		_status_label.text = "Sync: %s (%d scripts)" % [project.title, project.scripts.size()]
 	_sync_status_label.text = "Status: Connected"
 
 
@@ -275,10 +284,13 @@ func _set_project_on_manager(project: StoryFlowProject) -> void:
 		print("[StoryFlow] Project set on manager: %s" % project.title)
 
 
-func _update_import_meta(project: StoryFlowProject) -> void:
+## Refresh the sync fields of the import metadata, preserving whatever the
+## importer wrote. Returns the number of write failures (0 or 1) so the caller
+## can fold them into the status it reports.
+func _update_import_meta(project: StoryFlowProject) -> int:
 	var output_dir := _get_output_dir()
 
-	var meta_path := output_dir.path_join("storyflow_import_meta.json")
+	var meta_path := output_dir.path_join(StoryFlowImporter.IMPORT_META_FILENAME)
 	var meta := {}
 
 	# Preserve existing meta fields
@@ -294,12 +306,9 @@ func _update_import_meta(project: StoryFlowProject) -> void:
 	if not meta.has("output_dir"):
 		meta["output_dir"] = output_dir
 
-	DirAccess.make_dir_recursive_absolute(output_dir)
-
-	var file := FileAccess.open(meta_path, FileAccess.WRITE)
-	if file:
-		file.store_string(JSON.stringify(meta, "\t"))
-		file.close()
+	if StoryFlowImporter.write_import_meta(output_dir, meta) != OK:
+		return 1
+	return 0
 
 
 func _on_poll_timer() -> void:

@@ -3,7 +3,10 @@ extends RefCounted
 
 signal connected()
 signal disconnected()
-signal sync_complete(project: StoryFlowProject)
+## Emitted after a sync finished importing. [param error_count] is the number of
+## non-fatal write failures the import recorded, so the dock can report a
+## partially failed sync instead of an unconditional success.
+signal sync_complete(project: StoryFlowProject, error_count: int)
 
 var _socket: WebSocketPeer = null
 var _port: int = 9000
@@ -135,6 +138,6 @@ func _handle_project_updated(data: Dictionary) -> void:
 	var importer := StoryFlowImporter.new()
 	var project := importer.import_project(build_dir, _output_dir)
 	if project:
-		sync_complete.emit(project)
+		sync_complete.emit(project, importer.get_error_count())
 	else:
 		push_error("[StoryFlow] Failed to import project from sync")
