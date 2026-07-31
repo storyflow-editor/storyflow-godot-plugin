@@ -24,6 +24,11 @@ const IMPORT_META_TEMP_SUFFIX := ".tmp"
 ## dock reports the total so a partially failed sync is not shown as a success.
 var _error_count: int = 0
 
+## Source paths (simplified) already published by [method _import_media_assets]
+## during the current import, used as a set. The blanket copy of the build
+## directory skips them so each media file is written once per import.
+var _copied_media_sources: Dictionary = {}
+
 # =============================================================================
 # Public API
 # =============================================================================
@@ -40,6 +45,7 @@ func get_error_count() -> int:
 ## Returns the imported [StoryFlowProject], or [code]null[/code] on failure.
 func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 	_error_count = 0
+	_copied_media_sources.clear()
 
 	# Read project.storyflow (or project.json for backwards compat)
 	var project_json: Dictionary = _load_json_file(build_dir.path_join("project.storyflow"))
@@ -1013,22 +1019,16 @@ func _import_media_assets(
 			push_warning("StoryFlow: Source media file not found: %s" % source_path)
 			continue
 
-		# Copy file (overwrite if already present), but skip when source == target
-		# (happens during load_project_local where build_dir == output_dir, and
-		# res:// is read-only in exported games anyway)
+		# Copy file (only when the destination differs in content), but skip when
+		# source == target (happens during load_project_local where build_dir ==
+		# output_dir, and res:// is read-only in exported games anyway)
 		if source_path != target_path:
-			var dir_err := DirAccess.make_dir_recursive_absolute(target_dir)
-			if dir_err != OK:
-				push_error("StoryFlow: Failed to create media directory %s: %s (error %d)" % [
-					target_dir, error_string(dir_err), dir_err])
-				_error_count += 1
+			if _copy_file(source_path, target_path) != OK:
 				continue
-			var err := DirAccess.copy_absolute(source_path, target_path)
-			if err != OK:
-				push_error("StoryFlow: Failed to copy %s -> %s: %s (error %d)" % [
-					source_path, target_path, error_string(err), err])
-				_error_count += 1
-				continue
+
+		# This media file is now published under output_dir; the blanket copy of
+		# the build directory must not write a second copy of it.
+		_copied_media_sources[source_path.simplify_path()] = true
 
 		# Load resources directly from file buffers, bypassing Godot's import
 		# pipeline entirely. This avoids stale .import cache issues on
@@ -1202,6 +1202,99 @@ func _normalize_script_path(path: String) -> String:
 	return result
 
 
+## Copy a single file, skipping the write when the destination already holds the
+## same content. Rewriting unchanged files churns the disk and makes Godot
+## re-import every copied file (a full project.storyflow parse) on every sync.
+## Failures are pushed as errors and counted; [param log_label] is printed only
+## when bytes were really written.
+func _copy_file(src_path: String, dst_path: String, log_label: String = "") -> Error:
+	if _is_up_to_date(src_path, dst_path):
+		return OK
+
+	var dst_dir := dst_path.get_base_dir()
+	var dir_err := DirAccess.make_dir_recursive_absolute(dst_dir)
+	if dir_err != OK:
+		push_error("StoryFlow: Failed to create directory %s: %s (error %d)" % [
+			dst_dir, error_string(dir_err), dir_err])
+		_error_count += 1
+		return dir_err
+
+	var err := DirAccess.copy_absolute(src_path, dst_path)
+	if err != OK:
+		push_error("StoryFlow: Failed to copy %s -> %s: %s (error %d)" % [
+			src_path, dst_path, error_string(err), err])
+		_error_count += 1
+		return err
+
+	if not log_label.is_empty():
+		print("StoryFlow: Copied %s" % log_label)
+	return OK
+
+
+## True when [param dst_path] already holds exactly the bytes of
+## [param src_path]. Sizes are compared first because they rule out most
+## changes cheaply, then MD5 so a same-length edit is still detected. Anything
+## unreadable or missing answers false, so the caller copies when in doubt.
+static func _is_up_to_date(src_path: String, dst_path: String) -> bool:
+	if not FileAccess.file_exists(dst_path):
+		return false
+
+	var src_size := _file_size(src_path)
+	if src_size < 0 or src_size != _file_size(dst_path):
+		return false
+
+	var src_md5 := FileAccess.get_md5(src_path)
+	if src_md5.is_empty():
+		return false
+	return src_md5 == FileAccess.get_md5(dst_path)
+
+
+## Size of a file in bytes, or -1 when it cannot be opened.
+static func _file_size(path: String) -> int:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return -1
+	var size := file.get_length()
+	file.close()
+	return size
+
+
+## Delete a duplicate media copy an older import left in the output directory.
+## Missing is the normal case and not an error; a failed removal is, because the
+## leftover shadows the copy the runtime should be resolving.
+func _remove_redundant_copy(path: String) -> void:
+	if not FileAccess.file_exists(path):
+		return
+
+	var err := DirAccess.remove_absolute(path)
+	if err != OK:
+		push_error("StoryFlow: Failed to remove duplicate media copy %s: %s (error %d)" % [
+			path, error_string(err), err])
+		_error_count += 1
+		return
+
+	print("StoryFlow: Removed duplicate media copy %s" % path)
+
+
+## True when one of the directories contains the other, or they are the same.
+## Copying between overlapping directories descends into its own output and
+## never terminates, so such a step must be refused.
+static func _dirs_overlap(dir_a: String, dir_b: String) -> bool:
+	var a := _as_dir_prefix(dir_a)
+	var b := _as_dir_prefix(dir_b)
+	return a.begins_with(b) or b.begins_with(a)
+
+
+## Normalize a directory path for prefix comparison: forward slashes, resolved
+## "." and ".." segments, and a trailing slash so "foo/bar2" is not mistaken for
+## something living inside "foo/bar".
+static func _as_dir_prefix(path: String) -> String:
+	var normalized := path.replace("\\", "/").simplify_path()
+	if not normalized.ends_with("/"):
+		normalized += "/"
+	return normalized
+
+
 ## Recursively copy all files from source directory to destination directory.
 func _copy_directory_recursive(src_dir: String, dst_dir: String) -> void:
 	var dir_err := DirAccess.make_dir_recursive_absolute(dst_dir)
@@ -1226,14 +1319,20 @@ func _copy_directory_recursive(src_dir: String, dst_dir: String) -> void:
 		var dst_path := dst_dir.path_join(name)
 		if dir.current_is_dir():
 			if name != "." and name != "..":
-				_copy_directory_recursive(src_path, dst_path)
+				if _dirs_overlap(src_path, dst_path):
+					push_error("StoryFlow: Refusing to copy %s -> %s: the directories are nested, which would recurse without end" % [
+						src_path, dst_path])
+					_error_count += 1
+				else:
+					_copy_directory_recursive(src_path, dst_path)
+		elif _copied_media_sources.has(src_path.simplify_path()):
+			# Media the asset import already published under output_dir: it is
+			# resolved from that copy at runtime, so a second copy at the
+			# build-relative path is pure duplication. A duplicate written by an
+			# older version is removed, because the runtime reloads the output
+			# directory in place and would copy that stale file over the fresh one.
+			_remove_redundant_copy(dst_path)
 		else:
-			var err := DirAccess.copy_absolute(src_path, dst_path)
-			if err != OK:
-				push_error("StoryFlow: Failed to copy %s -> %s: %s (error %d)" % [
-					src_path, dst_path, error_string(err), err])
-				_error_count += 1
-			else:
-				print("StoryFlow: Copied %s" % name)
+			_copy_file(src_path, dst_path, name)
 		name = dir.get_next()
 	dir.list_dir_end()

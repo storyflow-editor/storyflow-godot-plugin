@@ -39,6 +39,10 @@ func _initialize() -> void:
 	_test_bulk_copy_failure_is_counted()
 	_test_meta_failure_is_counted()
 	_test_sync_reports_error_count()
+	_test_unchanged_files_are_not_rewritten()
+	_test_media_is_written_once_per_sync()
+	# Runaway-recursion guard last: without it this scenario never returns.
+	_test_nested_output_is_refused()
 
 	_rm_rf(_temp_root)
 
@@ -209,6 +213,109 @@ func _test_sync_reports_error_count() -> void:
 
 
 # =============================================================================
+# Copying: unchanged files, duplicate writes, nested directories
+# =============================================================================
+
+## Every sync used to rewrite every file, which also re-triggered Godot's import
+## of the copied project.storyflow. Files whose content is unchanged must be
+## left alone; content that really changed must still be copied, including an
+## edit that keeps the file length identical.
+func _test_unchanged_files_are_not_rewritten() -> void:
+	var build := _temp("unchanged/build")
+	var out := _temp("unchanged/out")
+	_write_build(build, "assets/pic.png")
+	_write_text(build.path_join("notes.txt"), "hello")
+
+	var first := ImporterScript.new()
+	_check("first import succeeds", first.import_project(build, out) != null)
+	var stamps := {
+		"notes.txt": _modified_time(out.path_join("notes.txt")),
+		"project.storyflow": _modified_time(out.path_join("project.storyflow")),
+		"images/pic.png": _modified_time(out.path_join("images/pic.png")),
+	}
+	_check("first import produced the files", not stamps.values().has(0))
+
+	# The modification timestamp has one-second resolution, so wait long enough
+	# that a rewrite would be visible.
+	OS.delay_msec(1200)
+
+	var second := ImporterScript.new()
+	_check("second import succeeds", second.import_project(build, out) != null)
+	_check("second import reports no errors (got %d)" % second.get_error_count(),
+		second.get_error_count() == 0)
+	for relative in stamps:
+		_check("unchanged %s is not rewritten" % relative,
+			_modified_time(out.path_join(relative)) == stamps[relative])
+
+	# A same-length edit must still be copied: length alone cannot decide.
+	_write_text(build.path_join("notes.txt"), "world")
+	var third := ImporterScript.new()
+	_check("third import succeeds", third.import_project(build, out) != null)
+	_check("a changed file of identical length is still copied",
+		_read_text(out.path_join("notes.txt")) == "world")
+
+
+## Media used to be written twice per sync: once into images/ by the asset
+## import, then again by the blanket copy of the whole build directory at its
+## original relative path. Runtime resolution uses the images/ copy, so the
+## duplicate is pure disk churn.
+func _test_media_is_written_once_per_sync() -> void:
+	var build := _temp("media_once/build")
+	var out := _temp("media_once/out")
+	_write_build(build, "assets/pic.png")
+
+	var importer := ImporterScript.new()
+	var project := importer.import_project(build, out)
+	_check("import with media succeeds", project != null)
+	_check("import with media reports no errors (got %d)" % importer.get_error_count(),
+		importer.get_error_count() == 0)
+	_check("media landed in the asset directory",
+		FileAccess.file_exists(out.path_join("images/pic.png")))
+	_check("media was written exactly once (got %d copies)" % _count_files(out, "pic.png"),
+		_count_files(out, "pic.png") == 1)
+
+	# A duplicate left by an older import is stale the moment the media changes,
+	# and the in-place reload below would copy it over the fresh one.
+	DirAccess.make_dir_recursive_absolute(out.path_join("assets"))
+	_write_text(out.path_join("assets/pic.png"), "stale copy from an older sync")
+	var second := ImporterScript.new()
+	_check("re-import with a leftover duplicate succeeds", second.import_project(build, out) != null)
+	_check("re-import reports no errors (got %d)" % second.get_error_count(),
+		second.get_error_count() == 0)
+	_check("a duplicate left by an older import is removed",
+		_count_files(out, "pic.png") == 1)
+
+	# Export correctness: the runtime reloads the output directory in place and
+	# must still resolve the asset from the single remaining copy.
+	var reloaded := ImporterScript.new().load_project_local(out)
+	_check("reloading the output directory succeeds", reloaded != null)
+	var script = reloaded.scripts.get("Main") if reloaded else null
+	_check("the asset still resolves to a resource after the reload",
+		script != null and script.resolved_assets.get("pic") is Resource)
+
+
+## An output directory nested inside the build directory used to make the
+## recursive copy descend into its own output forever, filling the disk. It must
+## refuse the nested step, report it, and still copy everything else.
+func _test_nested_output_is_refused() -> void:
+	var build := _temp("nested/build")
+	var out := build.path_join("out")
+	DirAccess.make_dir_recursive_absolute(out)
+	_write_build(build, "")
+	print("  (nested-output scenario starting)")
+
+	var importer := ImporterScript.new()
+	var project := importer.import_project(build, out)
+	_check("import with a nested output directory returns", project != null)
+	_check("files outside the nested directory are still copied",
+		FileAccess.file_exists(out.path_join("project.storyflow")))
+	_check("the output directory was not copied into itself",
+		not DirAccess.dir_exists_absolute(out.path_join("out")))
+	_check("the refused copy is counted (got %d)" % importer.get_error_count(),
+		importer.get_error_count() == 1)
+
+
+# =============================================================================
 # Helpers
 # =============================================================================
 
@@ -268,6 +375,32 @@ func _read_text(path: String) -> String:
 	var text := file.get_as_text()
 	file.close()
 	return text
+
+
+## Unix timestamp of a file, or 0 when it does not exist.
+static func _modified_time(path: String) -> int:
+	if not FileAccess.file_exists(path):
+		return 0
+	return FileAccess.get_modified_time(path)
+
+
+## Number of files named [param file_name] anywhere below [param dir_path].
+static func _count_files(dir_path: String, file_name: String) -> int:
+	var count := 0
+	var dir := DirAccess.open(dir_path)
+	if dir == null:
+		return 0
+	dir.list_dir_begin()
+	var name := dir.get_next()
+	while name != "":
+		if dir.current_is_dir():
+			if name != "." and name != "..":
+				count += _count_files(dir_path.path_join(name), file_name)
+		elif name == file_name:
+			count += 1
+		name = dir.get_next()
+	dir.list_dir_end()
+	return count
 
 
 ## Sorted names of the plain files directly inside [param dir].
