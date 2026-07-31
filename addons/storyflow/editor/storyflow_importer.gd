@@ -1042,6 +1042,13 @@ func _import_media_assets(
 		# delete this one when both land on the same path.
 		_copied_media_sources[source_path.simplify_path()] = true
 		_published_media_targets[target_path.simplify_path()] = true
+		# Case-folded spelling as well: on a case-insensitive filesystem the
+		# blanket copy reaches this same file under a differently cased path
+		# (a build directory named Images/ against the images/ published here).
+		# The extra key only ever declines a deletion, so on a case-sensitive
+		# filesystem, where such a path really is a different file, the worst it
+		# can cause is a second copy — the safe direction.
+		_published_media_targets[target_path.simplify_path().to_lower()] = true
 
 		# Load resources directly from file buffers, bypassing Godot's import
 		# pipeline entirely. This avoids stale .import cache issues on
@@ -1279,7 +1286,10 @@ func _remove_redundant_copy(path: String) -> void:
 	# Never delete what this import just published. An asset stored under a
 	# build-relative images/, audio/ or media/ directory lands on exactly the
 	# path the asset import wrote, and deleting it would lose the media entirely.
-	if _published_media_targets.has(path.simplify_path()):
+	# The case-folded spelling counts as the same file, because that is how a
+	# case-insensitive filesystem resolves it.
+	var simplified := path.simplify_path()
+	if _published_media_targets.has(simplified) or _published_media_targets.has(simplified.to_lower()):
 		return
 
 	if not FileAccess.file_exists(path):

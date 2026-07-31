@@ -42,6 +42,7 @@ func _initialize() -> void:
 	_test_unchanged_files_are_not_rewritten()
 	_test_media_is_written_once_per_sync()
 	_test_media_whose_build_path_matches_the_asset_directory()
+	_test_media_whose_build_path_differs_only_in_case()
 	# Runaway-recursion guard last: without it this scenario never returns.
 	_test_nested_output_is_refused()
 
@@ -325,6 +326,39 @@ func _test_media_whose_build_path_matches_the_asset_directory() -> void:
 	_check("reloading after an images/ layout sync succeeds", reloaded != null)
 	var script = reloaded.scripts.get("Main") if reloaded else null
 	_check("the images/ layout asset still resolves after the reload",
+		script != null and script.resolved_assets.get("pic") is Resource)
+
+
+## Same collision as above, but the build-relative directory differs from the
+## asset directory only in case. On a case-insensitive filesystem the blanket
+## destination is still the published file, reached under a different spelling.
+func _test_media_whose_build_path_differs_only_in_case() -> void:
+	var build := _temp("media_mixed_case/build")
+	var out := _temp("media_mixed_case/out")
+	_write_build(build, "Images/pic.png")
+
+	var importer := ImporterScript.new()
+	var project := importer.import_project(build, out)
+	_check("import of media under Images/ succeeds", project != null)
+	_check("import of media under Images/ reports no errors (got %d)" % importer.get_error_count(),
+		importer.get_error_count() == 0)
+	_check("the published media file survives a case-differing build path",
+		FileAccess.file_exists(out.path_join("images/pic.png")))
+
+	# Where case does not distinguish paths, the duplicate never existed and the
+	# published file is the only copy. Where it does, the blanket copy legitimately
+	# wrote a second, distinct file: declining to delete it is the safe direction.
+	var case_insensitive := FileAccess.file_exists(out.path_join("IMAGES/pic.png"))
+	var copies := _count_files(out, "pic.png")
+	if case_insensitive:
+		_check("media is written exactly once on this filesystem (got %d)" % copies, copies == 1)
+	else:
+		_check("the distinct-by-case copy is kept rather than deleted (got %d)" % copies, copies == 2)
+
+	var reloaded := ImporterScript.new().load_project_local(out)
+	_check("reloading after a case-differing sync succeeds", reloaded != null)
+	var script = reloaded.scripts.get("Main") if reloaded else null
+	_check("the case-differing layout asset still resolves after the reload",
 		script != null and script.resolved_assets.get("pic") is Resource)
 
 
