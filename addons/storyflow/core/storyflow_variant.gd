@@ -1,6 +1,10 @@
 class_name StoryFlowVariant
 extends RefCounted
 
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
+
 var type: StoryFlowTypes.VariableType = StoryFlowTypes.VariableType.NONE
 var _bool_value: bool = false
 var _int_value: int = 0
@@ -128,7 +132,7 @@ func to_display_string() -> String:
 
 
 func duplicate_variant() -> StoryFlowVariant:
-	var v := StoryFlowVariant.new()
+	var v := new()
 	v.type = type
 	v._bool_value = _bool_value
 	v._int_value = _int_value
@@ -161,43 +165,43 @@ func reset() -> void:
 # =============================================================================
 
 static func from_bool(value: bool) -> StoryFlowVariant:
-	var v := StoryFlowVariant.new()
+	var v := new()
 	v.set_bool(value)
 	return v
 
 
 static func from_int(value: int) -> StoryFlowVariant:
-	var v := StoryFlowVariant.new()
+	var v := new()
 	v.set_int(value)
 	return v
 
 
 static func from_float(value: float) -> StoryFlowVariant:
-	var v := StoryFlowVariant.new()
+	var v := new()
 	v.set_float(value)
 	return v
 
 
 static func from_string(value: String) -> StoryFlowVariant:
-	var v := StoryFlowVariant.new()
+	var v := new()
 	v.set_string(value)
 	return v
 
 
 static func from_enum(value: String) -> StoryFlowVariant:
-	var v := StoryFlowVariant.new()
+	var v := new()
 	v.set_enum(value)
 	return v
 
 
 static func from_array(value: Array) -> StoryFlowVariant:
-	var v := StoryFlowVariant.new()
+	var v := new()
 	v.set_array(value)
 	return v
 
 
 static func from_map(value: Dictionary) -> StoryFlowVariant:
-	var v := StoryFlowVariant.new()
+	var v := new()
 	v.set_map(value)
 	return v
 

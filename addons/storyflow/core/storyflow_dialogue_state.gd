@@ -1,6 +1,12 @@
 class_name StoryFlowDialogueState
 extends RefCounted
 
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowCharacterData = preload("res://addons/storyflow/core/storyflow_character_data.gd")
+const StoryFlowDialogueOption = preload("res://addons/storyflow/core/storyflow_dialogue_option.gd")
+const StoryFlowTextBlock = preload("res://addons/storyflow/core/storyflow_text_block.gd")
+
 ## Whether this state represents a valid dialogue node.
 var is_valid: bool = false
 
@@ -33,6 +39,10 @@ var options: Array[StoryFlowDialogueOption] = []
 
 ## Non-interactive text blocks.
 var text_blocks: Array[StoryFlowTextBlock] = []
+
+## Presentation tags authored on this dialogue node, in authored order.
+## Empty when the node has no tags.
+var tags: Array[String] = []
 
 ## Whether the dialogue can be advanced without selecting an option.
 var can_advance: bool = false

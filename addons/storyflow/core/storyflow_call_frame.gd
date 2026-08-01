@@ -1,6 +1,10 @@
 class_name StoryFlowCallFrame
 extends RefCounted
 
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
+
 ## Path of the calling script.
 var script_path: String = ""
 

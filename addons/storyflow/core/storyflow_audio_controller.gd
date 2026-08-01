@@ -1,6 +1,11 @@
 class_name StoryFlowAudioController
 extends RefCounted
 
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
+const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
+
 ## Manages dialogue audio playback (play, stop, loop).
 
 signal playback_finished()

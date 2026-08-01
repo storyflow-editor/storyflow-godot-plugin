@@ -1,6 +1,27 @@
 class_name StoryFlowComponent
 extends Node
 
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowAudioController = preload("res://addons/storyflow/core/storyflow_audio_controller.gd")
+const StoryFlowCallFrame = preload("res://addons/storyflow/core/storyflow_call_frame.gd")
+const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
+const StoryFlowCharacterData = preload("res://addons/storyflow/core/storyflow_character_data.gd")
+const StoryFlowDialogueOption = preload("res://addons/storyflow/core/storyflow_dialogue_option.gd")
+const StoryFlowDialogueState = preload("res://addons/storyflow/core/storyflow_dialogue_state.gd")
+const StoryFlowEvaluator = preload("res://addons/storyflow/core/storyflow_evaluator.gd")
+const StoryFlowExecutionContext = preload("res://addons/storyflow/core/storyflow_execution_context.gd")
+const StoryFlowHandles = preload("res://addons/storyflow/core/storyflow_handles.gd")
+const StoryFlowLoopFrame = preload("res://addons/storyflow/core/storyflow_loop_frame.gd")
+const StoryFlowNodeRuntimeState = preload("res://addons/storyflow/core/storyflow_node_runtime_state.gd")
+const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
+const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
+const StoryFlowTextBlock = preload("res://addons/storyflow/core/storyflow_text_block.gd")
+const StoryFlowTextInterpolator = preload("res://addons/storyflow/core/storyflow_text_interpolator.gd")
+const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
+const StoryFlowVariableChangeInfo = preload("res://addons/storyflow/core/storyflow_variable_change_info.gd")
+const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.gd")
+
 ## Main runtime component for executing StoryFlow dialogues.
 ##
 ## Add this node to any scene that should run StoryFlow scripts. Configure
@@ -50,6 +71,7 @@ extends Node
 signal dialogue_started()
 signal dialogue_updated(state: StoryFlowDialogueState)
 signal dialogue_ended()
+signal dialogue_tag_reached(tag: String)
 signal variable_changed(info: StoryFlowVariableChangeInfo)
 signal character_variable_changed(character_path: String, variable_name: String, value: StoryFlowVariant)
 signal script_started(script_path_name: String)
@@ -1471,8 +1493,27 @@ func _handle_dialogue(node: Dictionary) -> void:
 			_waiting_for_audio_advance = false
 			_audio_advance_allow_skip = false
 
+	# Snapshot the tags BEFORE any event fires — a handler bound to dialogue_updated
+	# (not just the tag event) may synchronously stop_dialogue(), nulling
+	# current_dialogue_state under us.
+	var tags_snapshot: Array = _context.current_dialogue_state.tags.duplicate() if is_fresh_entry else []
+
 	# Broadcast update
 	dialogue_updated.emit(_context.current_dialogue_state)
+
+	# Fire dialogue tags — presentation cues emitted once per tag, in authored
+	# order, but ONLY on a fresh entry into this node. Returning here to re-render
+	# (e.g. after a Set* node) is not a fresh entry, so tags do not re-fire.
+	#
+	# Re-entrancy contract: a handler may synchronously advance/select/stop/restart
+	# the dialogue. The entered node's tag list is snapshot BEFORE any event fires,
+	# and the whole snapshot fires even if a handler transitions mid-loop (this may
+	# interleave with the next node's events, which is accepted). dialogue_updated
+	# is emitted FIRST above so the current node's update is never lost or emitted
+	# from a swapped context.
+	for tag in tags_snapshot:
+		_sf_trace('TAG "%s"' % tag)
+		dialogue_tag_reached.emit(tag)
 
 # =============================================================================
 # Node Handlers - Script / Flow
@@ -2913,6 +2954,14 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 		tb.id = block.get("id", "")
 		tb.text = _text.interpolate(_text.get_string(block_text, language_code))
 		state.text_blocks.append(tb)
+
+	# Dialogue tags (already coerced to strings by the importer; authored order).
+	# Optional: absent means none. Guard against a malformed non-array value so
+	# the typed local can't fail to assign.
+	var tags_data: Variant = data.get("tags", [])
+	if tags_data is Array:
+		for tag in tags_data:
+			state.tags.append(tag)
 
 	# Build visible options (filtered by once-only and visibility)
 	var node_options: Array = data.get("options", [])

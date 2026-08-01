@@ -1,6 +1,10 @@
 class_name StoryFlowHandles
 extends RefCounted
 
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
+
 # =============================================================================
 # Handle Builders
 # =============================================================================

@@ -1,6 +1,13 @@
 class_name StoryFlowDialogueUIPortrait
 extends Control
 
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowComponent = preload("res://addons/storyflow/core/storyflow_component.gd")
+const StoryFlowDialogueOption = preload("res://addons/storyflow/core/storyflow_dialogue_option.gd")
+const StoryFlowDialogueState = preload("res://addons/storyflow/core/storyflow_dialogue_state.gd")
+const StoryFlowTextBlock = preload("res://addons/storyflow/core/storyflow_text_block.gd")
+
 # =============================================================================
 # Node References
 # =============================================================================

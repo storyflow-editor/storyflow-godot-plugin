@@ -1,6 +1,14 @@
 class_name StoryFlowEvaluator
 extends RefCounted
 
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
+const StoryFlowExecutionContext = preload("res://addons/storyflow/core/storyflow_execution_context.gd")
+const StoryFlowHandles = preload("res://addons/storyflow/core/storyflow_handles.gd")
+const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
+const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.gd")
+
 ## Evaluator for StoryFlow node graph expressions.
 ##
 ## Evaluators retrieve data from nodes WITHOUT executing them.

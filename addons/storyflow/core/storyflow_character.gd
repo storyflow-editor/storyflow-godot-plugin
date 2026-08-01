@@ -1,6 +1,10 @@
 class_name StoryFlowCharacter
 extends RefCounted
 
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.gd")
+
 ## String table key for display name
 var character_name: String = ""
 
@@ -23,7 +27,7 @@ static func normalize_path(path: String) -> String:
 
 
 func duplicate_character() -> StoryFlowCharacter:
-	var c := StoryFlowCharacter.new()
+	var c := new()
 	c.character_name = character_name
 	c.image_key = image_key
 	c.character_path = character_path

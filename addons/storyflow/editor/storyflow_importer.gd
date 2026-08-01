@@ -1,13 +1,55 @@
 class_name StoryFlowImporter
 extends RefCounted
+
+# Preloaded by path so parsing never depends on the global class name cache,
+# which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
+const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
+const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
+const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
+const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.gd")
 ## JSON importer for StoryFlow project and script files exported by the
 ## StoryFlow Editor.  Reads the build directory structure, creates
 ## StoryFlowProject / StoryFlowScript / StoryFlowCharacter resources and
 ## optionally copies media assets into the Godot project.
 
+## Metadata file the manager reads to auto-discover a previously imported project.
+const IMPORT_META_FILENAME := "storyflow_import_meta.json"
+
+## Suffix of the staging file used to publish the metadata atomically.
+const IMPORT_META_TEMP_SUFFIX := ".tmp"
+
+## Non-fatal write failures recorded during the current import: media copies,
+## build-directory copies, directory creation and the metadata write. The editor
+## dock reports the total so a partially failed sync is not shown as a success.
+var _error_count: int = 0
+
+## Source paths (simplified) already published under output_dir by this import —
+## media handled by [method _import_media_assets] and the project file handled by
+## [method _publish_project_file] — used as a set. The blanket copy of the build
+## directory skips them so each file is written once per import, at the path the
+## runtime actually reads.
+var _copied_sources: Dictionary = {}
+
+## Paths (simplified) this import published under output_dir, used as a set. The
+## blanket copy must never mistake one of them for a redundant duplicate: when an
+## asset's build-relative directory is itself named images/, audio/ or media/,
+## the blanket destination IS the file the asset import just wrote — and the
+## published project.json must never be deleted in favor of a stale build-side
+## copy of the same name.
+var _published_targets: Dictionary = {}
+
+## Destination root of the current import, never removed by the duplicate cleanup.
+var _output_root: String = ""
+
 # =============================================================================
 # Public API
 # =============================================================================
+
+## Number of non-fatal write failures recorded during the last [method import_project].
+## Each one was also pushed as an error, so the Output log holds the details.
+func get_error_count() -> int:
+	return _error_count
 
 ## Import a full StoryFlow project from an exported build directory.
 ##
@@ -15,10 +57,17 @@ extends RefCounted
 ## [param output_dir] Godot res:// path where imported resources will be saved.
 ## Returns the imported [StoryFlowProject], or [code]null[/code] on failure.
 func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
+	_error_count = 0
+	_copied_sources.clear()
+	_published_targets.clear()
+	_output_root = output_dir
+
 	# Read project.storyflow (or project.json for backwards compat)
-	var project_json: Dictionary = _load_json_file(build_dir.path_join("project.storyflow"))
+	var project_file := build_dir.path_join("project.storyflow")
+	var project_json: Dictionary = _load_json_file(project_file)
 	if project_json.is_empty():
-		project_json = _load_json_file(build_dir.path_join("project.json"))
+		project_file = build_dir.path_join("project.json")
+		project_json = _load_json_file(project_file)
 	if project_json.is_empty():
 		push_error("StoryFlow: Failed to load project file from %s" % build_dir)
 		return null
@@ -54,6 +103,13 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 			var extra_strings := _flatten_strings(global_vars_json["strings"])
 			for key in extra_strings:
 				project.global_strings[key] = extra_strings[key]
+		# Global image/audio variable assets live in this file's own "assets" section
+		# (json-export-strategy addAsset). Import them into the project pool — the shared
+		# final fallback for both image and audio resolution — so a global Image/Audio
+		# variable's asset key resolves at runtime instead of showing the default.
+		if global_vars_json.has("assets"):
+			var global_assets := _parse_assets_dict(global_vars_json["assets"])
+			_import_media_assets(build_dir, output_dir, global_assets, project.resolved_assets)
 
 	# ------------------------------------------------------------------
 	# Global strings  (inline)
@@ -76,10 +132,17 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 					push_warning("StoryFlow: Character string key '%s' overwrites existing global string" % key)
 				project.global_strings[key] = char_strings[key]
 
-		# Parse character asset metadata for later media import
+		# Parse character asset metadata for media import
 		var character_media_assets: Dictionary = {}
 		if characters_json.has("assets"):
 			character_media_assets = _parse_assets_dict(characters_json["assets"])
+
+		# Import ALL character-scoped media into the project pool. This "assets" dict holds
+		# the portraits AND the custom image/audio-typed character-variable and character-map
+		# values. project.resolved_assets is the shared final fallback for both image
+		# (component) and audio (audio controller) resolution — and audio has no
+		# character-level pool, so those assets MUST land here to resolve at all.
+		_import_media_assets(build_dir, output_dir, character_media_assets, project.resolved_assets)
 
 		# Create per-character resources
 		if characters_json.has("characters"):
@@ -98,10 +161,11 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 				if char_data.has("variables"):
 					character.variables = _parse_character_variables(char_data["variables"])
 
-				# Import character media (portrait image)
-				if character.image_key != "" and character_media_assets.has(character.image_key):
-					var single_asset: Dictionary = { character.image_key: character_media_assets[character.image_key] }
-					_import_media_assets(build_dir, output_dir, single_asset, character.resolved_assets)
+				# The portrait is checked in the character pool first at runtime. Reuse the
+				# resource already imported into the project pool above instead of copying
+				# and decoding the same file a second time.
+				if character.image_key != "" and project.resolved_assets.has(character.image_key):
+					character.resolved_assets[character.image_key] = project.resolved_assets[character.image_key]
 
 				project.characters[normalized_path] = character
 				print("StoryFlow: Imported character '%s'" % char_path)
@@ -130,7 +194,7 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 	for script_file in script_files:
 		var filename := script_file.get_file()
 		# Skip non-script files
-		if filename in ["project.json", "project.storyflow", "global-variables.json", "characters.json"]:
+		if filename in ["project.json", "project.storyflow", "global-variables.json", "characters.json", IMPORT_META_FILENAME]:
 			continue
 
 		var relative := _make_relative(script_file, build_dir)
@@ -155,25 +219,52 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 	# ------------------------------------------------------------------
 	var norm_build := build_dir.replace("\\", "/").rstrip("/")
 	var norm_output := output_dir.replace("\\", "/").rstrip("/")
+	_publish_project_file(project_file, build_dir, output_dir)
 	if norm_build != norm_output:
 		_copy_directory_recursive(build_dir, output_dir)
 
 	# Save metadata so the manager can reload from the local copy
 	if norm_build != norm_output:
-		var meta_path := output_dir.path_join("storyflow_import_meta.json")
 		var meta := {
 			"output_dir": output_dir,
 			"imported_at": Time.get_datetime_string_from_system(),
 			"script_paths": Array(project.get_all_script_paths()),
 		}
-		var meta_file := FileAccess.open(meta_path, FileAccess.WRITE)
-		if meta_file:
-			meta_file.store_string(JSON.stringify(meta, "\t"))
-			meta_file.close()
-			print("StoryFlow: Saved import metadata to %s" % meta_path)
+		if write_import_meta(output_dir, meta) != OK:
+			_error_count += 1
 
 	print("StoryFlow: Successfully imported project with %d scripts" % project.scripts.size())
 	return project
+
+
+## Publish the project file this import parsed into the output directory under
+## the project.json name.
+##
+## Exported games pack .json files as raw bytes, but a .storyflow file is
+## unreadable at runtime either way: unimported it is not packed at all, and
+## imported it is replaced by StoryFlowImportPlugin's marker resource (which
+## carries no project data). Publishing the data as project.json is what lets
+## [code]StoryFlowManager._auto_load_project[/code] find it in an exported game.
+##
+## Both candidate source names are marked as copied so the blanket copy neither
+## writes a raw project.storyflow into the output directory nor overwrites the
+## published file with a stale build-side project.json, and so it removes the
+## project.storyflow an older plugin version copied there. On a failed copy
+## nothing is marked, leaving the blanket verbatim copy as the fallback; the
+## failure is already counted by [method _copy_file].
+##
+## Also runs when build_dir == output_dir (a build dropped straight into the
+## output directory, and every load_project_local call): there the copy is
+## content-skipped when project.json is already current, which keeps it a no-op
+## on the read-only res:// of an exported game.
+func _publish_project_file(project_file: String, build_dir: String, output_dir: String) -> void:
+	var target := output_dir.path_join("project.json")
+	if _copy_file(project_file, target, "project.json") != OK:
+		return
+	_copied_sources[build_dir.path_join("project.storyflow").simplify_path()] = true
+	_copied_sources[build_dir.path_join("project.json").simplify_path()] = true
+	_published_targets[target.simplify_path()] = true
+	_published_targets[target.simplify_path().to_lower()] = true
 
 
 ## Load a project from a local directory inside the Godot project (e.g. res://storyflow/).
@@ -341,6 +432,55 @@ func import_script(json_data: Dictionary) -> StoryFlowScript:
 	return script
 
 
+## Publish [param meta] as storyflow_import_meta.json inside [param output_dir].
+##
+## The JSON is staged in a sibling temp file and only then renamed over the
+## target, so an interrupted or failing write cannot leave a truncated metadata
+## file behind — a truncated one breaks project auto-discovery on the next
+## launch ([code]StoryFlowManager._auto_load_project[/code]). Every failure is
+## pushed as an error and leaves the previously published file untouched.
+##
+## Shared by the importer and the editor dock; the caller owns the payload.
+## Returns [code]OK[/code] only when the target was replaced.
+static func write_import_meta(output_dir: String, meta: Dictionary) -> Error:
+	var meta_path := output_dir.path_join(IMPORT_META_FILENAME)
+	var temp_path := meta_path + IMPORT_META_TEMP_SUFFIX
+
+	var dir_err := DirAccess.make_dir_recursive_absolute(output_dir)
+	if dir_err != OK:
+		push_error("StoryFlow: Cannot create output directory %s: %s (error %d)" % [
+			output_dir, error_string(dir_err), dir_err])
+		return dir_err
+
+	var file := FileAccess.open(temp_path, FileAccess.WRITE)
+	if file == null:
+		var open_err := FileAccess.get_open_error()
+		if open_err == OK:
+			open_err = FAILED
+		push_error("StoryFlow: Cannot stage import metadata %s: %s (error %d)" % [
+			temp_path, error_string(open_err), open_err])
+		return open_err
+
+	file.store_string(JSON.stringify(meta, "\t"))
+	var store_err := file.get_error()
+	file.close()
+	if store_err != OK:
+		push_error("StoryFlow: Failed to write import metadata %s: %s (error %d)" % [
+			temp_path, error_string(store_err), store_err])
+		DirAccess.remove_absolute(temp_path)
+		return store_err
+
+	var rename_err := DirAccess.rename_absolute(temp_path, meta_path)
+	if rename_err != OK:
+		push_error("StoryFlow: Failed to publish import metadata %s: %s (error %d)" % [
+			meta_path, error_string(rename_err), rename_err])
+		DirAccess.remove_absolute(temp_path)
+		return rename_err
+
+	print("StoryFlow: Saved import metadata to %s" % meta_path)
+	return OK
+
+
 # =============================================================================
 # Node Data Parsing
 # =============================================================================
@@ -390,6 +530,16 @@ func _parse_node_data(type_string: String, node_obj: Dictionary) -> Dictionary:
 		data["audioAllowSkip"] = data_src["audioAllowSkip"]
 	if data_src.has("character"):
 		data["character"] = data_src["character"]
+
+	# Dialogue tags (presentation cues fired when the node is entered).
+	# Optional and additive: older files lack the key entirely. Guard that the
+	# value is an array (a non-array 'tags' would otherwise iterate garbage — an
+	# int iterates as a range), then coerce each entry to a string defensively.
+	if data_src.has("tags") and data_src["tags"] is Array:
+		var tags: Array = []
+		for tag in data_src["tags"]:
+			tags.append(str(tag))
+		data["tags"] = tags
 
 	# Text blocks
 	if data_src.has("textBlocks"):
@@ -885,7 +1035,6 @@ func _import_media_assets(
 				type_dir = "media"
 
 		var target_dir := output_dir.path_join(type_dir)
-		DirAccess.make_dir_recursive_absolute(target_dir)
 
 		# Build a safe file name (keep extension)
 		var filename := source_path.get_file()
@@ -908,16 +1057,35 @@ func _import_media_assets(
 				else:
 					out_resolved[asset_id] = target_path
 				continue
+			# Exported games pack only Godot's imported versions of media (no raw
+			# bytes for FileAccess); those are reachable solely through the
+			# resource remap via ResourceLoader.
+			var imported := _load_imported_resource(source_path, target_path)
+			if imported:
+				out_resolved[asset_id] = imported
+				continue
 			push_warning("StoryFlow: Source media file not found: %s" % source_path)
 			continue
 
-		# Copy file (overwrite if already present), but skip when source == target
-		# (happens during load_project_local where build_dir == output_dir)
+		# Copy file (only when the destination differs in content), but skip when
+		# source == target (happens during load_project_local where build_dir ==
+		# output_dir, and res:// is read-only in exported games anyway)
 		if source_path != target_path:
-			var err := DirAccess.copy_absolute(source_path, target_path)
-			if err != OK:
-				push_error("StoryFlow: Failed to copy %s -> %s (error %d)" % [source_path, target_path, err])
+			if _copy_file(source_path, target_path) != OK:
 				continue
+
+		# This media file is now published under output_dir; the blanket copy of
+		# the build directory must not write a second copy of it, and must not
+		# delete this one when both land on the same path.
+		_copied_sources[source_path.simplify_path()] = true
+		_published_targets[target_path.simplify_path()] = true
+		# Case-folded spelling as well: on a case-insensitive filesystem the
+		# blanket copy reaches this same file under a differently cased path
+		# (a build directory named Images/ against the images/ published here).
+		# The extra key only ever declines a deletion, so on a case-sensitive
+		# filesystem, where such a path really is a different file, the worst it
+		# can cause is a second copy — the safe direction.
+		_published_targets[target_path.simplify_path().to_lower()] = true
 
 		# Load resources directly from file buffers, bypassing Godot's import
 		# pipeline entirely. This avoids stale .import cache issues on
@@ -937,6 +1105,18 @@ func _import_media_assets(
 			push_warning("StoryFlow: Could not load resource %s" % target_path)
 
 		print("StoryFlow: Imported media %s -> %s" % [asset_path, target_path])
+
+
+## Load a media file through Godot's import remap. In exported games the raw
+## file bytes are not packed; only the imported resource (CompressedTexture2D,
+## AudioStreamWAV, AudioStreamMP3, ...) is, and only ResourceLoader reaches it.
+func _load_imported_resource(source_path: String, target_path: String) -> Resource:
+	for path in [target_path, source_path]:
+		if ResourceLoader.exists(path):
+			var res := ResourceLoader.load(path)
+			if res:
+				return res
+	return null
 
 
 ## Load an image directly from file buffer, detecting the actual format from
@@ -1079,13 +1259,159 @@ func _normalize_script_path(path: String) -> String:
 	return result
 
 
+## Copy a single file, skipping the write when the destination already holds the
+## same content. Rewriting unchanged files churns the disk and makes Godot
+## re-import every copied file (a full project.storyflow parse) on every sync.
+## Failures are pushed as errors and counted; [param log_label] is printed only
+## when bytes were really written.
+func _copy_file(src_path: String, dst_path: String, log_label: String = "") -> Error:
+	if _is_up_to_date(src_path, dst_path):
+		return OK
+
+	var dst_dir := dst_path.get_base_dir()
+	var dir_err := DirAccess.make_dir_recursive_absolute(dst_dir)
+	if dir_err != OK:
+		push_error("StoryFlow: Failed to create directory %s: %s (error %d)" % [
+			dst_dir, error_string(dir_err), dir_err])
+		_error_count += 1
+		return dir_err
+
+	var err := DirAccess.copy_absolute(src_path, dst_path)
+	if err != OK:
+		push_error("StoryFlow: Failed to copy %s -> %s: %s (error %d)" % [
+			src_path, dst_path, error_string(err), err])
+		_error_count += 1
+		return err
+
+	if not log_label.is_empty():
+		print("StoryFlow: Copied %s" % log_label)
+	return OK
+
+
+## True when [param dst_path] already holds exactly the bytes of
+## [param src_path]. Sizes are compared first because they rule out most
+## changes cheaply, then MD5 so a same-length edit is still detected. Anything
+## unreadable or missing answers false, so the caller copies when in doubt.
+static func _is_up_to_date(src_path: String, dst_path: String) -> bool:
+	if not FileAccess.file_exists(dst_path):
+		return false
+
+	var src_size := _file_size(src_path)
+	if src_size < 0 or src_size != _file_size(dst_path):
+		return false
+
+	var src_md5 := FileAccess.get_md5(src_path)
+	if src_md5.is_empty():
+		return false
+	return src_md5 == FileAccess.get_md5(dst_path)
+
+
+## Size of a file in bytes, or -1 when it cannot be opened.
+static func _file_size(path: String) -> int:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return -1
+	var size := file.get_length()
+	file.close()
+	return size
+
+
+## Delete a stale copy an older import left in the output directory — a media
+## duplicate at its build-relative path, or a verbatim project.storyflow.
+## Missing is the normal case and not an error; a failed removal is, because the
+## leftover shadows the copy the runtime should be resolving.
+func _remove_redundant_copy(path: String) -> void:
+	# Never delete what this import just published. An asset stored under a
+	# build-relative images/, audio/ or media/ directory lands on exactly the
+	# path the asset import wrote, and deleting it would lose the media entirely.
+	# The case-folded spelling counts as the same file, because that is how a
+	# case-insensitive filesystem resolves it.
+	var simplified := path.simplify_path()
+	if _published_targets.has(simplified) or _published_targets.has(simplified.to_lower()):
+		return
+
+	if not FileAccess.file_exists(path):
+		return
+
+	var err := DirAccess.remove_absolute(path)
+	if err != OK:
+		push_error("StoryFlow: Failed to remove stale copy %s: %s (error %d)" % [
+			path, error_string(err), err])
+		_error_count += 1
+		return
+
+	print("StoryFlow: Removed stale copy %s" % path)
+
+	# Tidy up what the removed file leaves behind. Both steps are best effort:
+	# under res:// Godot keeps an .import sidecar next to every media file, and
+	# the directory that held the duplicate is usually empty afterwards. Failing
+	# to clean either one does not affect the imported project, so it is not
+	# reported as an import failure.
+	var sidecar := path + ".import"
+	if FileAccess.file_exists(sidecar):
+		DirAccess.remove_absolute(sidecar)
+	_remove_dir_if_empty(path.get_base_dir())
+
+
+## Remove a directory the duplicate cleanup just emptied. The destination root
+## of the import is never removed, and a directory that still holds anything is
+## left alone.
+func _remove_dir_if_empty(dir_path: String) -> void:
+	if _as_dir_prefix(dir_path) == _as_dir_prefix(_output_root):
+		return
+
+	var dir := DirAccess.open(dir_path)
+	if dir == null:
+		return
+
+	var is_empty := true
+	dir.list_dir_begin()
+	var name := dir.get_next()
+	while name != "":
+		if name != "." and name != "..":
+			is_empty = false
+			break
+		name = dir.get_next()
+	dir.list_dir_end()
+
+	if is_empty:
+		DirAccess.remove_absolute(dir_path)
+
+
+## True when one of the directories contains the other, or they are the same.
+## Copying between overlapping directories descends into its own output and
+## never terminates, so such a step must be refused.
+static func _dirs_overlap(dir_a: String, dir_b: String) -> bool:
+	var a := _as_dir_prefix(dir_a)
+	var b := _as_dir_prefix(dir_b)
+	return a.begins_with(b) or b.begins_with(a)
+
+
+## Normalize a directory path for prefix comparison: forward slashes, resolved
+## "." and ".." segments, and a trailing slash so "foo/bar2" is not mistaken for
+## something living inside "foo/bar".
+static func _as_dir_prefix(path: String) -> String:
+	var normalized := path.replace("\\", "/").simplify_path()
+	if not normalized.ends_with("/"):
+		normalized += "/"
+	return normalized
+
+
 ## Recursively copy all files from source directory to destination directory.
 func _copy_directory_recursive(src_dir: String, dst_dir: String) -> void:
-	DirAccess.make_dir_recursive_absolute(dst_dir)
+	var dir_err := DirAccess.make_dir_recursive_absolute(dst_dir)
+	if dir_err != OK:
+		push_error("StoryFlow: Failed to create directory %s: %s (error %d)" % [
+			dst_dir, error_string(dir_err), dir_err])
+		_error_count += 1
+		return
 
 	var dir := DirAccess.open(src_dir)
 	if dir == null:
-		push_error("StoryFlow: Cannot open source directory %s" % src_dir)
+		var open_err := DirAccess.get_open_error()
+		push_error("StoryFlow: Cannot open source directory %s: %s (error %d)" % [
+			src_dir, error_string(open_err), open_err])
+		_error_count += 1
 		return
 
 	dir.list_dir_begin()
@@ -1095,23 +1421,21 @@ func _copy_directory_recursive(src_dir: String, dst_dir: String) -> void:
 		var dst_path := dst_dir.path_join(name)
 		if dir.current_is_dir():
 			if name != "." and name != "..":
-				_copy_directory_recursive(src_path, dst_path)
+				if _dirs_overlap(src_path, dst_path):
+					push_error("StoryFlow: Refusing to copy %s -> %s: the directories are nested, which would recurse without end" % [
+						src_path, dst_path])
+					_error_count += 1
+				else:
+					_copy_directory_recursive(src_path, dst_path)
+		elif _copied_sources.has(src_path.simplify_path()):
+			# A file this import already published under output_dir (media into
+			# its asset directory, the project file as project.json): it is
+			# resolved from that copy at runtime, so a second copy at the
+			# build-relative path is pure duplication. A duplicate written by an
+			# older version is removed, because the runtime reloads the output
+			# directory in place and would copy that stale file over the fresh one.
+			_remove_redundant_copy(dst_path)
 		else:
-			var err := DirAccess.copy_absolute(src_path, dst_path)
-			if err != OK:
-				push_error("StoryFlow: Failed to copy %s -> %s" % [src_path, dst_path])
-			else:
-				print("StoryFlow: Copied %s" % name)
+			_copy_file(src_path, dst_path, name)
 		name = dir.get_next()
 	dir.list_dir_end()
-
-
-## Create a .gdignore file in a directory so Godot ignores its contents.
-## This prevents "Files have been modified on disk" dialogs during sync.
-func _ensure_gdignore(dir_path: String) -> void:
-	var gdignore_path := dir_path.path_join(".gdignore")
-	if not FileAccess.file_exists(gdignore_path):
-		var f := FileAccess.open(gdignore_path, FileAccess.WRITE)
-		if f:
-			f.store_string("")
-			f.close()
