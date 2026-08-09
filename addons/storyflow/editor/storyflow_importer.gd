@@ -185,6 +185,7 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 			if script:
 				script.script_path = script_path
 				_import_media_assets(build_dir, output_dir, script.assets, script.resolved_assets)
+				_pool_script_assets(project, script)
 				project.scripts[script_path] = script
 
 	# ------------------------------------------------------------------
@@ -212,6 +213,7 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 		if script:
 			script.script_path = script_path
 			_import_media_assets(build_dir, output_dir, script.assets, script.resolved_assets)
+			_pool_script_assets(project, script)
 			project.scripts[script_path] = script
 
 	# ------------------------------------------------------------------
@@ -998,6 +1000,17 @@ func _parse_assets_dict(dict: Dictionary) -> Dictionary:
 # =============================================================================
 # Media Asset Import
 # =============================================================================
+
+## Mirror a script's resolved assets into the project-wide pool. Asset IDs are
+## globally unique across the export, and values can cross script boundaries at
+## runtime (a character's Image set from one script's local image variable is
+## displayed while ANOTHER script runs) - the component's asset resolution
+## falls back to the project pool, so the pool must know every script's assets.
+func _pool_script_assets(project: StoryFlowProject, script: StoryFlowScript) -> void:
+	for asset_id in script.resolved_assets:
+		if not project.resolved_assets.has(asset_id):
+			project.resolved_assets[asset_id] = script.resolved_assets[asset_id]
+
 
 ## Import media assets from the build directory into the Godot project.
 ##
