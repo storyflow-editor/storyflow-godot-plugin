@@ -19,6 +19,7 @@ var _sync_status_label: Label
 var _file_dialog: FileDialog
 var _ws_sync: StoryFlowWebSocketSync = null
 var _poll_timer: Timer = null
+var _header_icon: TextureRect = null
 
 
 func _ready() -> void:
@@ -30,6 +31,21 @@ func _exit_tree() -> void:
 	_save_settings()
 
 
+func refresh_logo() -> void:
+	# Called from _build_ui and again by the plugin after the editor's first import scan:
+	# on a fresh project's first open the dock is built before the logo's imported texture
+	# exists, so the initial load comes back empty (see storyflow_plugin.gd).
+	if _header_icon == null or _header_icon.texture != null:
+		return
+	if not ResourceLoader.exists("res://addons/storyflow/icons/storyflow_logo.svg", "Texture2D"):
+		return
+	var logo_tex: Texture2D = load("res://addons/storyflow/icons/storyflow_logo.svg") as Texture2D
+	if logo_tex:
+		var img: Image = logo_tex.get_image()
+		img.resize(24, 24, Image.INTERPOLATE_LANCZOS)
+		_header_icon.texture = ImageTexture.create_from_image(img)
+
+
 func _build_ui() -> void:
 	var root := VBoxContainer.new()
 	root.set_anchors_preset(PRESET_FULL_RECT)
@@ -39,17 +55,12 @@ func _build_ui() -> void:
 	# === Header ===
 	var header_row := HBoxContainer.new()
 	header_row.add_theme_constant_override("separation", 6)
-	var header_icon := TextureRect.new()
-	header_icon.custom_minimum_size = Vector2(24, 24)
-	header_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	header_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	if FileAccess.file_exists("res://addons/storyflow/icons/storyflow_logo.svg"):
-		var logo_tex: Texture2D = load("res://addons/storyflow/icons/storyflow_logo.svg") as Texture2D
-		if logo_tex:
-			var img: Image = logo_tex.get_image()
-			img.resize(24, 24, Image.INTERPOLATE_LANCZOS)
-			header_icon.texture = ImageTexture.create_from_image(img)
-	header_row.add_child(header_icon)
+	_header_icon = TextureRect.new()
+	_header_icon.custom_minimum_size = Vector2(24, 24)
+	_header_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_header_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	refresh_logo()
+	header_row.add_child(_header_icon)
 	var header := Label.new()
 	header.text = "StoryFlow"
 	header.add_theme_font_size_override("font_size", 18)
