@@ -13,11 +13,18 @@ const MANAGER_SCRIPT_PATH := "res://addons/storyflow/core/storyflow_manager.gd"
 
 
 func _enter_tree() -> void:
+	# The component icon must be load(), not preload(): preload resolves at parse time, and on
+	# the very first open of a fresh project the SVG's imported texture does not exist yet, so
+	# the parse error took the whole plugin down before any code ran. Worst case the icon is
+	# null for that one session and the custom type shows the default node icon.
+	var component_icon: Texture2D = null
+	if ResourceLoader.exists("res://addons/storyflow/icons/storyflow_icon.svg", "Texture2D"):
+		component_icon = load("res://addons/storyflow/icons/storyflow_icon.svg") as Texture2D
 	add_custom_type(
 		"StoryFlowComponent",
 		"Node",
 		preload("core/storyflow_component.gd"),
-		preload("icons/storyflow_icon.svg") if FileAccess.file_exists("res://addons/storyflow/icons/storyflow_icon.svg") else null
+		component_icon
 	)
 
 	# Load icon
