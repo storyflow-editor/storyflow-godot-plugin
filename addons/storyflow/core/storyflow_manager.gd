@@ -102,7 +102,16 @@ func get_global_variable(var_id: String) -> Dictionary:
 
 func reset_global_variables() -> void:
 	if _project:
-		_global_variables = StoryFlowVariant.deep_copy_variables(_project.global_variables)
+		# Mutate IN PLACE - never rebind. A running dialogue's evaluator holds
+		# a reference to this dictionary (handed out by get_global_variables at
+		# dialogue start); rebinding would strand it on the pre-reset object,
+		# splitting reads and writes into two divergent variable stores for the
+		# rest of the session. Triggered in practice by a "Reset Game" fired
+		# from a dialogue tag mid-session (the example's main menu does this).
+		var fresh: Dictionary = StoryFlowVariant.deep_copy_variables(_project.global_variables)
+		_global_variables.clear()
+		for var_id in fresh:
+			_global_variables[var_id] = fresh[var_id]
 
 
 # =============================================================================
