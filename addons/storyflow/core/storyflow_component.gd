@@ -192,6 +192,20 @@ func start_dialogue_with_script(path: String) -> void:
 		_report_error("Script not found: %s" % path)
 		return
 
+	# RESTART WITHOUT A STOP is a supported call: nothing above requires the caller to have
+	# stopped first, and a host chaining one script into another does exactly this. Give the
+	# previous run's registration back BEFORE taking a new one, or the count climbs by one per
+	# restart and never comes down - _end_dialogue_registration is idempotent by design, so the
+	# single release on the eventual stop cannot pay off two acquisitions. That leaves the
+	# manager reporting a dialogue active forever, which disables every save load: the exact
+	# failure the witness exists to prevent, reached through the other door.
+	#
+	# It nulls _evaluator on the way, which is harmless here - the new evaluator below replaces
+	# it a few lines later, so the "a count reaching zero means no live evaluator" invariant
+	# survives the restart rather than being suspended across it.
+	if _counted_dialogue_start:
+		_end_dialogue_registration()
+
 	# Initialize execution context
 	_context.reset()
 	_context.current_script = script_asset
@@ -2494,6 +2508,7 @@ func _update_connected_array_variable(node: Dictionary, array_handle_suffix: Str
 		# the overlay, and an op that emptied the array would hand out an untagged one — the
 		# exact hole the write's own stamp two lines up exists to close.
 		_evaluator.clear_cache()
+		_context.restore_live_loop_outputs()
 		var restamp := StoryFlowVariant.new()
 		restamp.set_array(da_elements)
 		restamp.type = StoryFlowDataAssetStore.storage_type(da_declared)
@@ -3247,7 +3262,13 @@ func _handle_set_data_asset_var(node: Dictionary) -> void:
 	# andBool/orBool/equalBool's inputs WITHOUT recomputing the node itself, so the following
 	# evaluate_boolean_from_node answers from that node's stale cache: an option gated through
 	# andBool(accessor, true) stayed VISIBLE across a write to false until this line existed.
+	#
+	# ... and the clear is INDISCRIMINATE, which costs one thing worth paying back: an array
+	# forEach publishes its current element through cached_output, so a write from inside a loop
+	# body would blank the loop-element pin for the rest of that iteration. Restoring the live
+	# frames is the same clear-then-restore shape the forEach iteration itself already uses.
 	_evaluator.clear_cache()
+	_context.restore_live_loop_outputs()
 
 	_handle_set_node_end(node, flow_handle)
 
@@ -3287,7 +3308,17 @@ func _read_data_asset_set_input(node: Dictionary, data: Dictionary) -> StoryFlow
 			# Snapshot into fresh storage — never alias the source (the setCharacterVar map
 			# precedent). try_set duplicates again on the way in; this one keeps the value the
 			# trace prints and the value stored identical even if the source mutates between.
-			snapshot = _snapshot_map_entries(source_map)
+			#
+			# Entry VALUES are re-minted against the declared valueType, exactly as the array
+			# branch below re-mints elements, and for the same reason: the wired pin's K/V tokens
+			# match the declaration (the ladder's decl_matches sees to that) but the variants
+			# INSIDE the source map carry whatever tag their producer gave them. An enum-valued
+			# map fed plain strings would otherwise sit STRING-tagged in the overlay and come
+			# back ENUM-tagged after a save round trip, since the load types from the declaration
+			# — a tag flip visible through get_data_asset_variant and in nothing else.
+			var declared_value_type := StoryFlowTypes.parse_variable_type(value_type)
+			for key in source_map:
+				snapshot[key] = _type_data_asset_element(declared_value_type, source_map[key])
 		return StoryFlowVariant.from_map(snapshot)
 
 	if bool(data.get("isArray", false)):

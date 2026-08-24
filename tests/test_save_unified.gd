@@ -65,6 +65,7 @@ func _initialize() -> void:
 	_test_in_place_pins()
 	_test_character_name_and_image()
 	await _test_dialogue_registration_balance()
+	_test_set_project_mid_dialogue()
 	_test_enum_array_element_tags()
 
 	if _failures == 0:
@@ -491,6 +492,64 @@ func _test_dialogue_registration_balance() -> void:
 	await process_frame
 	_check("and a queue_free'd component releases its registration too",
 		_manager.load_from_slot("unified_shape"))
+
+	# RESTART WITHOUT A STOP: nothing requires a host to stop before starting the next script,
+	# and a component that took a second registration while still holding the first can never
+	# give both back - _end_dialogue_registration is idempotent, so the single release on the
+	# eventual stop pays off one acquisition and the count sticks at 1 forever. That disables
+	# every later load, which is the witness fix's own failure mode reached through the other
+	# door, so the start path releases before it reacquires.
+	var d := _start_component(script.script_path)
+	d.start_dialogue_with_script(script.script_path)
+	_check("a restarted dialogue still refuses a load", not _manager.load_from_slot("unified_shape"))
+	d.stop_dialogue()
+	_check("ONE stop after a restart clears the count", not _manager.is_dialogue_active())
+	_check("and a load succeeds again", _manager.load_from_slot("unified_shape"))
+	root.remove_child(d)
+	d.queue_free()
+
+
+## SET_PROJECT IS REACHABLE MID-DIALOGUE - a host swapping projects, and the editor's WebSocket
+## sync doing it on every re-import - so _initialize_from_project has to hold the same two
+## invariants everything else on this page does.
+##
+## The globals half is the v1.2.3 stranding bug surviving on the one path nobody walked: that
+## line rebound the dictionary a running evaluator was holding by reference, while the .sfd seed
+## and overlay beside it were already in-place. Half the session's state stayed whole and half
+## of it split in two.
+##
+## The count half is the other direction: zeroing _active_dialogue_count behind a component that
+## is still running would let a load land while a live evaluator holds memoized reads, which is
+## exactly the invariant load_from_slot's no-cache-clear reasoning rests on.
+func _test_set_project_mid_dialogue() -> void:
+	print("-- set_project mid-dialogue --")
+	_manager.reset_all_state()
+	var script := Graph.build("scripts/Swap.sfe", {
+		"0": Graph.start(),
+		"D": Graph.dialogue("D"),
+	}, [Graph.exec("0", "D")])
+	_manager.get_project().scripts[script.script_path] = script
+
+	var component := _start_component(script.script_path)
+	# The reference a running evaluator is holding, taken the way it takes it.
+	var globals_ref: Dictionary = _manager.get_global_variables()
+	var overlay_ref: Dictionary = _manager.get_data_asset_overlay()
+	_check("the dialogue is registered before the swap", _manager.is_dialogue_active())
+
+	_manager.set_project(_manager.get_project())
+
+	_check("set_project keeps the globals dictionary IDENTITY", _manager.get_global_variables() == globals_ref)
+	_check("and the pre-swap reference still sees the re-initialized values",
+		globals_ref.has("v1") and globals_ref["v1"]["value"].get_int() == 0)
+	_check("the .sfd overlay keeps its identity too", _manager.get_data_asset_overlay() == overlay_ref)
+	# The registration belongs to the component, not to the project.
+	_check("the running component's registration SURVIVES the swap", _manager.is_dialogue_active())
+	_check("so a load is still refused", not _manager.load_from_slot("unified_shape"))
+
+	component.stop_dialogue()
+	_check("and an ordinary stop still releases it", not _manager.is_dialogue_active())
+	root.remove_child(component)
+	component.queue_free()
 
 
 func _start_component(script_path: String) -> Node:

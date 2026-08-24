@@ -1,7 +1,7 @@
 extends SceneTree
 ## CHARACTERIZATION of the PRE-v1 ("legacy") save shape — the document StoryFlowSaveData wrote
-## from the plugin's first release through v1.2.4, and the only shape a player's existing save
-## file can be in.
+## from the plugin's first release through v1.2.3, the last release before the unification, and
+## the only shape a player's existing save file can be in.
 ##
 ## It was written BEFORE the unified-v1 writer landed and run green against the writer that
 ## produced this shape, then its output was frozen as tests/fixtures/legacy-save-v1.json. That

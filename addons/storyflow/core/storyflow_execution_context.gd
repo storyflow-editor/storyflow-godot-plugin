@@ -168,6 +168,26 @@ func clear_cached_outputs() -> void:
 		state.cached_output = null
 
 
+## Re-stamp the current element of every ACTIVE array forEach onto its node's cached_output.
+##
+## Call this after any clear_cached_outputs that happens INSIDE a loop body. An array forEach
+## publishes its current element through cached_output, which clear_cached_outputs nulls along
+## with everything else, so a mid-body clear leaves the loop-element pin reading nothing for the
+## rest of the iteration. MAP loops are immune because loop_key/loop_value are dedicated fields
+## for precisely this reason; array loops never got the same treatment, and this is the cheaper
+## half of that fix.
+##
+## The frames on loop_stack are exactly the live iterations, innermost last, and the current
+## frame is already pushed while its body runs - so this restores the innermost element too, not
+## only the enclosing ones. Map frames carry an empty loop_array and are skipped by the bounds
+## check, which is why one guard covers both loop kinds.
+func restore_live_loop_outputs() -> void:
+	for frame in loop_stack:
+		var state: StoryFlowNodeRuntimeState = get_node_state(frame.node_id)
+		if state.loop_initialized and state.loop_index < state.loop_array.size():
+			state.cached_output = state.loop_array[state.loop_index]
+
+
 func build_variable_name_index(variables: Dictionary, is_global: bool) -> void:
 	var index: Dictionary = {}
 	for var_id in variables:

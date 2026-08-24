@@ -73,6 +73,7 @@ func _initialize() -> void:
 	_test_option_gating_and_cache()
 	_test_string_literal_exemption()
 	_test_array_ops()
+	_test_write_inside_a_loop_body()
 
 	if _failures == 0:
 		print("ALL %d CHECKS PASSED" % _checks)
@@ -170,7 +171,10 @@ func _test_writes() -> void:
 		"v_rank": Graph.scalar_var("v_rank", "r", Types.VariableType.ENUM, VariantScript.from_enum("Boss")),
 		"v_tags": Graph.array_var("v_tags", "t", Types.VariableType.STRING, ["a", "b"]),
 		"v_empty": Graph.array_var("v_empty", "e", Types.VariableType.STRING, []),
-		"v_loot": Graph.map_var("v_loot", "l", {"sword": VariantScript.from_int(7)}),
+		# STRING-tagged on purpose, under an integer-valued declaration: the map pin's K/V
+		# tokens satisfy decl_matches, but the variants INSIDE a source map carry whatever tag
+		# their producer gave them, so this is the shape the entry re-mint exists to correct.
+		"v_loot": Graph.map_var("v_loot", "l", {"sword": VariantScript.from_string("7")}),
 	})
 
 	_manager.reset_data_assets()
@@ -205,6 +209,14 @@ func _test_writes() -> void:
 	_check("a map write stores a map", loot != null and loot.is_map())
 	_check("replacing the whole value with the wired entries",
 		loot != null and loot.get_map().size() == 1 and loot.get_map().has("sword"))
+	# ENTRY VALUES ARE RE-MINTED against the declared valueType, symmetric with the array
+	# branch's element stamp two blocks up. Without it the source's STRING tag would sit in the
+	# overlay and a save round trip would hand back an INTEGER-tagged one, because the load types
+	# from the declaration - a tag flip visible through get_data_asset_variant and nowhere else.
+	# The VALUE becoming the declared default is the same wrong-type rule the array elements
+	# follow, not a separate decision.
+	_check("a map entry value is re-minted against the declared valueType",
+		loot != null and loot.get_map()["sword"].type == Types.VariableType.INTEGER)
 
 	# The refusal: nothing written, and the declared default still resolves.
 	_check("an unwired value pin writes NOTHING", _overlay_value(overlay, CHILD, V_TITLE) == null)
@@ -425,6 +437,63 @@ func _test_array_ops() -> void:
 	_check("and carries the same element type the overlay got, not an untagged array",
 		clear_output != null and clear_output.type == Types.VariableType.STRING)
 	_teardown(clear_component)
+
+
+# =============================================================================
+# 6. A write from inside a forEach body
+# =============================================================================
+
+## THE .sfd WRITE'S CACHE CLEAR MUST NOT COST THE LOOP ITS ELEMENT.
+##
+## An array forEach publishes the current element through the node's cached_output, and
+## clear_cached_outputs nulls every cached_output there is - so a setDataAssetVariable in a loop
+## body used to blank the loop-element pin for the rest of that iteration, and every read of it
+## after the write answered "". Map loops never had the problem: loop_key/loop_value are
+## dedicated fields precisely so the per-iteration clear cannot reach them. Array loops got the
+## other half of that fix, a restore immediately after the clear.
+##
+## TWO ELEMENTS, and the assertion is on the SECOND: with one element the write lands before the
+## only read and a stale-but-present stamp would still pass. The local variable ends holding
+## whatever the last iteration read, so "beta" means the pin survived the write and "" means it
+## did not.
+func _test_write_inside_a_loop_body() -> void:
+	print("-- a .sfd write inside a forEach body --")
+	_manager.reset_data_assets()
+	var script := Graph.build("scripts/LoopWrite.sfe", {
+		"0": Graph.start(),
+		"GA": Graph.node("GA", Types.NodeType.GET_STRING_ARRAY, "getStringArray", {"variable": "v_items", "isGlobal": false}),
+		"FE": Graph.node("FE", Types.NodeType.FOR_EACH_STRING_LOOP, "forEachStringLoop", {}),
+		"PB": Graph.pill("PB", BASE),
+		"GS": Graph.node("GS", Types.NodeType.GET_STRING, "getString", {"variable": "v_new", "isGlobal": false}),
+		"W": Graph.setter("W", {"variableId": V_SECRET, "variable": "secret", "variableType": "string"}),
+		"OUT": Graph.node("OUT", Types.NodeType.SET_STRING, "setString", {"variable": "seen", "isGlobal": false}),
+		"D": Graph.dialogue("D"),
+	}, [
+		Graph.exec("0", "FE"),
+		Graph.data_wire("GA", "string-array", "FE", Handles.IN_STRING_ARRAY),
+		# Into the body, then back out of it: OUT has no outgoing edge, which is what tells
+		# _handle_set_node_end to advance the loop.
+		Graph.edge("FE", Handles.source("FE", Handles.OUT_LOOP_BODY), "W", Handles.target("W")),
+		Graph.pill_wire("PB", "W"),
+		Graph.data_wire("GS", "string", "W", Handles.in_data_asset_value("string")),
+		Graph.exec_flow("W", "OUT"),
+		# The pin under test: the loop ELEMENT, read after the write in the same iteration.
+		Graph.data_wire("FE", "string", "OUT", Handles.IN_STRING),
+		Graph.edge("FE", Handles.source("FE", Handles.OUT_LOOP_COMPLETED), "D", Handles.target("D")),
+	], {
+		"v_items": Graph.array_var("v_items", "Items", Types.VariableType.STRING, ["alpha", "beta"]),
+		"v_new": Graph.scalar_var("v_new", "NewSecret", Types.VariableType.STRING, VariantScript.from_string("written")),
+		"seen": Graph.scalar_var("seen", "Seen", Types.VariableType.STRING, VariantScript.from_string("")),
+	})
+
+	var component := _run(script)
+	_check("the loop element pin survives a .sfd write in the same iteration (got %s)" % _stored_string(component, "seen"),
+		_stored_string(component, "seen") == "beta")
+	# The write itself still has to have happened - a restore that quietly skipped the clear
+	# would pass the check above and break option gating instead.
+	var written = _overlay_value(_manager.get_data_asset_overlay(), BASE, V_SECRET)
+	_check("and the write still landed in the overlay", written != null and written.get_string() == "written")
+	_teardown(component)
 
 
 # =============================================================================

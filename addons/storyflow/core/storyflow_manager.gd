@@ -146,6 +146,11 @@ func get_data_asset_overlay() -> Dictionary:
 
 ## Rebuild the seed from the project and drop every session write (contract 3 reset).
 ## Both dictionaries are mutated in place - see their declarations.
+##
+## Safe mid-dialogue for the same reason reset_all_state is, and by the same mechanism: a running
+## execution context holds these two objects by reference, so it observes the rebuild instead of
+## being stranded on a pre-reset copy. Accessors bound to the rebuilt seed simply read authored
+## values again on their next pull.
 func reset_data_assets() -> void:
 	if _project:
 		StoryFlowDataAssetStore.build_seed(_project, _data_asset_seed)
@@ -241,12 +246,19 @@ func load_from_slot(slot_name: String) -> bool:
 	# applied afterwards.
 	#
 	# NO EVALUATOR CACHE IS CLEARED after this load, and that is a determination rather than an
-	# omission: the guard below refuses a load while ANY dialogue is registered as active, and
-	# BOTH paths that give a registration back - StoryFlowComponent.stop_dialogue and its
-	# _exit_tree - go through that component's _end_dialogue_registration, which nulls its
-	# evaluator before it decrements. A count that reaches zero therefore cannot leave a live
-	# evaluator holding a memoized read, so there is nothing here to invalidate. Host WRITES are
-	# a different story and do clear - see the data-asset setters on StoryFlowComponent.
+	# omission. It rests on ONE invariant: a count of zero means no component is holding a live
+	# evaluator. That holds because every path that changes the count goes through
+	# StoryFlowComponent, and each one keeps the two in step:
+	#
+	#   start_dialogue_with_script  releases any registration it already holds BEFORE taking a
+	#                               new one, then builds the evaluator it will be counted with
+	#   stop_dialogue               _end_dialogue_registration: nulls the evaluator, decrements
+	#   _exit_tree                  the same _end_dialogue_registration, same order
+	#
+	# and because NOTHING ELSE writes the count - _initialize_from_project deliberately does not
+	# zero it, which would otherwise let a load land behind a component that is still running.
+	# Host WRITES are a different story and do clear - see the data-asset setters on
+	# StoryFlowComponent.
 	if is_dialogue_active():
 		push_warning("[StoryFlow] Cannot load while dialogue is active")
 		return false
@@ -311,6 +323,20 @@ func list_save_slots() -> PackedStringArray:
 # Reset
 # =============================================================================
 
+## Restore every store to the project's authored state (a new game).
+##
+## MID-DIALOGUE IS SUPPORTED, deliberately, and this is the one place where reset and LOAD part
+## company. load_from_slot refuses while a dialogue is active because it replaces state wholesale
+## from a file and cannot reason about what a running graph has already read. A reset has no such
+## problem: it restores the values the running script was authored against, in place, so a live
+## evaluator observes the reset rather than being stranded beside it. That is not a tolerated
+## edge case but the shipped one - the example project's main menu fires a Reset Game tag from
+## inside a dialogue node, which is what v1.2.3 fixed and what tests/test_reset_in_place.gd pins.
+##
+## Adding an is_dialogue_active guard here would therefore break the example project, not protect
+## it. What a host DOES need to know: a reset does not stop the running dialogue. Call
+## StoryFlowComponent.stop_dialogue first if the intent is to end the story too, not only to
+## rewind its state.
 func reset_all_state() -> void:
 	reset_global_variables()
 	reset_runtime_characters()
@@ -322,8 +348,19 @@ func reset_all_state() -> void:
 # Internal
 # =============================================================================
 
+## Install a project's authored state as the session's starting state.
+##
+## Every store here is mutated IN PLACE for the same reason reset_global_variables is: set_project
+## is reachable mid-dialogue (a host swapping projects, and the editor's WebSocket sync does it on
+## every re-import), and a running dialogue's evaluator holds these dictionaries by reference from
+## dialogue start. The globals line used to rebind, which is the v1.2.3 stranding bug surviving on
+## the one path nobody had walked - the .sfd seed and overlay beside it were already in-place, so
+## a project swap left globals split in two while data assets stayed whole.
 func _initialize_from_project() -> void:
-	_global_variables = StoryFlowVariant.deep_copy_variables(_project.global_variables)
+	var fresh: Dictionary = StoryFlowVariant.deep_copy_variables(_project.global_variables)
+	_global_variables.clear()
+	for var_id in fresh:
+		_global_variables[var_id] = fresh[var_id]
 
 	_runtime_characters.clear()
 	for path in _project.characters:
@@ -333,5 +370,11 @@ func _initialize_from_project() -> void:
 	reset_data_assets()
 
 	_used_once_only_options.clear()
-	_active_dialogue_count = 0
+	# _active_dialogue_count is deliberately NOT zeroed here. A registration belongs to the
+	# COMPONENT that took it, not to the project: zeroing it behind a component that is still
+	# running would leave that component's eventual stop decrementing a count it no longer owns,
+	# and - worse - would let a save load land while a live evaluator is holding memoized reads,
+	# falsifying the one invariant load_from_slot's no-cache-clear reasoning rests on. Component
+	# lifecycles balance the count on their own now (StoryFlowComponent._counted_dialogue_start),
+	# so there is no stale count left for this line to clean up.
 
