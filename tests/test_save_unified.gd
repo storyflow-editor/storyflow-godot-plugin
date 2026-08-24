@@ -374,6 +374,11 @@ func _test_load_rules() -> void:
 ## The v1.2.3 lesson, pinned on the load path for BOTH dialects: a running session holds these
 ## dictionaries BY REFERENCE (the execution context takes them at dialogue start), so a load that
 ## rebinds one strands every live reference on the pre-load object.
+##
+## IDENTITY IS ASSERTED WITH is_same, NEVER ==. Godot's == on a Dictionary is a deep VALUE
+## comparison, so a rebind that happened to reuse the same record objects would compare equal and
+## the pin would pass while the bug it exists to catch was live. On an empty dictionary it is
+## worse than useless: {} == {} is true no matter which two objects they are.
 func _test_in_place_pins() -> void:
 	print("-- in-place mutation pins --")
 	_manager.reset_all_state()
@@ -388,7 +393,7 @@ func _test_in_place_pins() -> void:
 	_manager.load_from_slot("pins_unified")
 	_check("UNIFIED: the pre-load globals reference sees the loaded value",
 		globals_ref["v1"]["value"].get_int() == 42)
-	_check("UNIFIED: the globals dictionary is the SAME object", _manager.get_global_variables() == globals_ref)
+	_check("UNIFIED: the globals dictionary is the SAME object", is_same(_manager.get_global_variables(), globals_ref))
 	_check("UNIFIED: the pre-load characters reference sees the loaded character",
 		characters_ref[HERO_PATH].variables["affection"]["value"].get_int() == 7)
 	_check("UNIFIED: the pre-load once-only reference sees the loaded keys", once_only_ref.has("scriptA:node4:opt1"))
@@ -403,7 +408,7 @@ func _test_in_place_pins() -> void:
 	_manager.load_from_slot("pins_legacy")
 	_check("LEGACY: the pre-load globals reference sees the loaded value",
 		globals_ref["g_int"]["value"].get_int() == 42)
-	_check("LEGACY: the globals dictionary is STILL the same object", _manager.get_global_variables() == globals_ref)
+	_check("LEGACY: the globals dictionary is STILL the same object", is_same(_manager.get_global_variables(), globals_ref))
 	_check("LEGACY: the pre-load characters reference sees the loaded character",
 		characters_ref[HERO_PATH].variables["affection"]["value"].get_int() == 7)
 	_check("LEGACY: the pre-load once-only reference sees the loaded keys", once_only_ref.has("D1-o1"))
@@ -538,10 +543,10 @@ func _test_set_project_mid_dialogue() -> void:
 
 	_manager.set_project(_manager.get_project())
 
-	_check("set_project keeps the globals dictionary IDENTITY", _manager.get_global_variables() == globals_ref)
+	_check("set_project keeps the globals dictionary IDENTITY", is_same(_manager.get_global_variables(), globals_ref))
 	_check("and the pre-swap reference still sees the re-initialized values",
 		globals_ref.has("v1") and globals_ref["v1"]["value"].get_int() == 0)
-	_check("the .sfd overlay keeps its identity too", _manager.get_data_asset_overlay() == overlay_ref)
+	_check("the .sfd overlay keeps its identity too", is_same(_manager.get_data_asset_overlay(), overlay_ref))
 	# The registration belongs to the component, not to the project.
 	_check("the running component's registration SURVIVES the swap", _manager.is_dialogue_active())
 	_check("so a load is still refused", not _manager.load_from_slot("unified_shape"))

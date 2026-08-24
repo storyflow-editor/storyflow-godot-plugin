@@ -487,13 +487,59 @@ func _test_write_inside_a_loop_body() -> void:
 	})
 
 	var component := _run(script)
-	_check("the loop element pin survives a .sfd write in the same iteration (got %s)" % _stored_string(component, "seen"),
+	_check("the loop element pin survives a Set node write in the same iteration (got %s)" % _stored_string(component, "seen"),
 		_stored_string(component, "seen") == "beta")
 	# The write itself still has to have happened - a restore that quietly skipped the clear
 	# would pass the check above and break option gating instead.
 	var written = _overlay_value(_manager.get_data_asset_overlay(), BASE, V_SECRET)
 	_check("and the write still landed in the overlay", written != null and written.get_string() == "written")
 	_teardown(component)
+
+	# THE ARRAY-OP ROUTE IS A SECOND WRITE SITE with its own clear, and its own restore. It needs
+	# its own case: deleting the restore from one site leaves the other site's test green, and
+	# this is arguably the likelier authoring shape of the two - appending the loop element to a
+	# .sfd array is what a forEach over a .sfd array is usually FOR.
+	#
+	# The element is wired into BOTH pins here: as the value the op appends (read before the
+	# write, which no clear can affect) and as the value the following node stores (read AFTER
+	# it, which is the pin under test). Only the second one can fail.
+	_manager.reset_data_assets()
+	var op_script := Graph.build("scripts/LoopArrayOp.sfe", {
+		"0": Graph.start(),
+		"GA": Graph.node("GA", Types.NodeType.GET_STRING_ARRAY, "getStringArray", {"variable": "v_items", "isGlobal": false}),
+		"FE": Graph.node("FE", Types.NodeType.FOR_EACH_STRING_LOOP, "forEachStringLoop", {}),
+		"PC": Graph.pill("PC", CHILD),
+		"GT": Graph.accessor("GT", {"variableId": V_TAGS, "variable": "tags", "variableType": "string", "isArray": true}),
+		"ADD": Graph.node("ADD", Types.NodeType.ADD_TO_STRING_ARRAY, "addToStringArray", {}),
+		"OUT": Graph.node("OUT", Types.NodeType.SET_STRING, "setString", {"variable": "seen", "isGlobal": false}),
+		"D": Graph.dialogue("D"),
+	}, [
+		Graph.exec("0", "FE"),
+		Graph.data_wire("GA", "string-array", "FE", Handles.IN_STRING_ARRAY),
+		Graph.edge("FE", Handles.source("FE", Handles.OUT_LOOP_BODY), "ADD", Handles.target("ADD")),
+		Graph.pill_wire("PC", "GT"),
+		Graph.data_wire("GT", "string-array", "ADD", Handles.IN_STRING_ARRAY),
+		Graph.data_wire("FE", "string", "ADD", Handles.IN_STRING),
+		Graph.exec_flow("ADD", "OUT"),
+		Graph.data_wire("FE", "string", "OUT", Handles.IN_STRING),
+		Graph.edge("FE", Handles.source("FE", Handles.OUT_LOOP_COMPLETED), "D", Handles.target("D")),
+	], {
+		"v_items": Graph.array_var("v_items", "Items", Types.VariableType.STRING, ["alpha", "beta"]),
+		"seen": Graph.scalar_var("seen", "Seen", Types.VariableType.STRING, VariantScript.from_string("")),
+	})
+
+	var op_component := _run(op_script)
+	_check("the loop element pin survives an ARRAY OP write in the same iteration (got %s)" % _stored_string(op_component, "seen"),
+		_stored_string(op_component, "seen") == "beta")
+	# Both iterations appended, onto the child's own two-element override, and the accessor
+	# re-resolved between them rather than replaying its first read.
+	var appended = _overlay_value(_manager.get_data_asset_overlay(), CHILD, V_TAGS)
+	_check("and both iterations appended to the overlay array",
+		appended != null and appended.get_array().size() == 4)
+	_check("in loop order, which is what proves each iteration re-resolved the accessor",
+		appended != null and appended.get_array()[2].get_string() == "alpha"
+		and appended.get_array()[3].get_string() == "beta")
+	_teardown(op_component)
 
 
 # =============================================================================

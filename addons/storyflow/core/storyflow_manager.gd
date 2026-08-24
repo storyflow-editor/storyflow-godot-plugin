@@ -149,8 +149,14 @@ func get_data_asset_overlay() -> Dictionary:
 ##
 ## Safe mid-dialogue for the same reason reset_all_state is, and by the same mechanism: a running
 ## execution context holds these two objects by reference, so it observes the rebuild instead of
-## being stranded on a pre-reset copy. Accessors bound to the rebuilt seed simply read authored
-## values again on their next pull.
+## being stranded on a pre-reset copy.
+##
+## WITH ONE BOUND, and it is the same one _handle_set_data_asset_var clears the evaluator cache
+## for: an accessor re-reads the rebuilt seed on its next pull, but a memoized boolean PARENT
+## above it does not recompute on its own. A reset that lands while a dialogue is parked on a
+## rendered node therefore leaves the options currently on screen showing pre-reset visibility
+## until the next advance or option selection, both of which clear the cache on their way through.
+## Nothing reads a stale value after that point.
 func reset_data_assets() -> void:
 	if _project:
 		StoryFlowDataAssetStore.build_seed(_project, _data_asset_seed)
