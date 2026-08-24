@@ -115,8 +115,41 @@ var input_option_values: Dictionary = {}
 var warned_unknown_nodes: Dictionary = {}
 
 # =============================================================================
+# Data Asset Warning Latch
+# =============================================================================
+
+## Claimed "node_id|reason" keys for the degraded-accessor ladder (engine contract 6:
+## each condition warns ONCE PER NODE, re-armed on game reset). Keyed by REASON as well
+## as node so an accessor that is first unwired and later dead-referenced still names the
+## second problem once.
+##
+## This dictionary and the counter below are INSPECTABLE ON PURPOSE, and that is the only
+## reason they are two things instead of one: Godot's push_warning cannot be captured from
+## a SceneTree test, so the tests cannot assert on the warning TEXT at all. The latch dict
+## proves which reasons fired, and the counter proves HOW MANY TIMES — which is what
+## separates a working once-per-node latch from one that re-warns on every read (a latch
+## implemented as a plain Add would keep the dict identical and only move the counter).
+var warned_data_asset_nodes: Dictionary = {}
+
+## Total data-asset warnings actually emitted this run. See above.
+var data_asset_warnings_emitted: int = 0
+
+# =============================================================================
 # Methods
 # =============================================================================
+
+## Claim the warn latch for one (node, reason) pair (engine contract 6).
+##
+## Returns true exactly once per pair per run; the CALLER formats the message and calls
+## push_warning INSIDE the if, so the suppressed path — which is the common one, since
+## option conditions re-evaluate on every render — allocates no string at all.
+func should_warn_data_asset(node_id: String, reason: String) -> bool:
+	var key := "%s|%s" % [node_id, reason]
+	if warned_data_asset_nodes.has(key):
+		return false
+	warned_data_asset_nodes[key] = true
+	data_asset_warnings_emitted += 1
+	return true
 
 func get_node_state(node_id: String) -> StoryFlowNodeRuntimeState:
 	if not node_runtime_states.has(node_id):
@@ -182,3 +215,6 @@ func reset() -> void:
 	node_runtime_states.clear()
 	input_option_values.clear()
 	warned_unknown_nodes.clear()
+	# RE-ARM the degraded-accessor warnings for the new run (engine contract 6).
+	warned_data_asset_nodes.clear()
+	data_asset_warnings_emitted = 0

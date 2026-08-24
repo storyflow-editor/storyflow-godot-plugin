@@ -730,6 +730,22 @@ func _parse_node_data(type_string: String, node_obj: Dictionary) -> Dictionary:
 	if data_src.has("isArray"):
 		data["isArray"] = data_src["isArray"]
 
+	# -- Data Assets (.sfd) ------------------------------------------------
+	# Only two fields are new here; the accessor's variableType / isArray /
+	# keyType / valueType snapshot rides the character-variable keys above and
+	# below, which is why json-export-strategy.ts spells them the same way.
+	#
+	# "assetId" belongs to the reference PILL and "variableId" to the two
+	# accessors, which carry no assetId of their own — the wire into their
+	# dataAsset pin is the binding (engine contract 2.2). The accessor's
+	# "variable" (its spawn-time display NAME) lands in data["variable"] via the
+	# common block at the top of this function; nothing reads it at run time,
+	# since the id is the binding, but it is what makes a warning legible.
+	if data_src.has("assetId"):
+		data["assetId"] = data_src["assetId"]
+	if data_src.has("variableId"):
+		data["variableId"] = data_src["variableId"]
+
 	# -- Map fields (per-variable map nodes and catalog op nodes) -----------
 	if data_src.has("keyType"):
 		data["keyType"] = data_src["keyType"]

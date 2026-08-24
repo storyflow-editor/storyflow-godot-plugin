@@ -477,16 +477,57 @@ static func try_resolve(seed: Dictionary, overlay: Dictionary, asset_id: String,
 ## host API and any caller holding an id it trusts have no pins to check, and would have to
 ## invent a snapshot just to be told it matches. Both share the one walk and the one
 ## [method _copy_out], so there is nothing left for them to disagree about.
+## UNKNOWN ASSET ANSWERS MISSING, not a dead reference: a walk that visits no level declares
+## nothing, and this function has no way to tell "asset deleted" from "variable deleted" apart.
+## The DEAD-REFERENCE rung is the caller's, drawn with [method has_asset] BEFORE calling here —
+## and an empty store (a reset execution context hands out `{}`) lands on that same rung, so the
+## ladder's deadref check fires before read_bound is ever reached.
 static func read_bound(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String, wire_type: String, is_array: bool, key_type: String, value_type: String) -> Dictionary:
+	var bound := _bind(seed, overlay, asset_id, variable_id, wire_type, is_array, key_type, value_type)
+	if bound["status"] != Binding.OK:
+		return {"status": bound["status"], "value": null}
+	return {"status": Binding.OK, "value": _copy_out(bound["found"])}
+
+
+## [method read_bound] taking the accessor's four spawn-snapshot pins as ONE Dictionary
+## — `{ "wire_type", "is_array", "key_type", "value_type" }` — instead of four positional
+## arguments in a row, which read as an unlabelled soup at every call site and let a
+## key/value swap through silently. The node arms build the snapshot once per access with
+## [method StoryFlowEvaluator.data_asset_pins] and pass it around.
+static func read_bound_with_pins(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String, pins: Dictionary) -> Dictionary:
+	return read_bound(seed, overlay, asset_id, variable_id, \
+		str(pins.get("wire_type", "")), bool(pins.get("is_array", false)), \
+		str(pins.get("key_type", "")), str(pins.get("value_type", "")))
+
+
+## [method read_bound_with_pins]'s WRITE-side twin: the same one walk and the same rungs in
+## the same order, but no value handed out.
+##
+## A Set node asks "is this binding still live?", never "what does it hold?" — the value it is
+## about to overwrite is of no interest to it, and reading one would deep-copy the current
+## array or map entry list just to drop it. Sharing [method _bind] is what keeps this honest:
+## the MISSING / CHANGED decision is made in exactly one place, so a Set can never accept a
+## binding its Get twin degrades (or the reverse), which is the failure the contract's
+## one-ladder-for-both rule exists to prevent.
+static func check_bound(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String, pins: Dictionary) -> Binding:
+	var bound := _bind(seed, overlay, asset_id, variable_id, \
+		str(pins.get("wire_type", "")), bool(pins.get("is_array", false)), \
+		str(pins.get("key_type", "")), str(pins.get("value_type", "")))
+	return bound["status"]
+
+
+## THE rung decision behind [method read_bound] and [method check_bound]: one chain walk, then
+## the section 6.1 snapshot match. Answers { "status": Binding, "found": the walk accumulator }.
+static func _bind(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String, wire_type: String, is_array: bool, key_type: String, value_type: String) -> Dictionary:
 	var found := _walk_for_value(seed, overlay, asset_id, variable_id)
 	if not found["found"]:
-		return {"status": Binding.MISSING, "value": null}
+		return {"status": Binding.MISSING, "found": found}
 	# Section 6.1: the declaration moved under a live node. Treated as MISSING by every caller,
 	# never coerced — within the string family a value carries no evidence of its declared
 	# type, which is exactly why the check is on the DECLARATION.
 	if not decl_matches(found["declaration"], wire_type, is_array, key_type, value_type):
-		return {"status": Binding.CHANGED, "value": null}
-	return {"status": Binding.OK, "value": _copy_out(found)}
+		return {"status": Binding.CHANGED, "found": found}
+	return {"status": Binding.OK, "found": found}
 
 
 ## The value a completed walk hands OUT: the nearest overlay-or-override hit, else the

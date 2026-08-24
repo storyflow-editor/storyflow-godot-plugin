@@ -4,6 +4,7 @@ extends RefCounted
 # Preloaded by path so parsing never depends on the global class name cache,
 # which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
 const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
+const StoryFlowDataAssetStore = preload("res://addons/storyflow/core/storyflow_data_asset_store.gd")
 const StoryFlowExecutionContext = preload("res://addons/storyflow/core/storyflow_execution_context.gd")
 const StoryFlowHandles = preload("res://addons/storyflow/core/storyflow_handles.gd")
 const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
@@ -95,9 +96,16 @@ func evaluate_boolean_from_node(node_id: String, source_handle: String = "") -> 
 	var is_map_read := node_type == StoryFlowTypes.NodeType.GET_MAP_VALUE \
 		or node_type == StoryFlowTypes.NodeType.HAS_MAP_KEY
 
-	# Check cache first (map reads excluded — see is_map_read above)
+	# .sfd accessor reads are never memoized either, for the same reason as map reads above:
+	# they resolve against LIVE store state (the session overlay a setDataAssetVariable node
+	# writes into), so a value cached before a write must not answer the read after it. Both
+	# accessor types, because a Set's pass-through output answers what its Get twin would.
+	var is_data_asset_read := node_type == StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE \
+		or node_type == StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE
+
+	# Check cache first (map + .sfd reads excluded — see the two flags above)
 	var node_state := _context.get_node_state(node_id)
-	if not is_map_read and node_state.cached_output != null:
+	if not is_map_read and not is_data_asset_read and node_state.cached_output != null:
 		var cached: StoryFlowVariant = node_state.cached_output
 		if cached.type == StoryFlowTypes.VariableType.BOOLEAN:
 			_context.evaluation_depth -= 1
@@ -294,6 +302,16 @@ func evaluate_boolean_from_node(node_id: String, source_handle: String = "") -> 
 			if char_result is StoryFlowVariant:
 				result = char_result.get_bool()
 
+		# The .sfd accessors. THIS ARM IS THE BOOLEAN-PRODUCER REGISTRATION (contract 6.2):
+		# the match's terminal `_:` answers false, so a node type with no case here is
+		# invisible to option conditions — fail-closed, and silently. That is why the arm and
+		# the node types land in the SAME commit.
+		StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, \
+		StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+			var da_result := _evaluate_data_asset_variable(data, node_id)
+			if da_result != null:
+				result = da_result.get_bool()
+
 		StoryFlowTypes.NodeType.FOR_EACH_BOOL_LOOP:
 			var ns := _context.get_node_state(node_id)
 			if ns.cached_output != null:
@@ -302,8 +320,8 @@ func evaluate_boolean_from_node(node_id: String, source_handle: String = "") -> 
 		_:
 			result = false
 
-	# Cache result (map reads excluded — see is_map_read above)
-	if not is_map_read:
+	# Cache result (map + .sfd reads excluded — see the two flags above)
+	if not is_map_read and not is_data_asset_read:
 		node_state.cached_output = StoryFlowVariant.from_bool(result)
 
 	# Trace the wire-name (type_string), not the SCREAMING enum key — the
@@ -570,6 +588,12 @@ func evaluate_integer_from_node(node_id: String, source_handle: String = "") -> 
 			if char_result is StoryFlowVariant:
 				result = char_result.get_int()
 
+		StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, \
+		StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+			var da_result := _evaluate_data_asset_variable(data, node_id)
+			if da_result != null:
+				result = da_result.get_int()
+
 		_:
 			result = 0
 
@@ -721,6 +745,12 @@ func evaluate_float_from_node(node_id: String, source_handle: String = "") -> fl
 			var char_result := _evaluate_character_variable(data, node_id)
 			if char_result is StoryFlowVariant:
 				result = char_result.get_float()
+
+		StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, \
+		StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+			var da_result := _evaluate_data_asset_variable(data, node_id)
+			if da_result != null:
+				result = da_result.get_float()
 
 		_:
 			result = 0.0
@@ -952,6 +982,27 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 			if char_result is StoryFlowVariant:
 				result = char_result.get_string()
 
+		# The .sfd accessors, and the ONE arm in this function that RETURNS EARLY.
+		#
+		# data-assets.json carries NO strings table — the exporter writes .sfd values verbatim
+		# (engine contract 2.1), so a .sfd string is a LITERAL and must never go through the
+		# tail's _resolve_string_key below. Falling through would mean any .sfd string that
+		# happens to equal a live strings-table key reads back as that key's localized TEXT
+		# instead of itself, and the collision is silent: an author writing "hello" into a .sfd
+		# would get whatever the script's "hello" key resolves to. Pinned by the
+		# string-literal-vs-strings-table test in tests/test_data_asset_nodes.gd.
+		#
+		# The whole string FAMILY lands here — enum / image / character / audio scalars all
+		# read through this evaluator (evaluate_enum_input delegates to evaluate_string_input),
+		# so this one early return covers every one of them.
+		StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, \
+		StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+			var da_result := _evaluate_data_asset_variable(data, node_id)
+			var da_literal := da_result.get_string() if da_result != null else ""
+			_sf_trace("EVAL %s %s result=%s" % [node_id, node.get("type_string", ""), da_literal])
+			_context.evaluation_depth -= 1
+			return da_literal
+
 		_:
 			result = ""
 
@@ -1017,6 +1068,16 @@ func evaluate_enum_from_node(node_id: String, source_handle: String = "") -> Str
 			var char_result := _evaluate_character_variable(data, node_id)
 			if char_result is StoryFlowVariant:
 				result = char_result.get_string()
+
+		# The .sfd accessors. No _resolve_string_key tail in THIS evaluator, so no early
+		# return is needed here — but the literal rule is the same one (contract 2.1), and
+		# enum reads that arrive over a wire land in the STRING evaluator anyway, since
+		# evaluate_enum_input delegates to evaluate_string_input.
+		StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, \
+		StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+			var da_result := _evaluate_data_asset_variable(data, node_id)
+			if da_result != null:
+				result = da_result.get_string()
 
 		StoryFlowTypes.NodeType.RUN_SCRIPT:
 			result = _evaluate_run_script_output_string(node_id, source_handle, data)
@@ -1140,6 +1201,19 @@ func _evaluate_array_input_generic(node_id: String, handle_suffix: String, expec
 		var variant := _evaluate_character_variable(source_data, source_id)
 		return variant.get_array()
 
+	# The .sfd accessors bound to an ARRAY variable. Handled BEFORE the
+	# expected_get_array_type gate below, which no accessor type could ever pass.
+	#
+	# NO extra .duplicate() here, unlike the character path: the store already hands out a
+	# DEEP copy (duplicate_variant duplicates the elements too), so this array is detached
+	# from both the seed and the overlay and a consumer mutating it reaches nothing.
+	if source_type == StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE \
+		or source_type == StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+		var da_variant := _evaluate_data_asset_variable(source_data, source_id)
+		if da_variant == null:
+			return []
+		return da_variant.get_array()
+
 	# mapKeys / mapValues: pure ops that project a map into an array. Recomputed
 	# fresh on every pull — maps mutate in place, so a cached output would go
 	# stale (the HTML runtime recomputes these inline too). Keys are raw int/
@@ -1219,6 +1293,9 @@ const MAP_SOURCE_SCRIPT_VAR := "script_variable"
 const MAP_SOURCE_GLOBAL_VAR := "global_variable"
 const MAP_SOURCE_CHARACTER_VAR := "character_variable"
 const MAP_SOURCE_RUN_SCRIPT := "run_script_output"
+## A map read through a .sfd accessor. READ-ONLY like the character-variable and runScript
+## kinds — see the arm in resolve_map_input_by_handle for why it has to be.
+const MAP_SOURCE_DATA_ASSET := "data_asset"
 
 
 ## Resolve the map wired into one of [param node]'s map inputs.
@@ -1372,6 +1449,27 @@ func resolve_map_input_by_handle(node: Dictionary, handle_suffix: String) -> Dic
 			return {
 				"map": char_value.get_map(),
 				"kind": MAP_SOURCE_CHARACTER_VAR,
+				"is_global": false,
+				"variable": {},
+			}
+
+		StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, \
+		StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+			# Map-typed .sfd accessors. The store hands out a DETACHED copy of the entry
+			# list (contract 3, copy-on-read), which is what makes this source READ-ONLY
+			# and why it must be flagged as such: a mutator writing into this Dictionary
+			# would be writing into a temporary nothing else can see, so the map ops skip
+			# it entirely and setMap snapshots it — the character-variable precedent.
+			# The one way to change a .sfd map is setDataAssetVariable, which replaces the
+			# whole value (contract 5) and goes through the write ladder.
+			if str(source_data.get("variableType", "")) != "map":
+				return unresolved
+			var da_variant := _evaluate_data_asset_variable(source_data, source_node.get("id", ""))
+			if da_variant == null or not da_variant.is_map():
+				return unresolved
+			return {
+				"map": da_variant.get_map(),
+				"kind": MAP_SOURCE_DATA_ASSET,
 				"is_global": false,
 				"variable": {},
 			}
@@ -1557,6 +1655,15 @@ func process_boolean_chain(node_id: String) -> void:
 		StoryFlowTypes.NodeType.RUN_SCRIPT:
 			# RunScript output depends on source handle to extract variable ID.
 			# Only clear the cache so the real evaluation (with correct handle) gets a fresh read.
+			node_state.cached_output = null
+
+		StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, \
+		StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+			# .sfd accessor reads are never memoized (they resolve against the live session
+			# overlay — see is_data_asset_read in evaluate_boolean_from_node), so there is
+			# nothing to pre-cache. Falling into the default arm below would run a full
+			# evaluation whose result is then thrown away; clear any stale entry instead and
+			# let the real read evaluate fresh. Same shape as the map-read arm below.
 			node_state.cached_output = null
 
 		StoryFlowTypes.NodeType.GET_MAP_VALUE, \
@@ -1776,6 +1883,131 @@ func _evaluate_character_variable(data: Dictionary, node_id: String = "") -> Sto
 
 	push_warning("StoryFlow: Variable '%s' not found on character '%s'" % [variable_name, character_path])
 	return StoryFlowVariant.new()
+
+
+# =============================================================================
+# Data Asset Accessor Helpers (the degraded ladder, engine contract 6)
+# =============================================================================
+#
+# THE LADDER, five rungs IN THIS ORDER, each warned once per node per reason:
+#   nodata   the accessor carries no variableId at all
+#   unwired  nothing usable on its dataAsset pin (no edge / not a pill / unbound pill)
+#   deadref  the pill names an asset this build's seed does not carry
+#   missing  no level of the asset's chain declares the variable id
+#   changed  it does, but the declaration no longer matches the spawn snapshot (6.1)
+#
+# ONE ladder for the Get and the Set, deliberately: the read path and the write path must
+# degrade on exactly the same rungs, or you get an accessor that reads its declared default
+# while its Set twin writes an overlay entry that SHADOWS that default for the rest of the
+# session (and cascades to every descendant, if it landed on a base).
+#
+# It is SPLIT across two functions only because the two paths want different answers past the
+# last rung — the Get wants the value, the Set wants nothing — and both halves are implemented
+# once: [method _resolve_data_asset_id] owns the three graph-side rungs, the store's shared
+# _bind owns the two chain-side ones.
+
+## The accessor's spawn-time snapshot as ONE Dictionary, pulled off node data in one place so
+## no call site has to remember which of the four wire keys goes where (the store's
+## read_bound_with_pins / check_bound take it verbatim).
+func data_asset_pins(data: Dictionary) -> Dictionary:
+	return {
+		"wire_type": str(data.get("variableType", "")),
+		"is_array": bool(data.get("isArray", false)),
+		"key_type": str(data.get("keyType", "")),
+		"value_type": str(data.get("valueType", "")),
+	}
+
+
+## The full ladder for a WRITE: all five rungs, warned once each, NO value read.
+## Returns the asset id to write through, or "" for every degraded case.
+func resolve_data_asset_write_target(data: Dictionary, node_id: String) -> String:
+	var asset_id := _resolve_data_asset_id(data, node_id)
+	if asset_id.is_empty():
+		return ""
+	var variable_id := str(data.get("variableId", ""))
+	var status := StoryFlowDataAssetStore.check_bound(
+		_context.data_asset_seed, _context.data_asset_overlay,
+		asset_id, variable_id, data_asset_pins(data))
+	if status != StoryFlowDataAssetStore.Binding.OK:
+		_warn_data_asset_status(node_id, asset_id, variable_id, status)
+		return ""
+	return asset_id
+
+
+## The full ladder for a READ, plus the value: the effective value of the .sfd variable this
+## accessor is bound to, or [code]null[/code] for every degraded case.
+##
+## Null rather than a default ON PURPOSE, mirroring how the character arms degrade: each typed
+## evaluator substitutes ITS OWN type default, which is the only way one shared helper can serve
+## bool / int / float / string / enum / array / map (contract 6's default column). The degraded
+## default comes from the node's SNAPSHOT type, never from the declaration — a `string` snapshot
+## over an integer declaration reads "" and not 0.
+##
+## The value is already a detached copy: the store duplicates on the way out, so graph code
+## cannot mutate the seed or the overlay through a read (contract 3).
+func _evaluate_data_asset_variable(data: Dictionary, node_id: String) -> StoryFlowVariant:
+	var asset_id := _resolve_data_asset_id(data, node_id)
+	if asset_id.is_empty():
+		return null
+	var variable_id := str(data.get("variableId", ""))
+	var bound := StoryFlowDataAssetStore.read_bound_with_pins(
+		_context.data_asset_seed, _context.data_asset_overlay,
+		asset_id, variable_id, data_asset_pins(data))
+	var status: StoryFlowDataAssetStore.Binding = bound["status"]
+	if status != StoryFlowDataAssetStore.Binding.OK:
+		_warn_data_asset_status(node_id, asset_id, variable_id, status)
+		return null
+	return bound["value"]
+
+
+## The three GRAPH-side rungs (nodata / unwired / deadref). "" = degraded, warned once.
+##
+## SINGLE HOP up the dataAsset pin is sufficient, not a limitation: the editor collapses every
+## reroute elbow out of the graph before export, so a wire that ran through elbows on the canvas
+## arrives here as a direct pill -> accessor edge. The GET_DATA_ASSET type check keeps that
+## honest either way — anything else on the far end degrades instead of having its "assetId"
+## speculatively read off it.
+func _resolve_data_asset_id(data: Dictionary, node_id: String) -> String:
+	if not _context or not _context.current_script:
+		return ""
+
+	if str(data.get("variableId", "")).is_empty():
+		if _context.should_warn_data_asset(node_id, "nodata"):
+			push_warning("StoryFlow: Data Asset accessor has no variable binding: node %s" % node_id)
+		return ""
+
+	var asset_id := ""
+	var edge := _context.current_script.find_input_edge(node_id, StoryFlowHandles.IN_DATA_ASSET)
+	if not edge.is_empty():
+		var pill := _context.current_script.get_node(edge.get("source", ""))
+		if pill.get("type", StoryFlowTypes.NodeType.UNKNOWN) == StoryFlowTypes.NodeType.GET_DATA_ASSET:
+			asset_id = str(pill.get("data", {}).get("assetId", ""))
+	if asset_id.is_empty():
+		if _context.should_warn_data_asset(node_id, "unwired"):
+			push_warning("StoryFlow: Data Asset accessor has no Data Asset connected: node %s" % node_id)
+		return ""
+
+	# DEAD REFERENCE vs stale BINDING: read_bound cannot tell them apart (a walk that visits no
+	# level declares nothing, so an unknown asset answers MISSING there), so the seed is asked
+	# here, where the two still have different fixes — rebind the PILL vs rebind the ACCESSOR.
+	# An execution context that was never handed a store carries an empty seed and lands here too,
+	# which is the right rung for it: nothing this node points at exists.
+	if not StoryFlowDataAssetStore.has_asset(_context.data_asset_seed, asset_id):
+		if _context.should_warn_data_asset(node_id, "deadref"):
+			push_warning("StoryFlow: Data Asset not found: %s (node %s)" % [asset_id, node_id])
+		return ""
+
+	return asset_id
+
+
+## The two CHAIN-side rungs' warnings, latched the same way the graph-side ones are.
+func _warn_data_asset_status(node_id: String, asset_id: String, variable_id: String, status: StoryFlowDataAssetStore.Binding) -> void:
+	if status == StoryFlowDataAssetStore.Binding.MISSING:
+		if _context.should_warn_data_asset(node_id, "missing"):
+			push_warning("StoryFlow: Data Asset variable not found: %s.%s (node %s)" % [asset_id, variable_id, node_id])
+	elif status == StoryFlowDataAssetStore.Binding.CHANGED:
+		if _context.should_warn_data_asset(node_id, "changed"):
+			push_warning("StoryFlow: Data Asset variable type changed since this node was made: %s.%s (node %s)" % [asset_id, variable_id, node_id])
 
 
 # =============================================================================

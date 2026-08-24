@@ -218,6 +218,14 @@ enum NodeType {
 	CLEAR_MAP,
 	FOR_EACH_MAP,
 
+	# Data Assets (.sfd)
+	# Appended at the end for diff hygiene. Godot never serializes this enum —
+	# every launch re-parses the exported JSON through _node_type_map — so
+	# unlike Unity's there is no append-only CONSTRAINT here, just the habit.
+	GET_DATA_ASSET,
+	GET_DATA_ASSET_VARIABLE,
+	SET_DATA_ASSET_VARIABLE,
+
 	UNKNOWN,
 }
 
@@ -460,6 +468,14 @@ static var _node_type_map: Dictionary = {
 	"removeMapKey": NodeType.REMOVE_MAP_KEY,
 	"clearMap": NodeType.CLEAR_MAP,
 	"forEachMap": NodeType.FOR_EACH_MAP,
+
+	# Data Assets (.sfd). Wire names exactly as json-export-strategy.ts writes them
+	# (its convertNode getDataAsset / getDataAssetVariable / setDataAssetVariable arms).
+	# The pill carries "assetId"; the two accessors carry NO assetId — the WIRE into
+	# their dataAsset pin is the binding (engine contract 2.2).
+	"getDataAsset": NodeType.GET_DATA_ASSET,
+	"getDataAssetVariable": NodeType.GET_DATA_ASSET_VARIABLE,
+	"setDataAssetVariable": NodeType.SET_DATA_ASSET_VARIABLE,
 }
 
 
@@ -520,6 +536,7 @@ static var _set_node_types: Array[NodeType] = [
 	NodeType.PLAY_AUDIO,
 	NodeType.SET_MAP, NodeType.SET_MAP_VALUE,
 	NodeType.REMOVE_MAP_KEY, NodeType.CLEAR_MAP,
+	NodeType.SET_DATA_ASSET_VARIABLE,
 ]
 
 
@@ -587,6 +604,10 @@ static var _logic_node_types: Array[NodeType] = [
 	# Map read-only operations
 	NodeType.GET_MAP, NodeType.GET_MAP_VALUE, NodeType.HAS_MAP_KEY,
 	NodeType.MAP_SIZE, NodeType.MAP_KEYS, NodeType.MAP_VALUES,
+	# Data Asset reads. The reference PILL is a pure data node too — it names an
+	# asset and produces nothing at exec time; the accessor wired to it does the
+	# reading. (The .sfd Set is a flow node and lives in _set_node_types.)
+	NodeType.GET_DATA_ASSET, NodeType.GET_DATA_ASSET_VARIABLE,
 ]
 
 
