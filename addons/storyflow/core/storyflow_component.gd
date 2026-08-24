@@ -709,10 +709,11 @@ func get_character_portrait(character_path: String, asset_key: String = "") -> T
 # which is read-only: a write needs a declaration to mint the right element tags against, and the
 # graph's Set node is what does that.
 #
-# WARNINGS ARE PER-CALL, matching the accessor idiom already in this file
-# (_find_variable_by_display_name warns on every miss). The node arms latch theirs because an
-# option condition re-evaluates on every render; a host accessor is called by game code that owns
-# its own call rate.
+# WARNINGS ARE LATCHED, once per (asset, variable, kind) - a departure from the per-call idiom
+# the character accessors above keep. Game code does not own its call rate the way that idiom
+# assumes: a stale name read from _process warns every frame forever, and the first line already
+# named the fix. The REFUSAL ITSELF is never latched - every call still answers its default or
+# false. See _warn_data_asset_once.
 #
 # .sfd STRINGS ARE LITERALS and are NOT routed through the strings table, unlike
 # get_string_variable above: data-assets.json ships no strings table (engine contract 2.1), so a
@@ -722,6 +723,24 @@ const _DATA_ASSET_STRING_TYPES := [
 	StoryFlowTypes.VariableType.STRING, StoryFlowTypes.VariableType.IMAGE,
 	StoryFlowTypes.VariableType.AUDIO, StoryFlowTypes.VariableType.CHARACTER,
 ]
+
+
+## Emit one host-accessor refusal warning AT MOST ONCE per (asset, variable, kind).
+##
+## A refused accessor is usually a stale NAME - a rename plus a re-sync, an export var nobody
+## assigned - and stale names are read from _process. Per-call warnings turn that into a
+## continuous flood in the editor output and in player logs, where the first line already said
+## everything the hundredth does.
+##
+## The latch lives on the MANAGER (see should_warn_data_asset_access there) so component churn
+## cannot re-arm it, and re-arms on set_project and reset_all_state. The character accessors
+## above keep this file's per-call idiom deliberately: this is the new surface, and only the new
+## surface changes shape.
+func _warn_data_asset_once(asset: String, variable_name: String, kind: String, message: String) -> void:
+	var mgr := get_manager()
+	# With no manager there is nothing to latch against; a warning is still better than silence.
+	if not mgr or mgr.should_warn_data_asset_access(asset, variable_name, kind):
+		push_warning(message)
 
 
 ## The asset id [param asset] names, or "" when nothing (or more than one thing) matches.
@@ -744,11 +763,13 @@ func _resolve_data_asset_id(asset: String) -> String:
 		var def = seed[asset_id]
 		if def is Dictionary and str(def.get("name", "")) == asset:
 			if not matched.is_empty():
-				push_warning("StoryFlow: Data Asset name '%s' is ambiguous - it matches at least '%s' and '%s'. Use the asset id." % [asset, matched, asset_id])
+				_warn_data_asset_once(asset, "", "ambiguous",
+					"StoryFlow: Data Asset name '%s' is ambiguous - it matches at least '%s' and '%s'. Use the asset id." % [asset, matched, asset_id])
 				return ""
 			matched = str(asset_id)
 	if matched.is_empty():
-		push_warning("StoryFlow: No Data Asset with the id or name '%s'" % asset)
+		_warn_data_asset_once(asset, "", "noasset",
+			"StoryFlow: No Data Asset with the id or name '%s'" % asset)
 	return matched
 
 
@@ -761,7 +782,8 @@ func _find_data_asset_declaration(asset: String, asset_id: String, variable_name
 	var declaration := StoryFlowDataAssetStore.find_declaration_by_name(
 		mgr.get_data_asset_seed(), asset_id, variable_name)
 	if declaration.is_empty():
-		push_warning("StoryFlow: Data Asset '%s' declares no variable named '%s'" % [asset, variable_name])
+		_warn_data_asset_once(asset, variable_name, "novariable",
+			"StoryFlow: Data Asset '%s' declares no variable named '%s'" % [asset, variable_name])
 	return declaration
 
 
@@ -769,10 +791,12 @@ func _find_data_asset_declaration(asset: String, asset_id: String, variable_name
 ## be array-shaped.
 func _data_asset_scalar_gate(asset: String, variable_name: String, declaration: Dictionary, expected: Array) -> bool:
 	if not expected.has(declaration.get("type", StoryFlowTypes.VariableType.NONE)):
-		push_warning("StoryFlow: Data Asset '%s.%s' is not of the requested type" % [asset, variable_name])
+		_warn_data_asset_once(asset, variable_name, "wrongtype",
+			"StoryFlow: Data Asset '%s.%s' is not of the requested type" % [asset, variable_name])
 		return false
 	if bool(declaration.get("is_array", false)):
-		push_warning("StoryFlow: Data Asset '%s.%s' is an array - use get_data_asset_variant" % [asset, variable_name])
+		_warn_data_asset_once(asset, variable_name, "isarray",
+			"StoryFlow: Data Asset '%s.%s' is an array - use get_data_asset_variant" % [asset, variable_name])
 		return false
 	return true
 
@@ -823,7 +847,8 @@ func _write_data_asset_scalar(asset: String, variable_name: String, expected: Ar
 
 	if not StoryFlowDataAssetStore.try_set(mgr.get_data_asset_seed(),
 			mgr.get_data_asset_overlay(), asset_id, str(declaration.get("id", "")), value):
-		push_warning("StoryFlow: Data Asset write '%s.%s' was refused" % [asset, variable_name])
+		_warn_data_asset_once(asset, variable_name, "writerefused",
+			"StoryFlow: Data Asset write '%s.%s' was refused" % [asset, variable_name])
 		return false
 
 	# THE CACHE-CLEAR OBLIGATION every .sfd writer carries (StoryFlowDataAssetStore.try_set's

@@ -133,6 +133,51 @@ func reset_global_variables() -> void:
 # Data Assets
 # =============================================================================
 
+## Claimed "asset|variable|kind" keys for the .sfd HOST ACCESSOR refusals on StoryFlowComponent.
+##
+## THE LATCH IS HERE, not on the component, for two reasons. A host that rebuilds or reparents a
+## component - a scene change, a pooled dialogue box - would otherwise re-arm every warning it
+## already emitted, which is the flood this exists to stop. And any future manager-side .sfd
+## surface joins the same latch instead of growing a second one.
+##
+## RE-ARMED ON set_project AND reset_all_state, and nowhere else. Those are the two points where
+## the answer to "is this name wrong?" can genuinely have changed: a re-import after a rename, or
+## a new game. A re-sync that fixes one name should be free to warn about a different one.
+##
+## This dictionary and the counter below are INSPECTABLE ON PURPOSE, for the same reason the
+## execution context's node-ladder pair is: Godot's push_warning cannot be captured from a
+## SceneTree test, so the latch proves WHICH refusals warned and the counter proves HOW MANY
+## TIMES - which is the whole difference between a working once-latch and a per-call warning.
+var warned_data_asset_access: Dictionary = {}
+
+## How many host-accessor warnings have actually been emitted since the last re-arm.
+var data_asset_access_warnings_emitted: int = 0
+
+
+## Claim the warn latch for one refused host access, reporting whether the CALLER should warn.
+##
+## Keyed by (asset, variable, kind) so a stale name that is wrong in two different ways names
+## both, and so two different variables on one asset are not silenced by each other. The caller
+## formats and pushes the message inside the `if`, which keeps the suppressed path allocation
+## free - the same shape as the node ladder's should_warn_data_asset.
+##
+## The BOOLEAN RETURNS of the accessors themselves are untouched by any of this: a refused call
+## still answers its default or false on every call, latched or not. Only the log line is once.
+func should_warn_data_asset_access(asset: String, variable_name: String, kind: String) -> bool:
+	var key := "%s|%s|%s" % [asset, variable_name, kind]
+	if warned_data_asset_access.has(key):
+		return false
+	warned_data_asset_access[key] = true
+	data_asset_access_warnings_emitted += 1
+	return true
+
+
+## Re-arm every host-accessor warning. Called where the project or the session changes under it.
+func reset_data_asset_access_warnings() -> void:
+	warned_data_asset_access.clear()
+	data_asset_access_warnings_emitted = 0
+
+
 ## The .sfd seed table, handed to a starting dialogue by reference. Never write into it.
 func get_data_asset_seed() -> Dictionary:
 	return _data_asset_seed
@@ -347,6 +392,7 @@ func reset_all_state() -> void:
 	reset_global_variables()
 	reset_runtime_characters()
 	reset_data_assets()
+	reset_data_asset_access_warnings()
 	_used_once_only_options.clear()
 
 
@@ -374,6 +420,9 @@ func _initialize_from_project() -> void:
 		_runtime_characters[path] = original.duplicate_character()
 
 	reset_data_assets()
+	# A re-import is exactly when a name that was wrong may have become right, so the host
+	# accessor warnings re-arm with the project rather than surviving it.
+	reset_data_asset_access_warnings()
 
 	_used_once_only_options.clear()
 	# _active_dialogue_count is deliberately NOT zeroed here. A registration belongs to the

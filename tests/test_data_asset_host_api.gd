@@ -66,6 +66,7 @@ func _initialize() -> void:
 	_test_write_cache_clear()
 	_test_host_write_mid_chain()
 	_test_string_literals()
+	_test_refusal_warnings_are_latched()
 	_test_ambiguous_display_name()
 
 	if _failures == 0:
@@ -407,6 +408,10 @@ func _test_string_literals() -> void:
 # 9. An ambiguous display name
 # =============================================================================
 
+## Two assets sharing a display name. RUNS LAST of the golden-seed tests on purpose: it swaps the
+## project for a hand-built one and does not swap back, so anything needing the seed fixture has
+## to come before it.
+##
 ## Two assets sharing a display name. The name lookup FAILS rather than picking one: which asset
 ## a game reads must not depend on dictionary order, and a lookup with two right answers has no
 ## better one. The IDs still work, which is the documented way out.
@@ -428,6 +433,76 @@ func _test_ambiguous_display_name() -> void:
 	_check("and nothing reached the overlay", _manager.get_data_asset_overlay().is_empty())
 	_check("while each ID still resolves", _host.get_data_asset_int("da_left", "n") == 1 and _host.get_data_asset_int("da_right", "n") == 2)
 	_check("and an unambiguous name still resolves", _host.get_data_asset_int("Solo", "n") == 3)
+
+
+# =============================================================================
+# 10. Refusal warnings are latched
+# =============================================================================
+
+## A REFUSED ACCESSOR IS USUALLY A STALE NAME, and stale names are read from _process. Warning on
+## every call turns one authoring mistake into a continuous flood in the editor output and in
+## player logs, where the first line already named the fix.
+##
+## push_warning cannot be captured from a SceneTree test, so the assertions are on the manager's
+## latch dictionary and its emitted counter - the same inspectable seam the node ladder uses, and
+## the only one available. The COUNTER is what separates a working latch from its absence: the
+## dictionary alone looks identical either way.
+##
+## The refusal itself is never latched, which is asserted alongside: every call still answers the
+## caller's default, warned or silent.
+func _test_refusal_warnings_are_latched() -> void:
+	print("-- host refusal warnings are latched --")
+	_manager.reset_all_state()
+	_check("the latch starts empty", _manager.warned_data_asset_access.is_empty())
+	_check("and the counter starts at zero", _manager.data_asset_access_warnings_emitted == 0)
+
+	# TWO IDENTICAL refused calls: one warning.
+	_check("the first refused read returns the default", _host.get_data_asset_int(BASE, "ghost", -7) == -7)
+	var after_first: int = _manager.data_asset_access_warnings_emitted
+	_check("and warns exactly once", after_first == 1)
+	_check("the second identical call STILL returns the default", _host.get_data_asset_int(BASE, "ghost", -7) == -7)
+	_check("but emits no second warning", _manager.data_asset_access_warnings_emitted == 1)
+
+	# A DIFFERENT variable on the same asset is its own problem and gets its own line.
+	_check("a different variable name still refuses", _host.get_data_asset_int(BASE, "phantom", -7) == -7)
+	_check("and warns on its own", _manager.data_asset_access_warnings_emitted == 2)
+
+	# A different KIND on the SAME variable is a different problem too: hp exists but is not a
+	# boolean, and later asking for it as an array is a third distinct complaint.
+	_check("a wrong-type read refuses", _host.get_data_asset_bool(BASE, "hp", true) == true)
+	_check("and warns as its own kind", _manager.data_asset_access_warnings_emitted == 3)
+	_check("repeating it stays silent", _host.get_data_asset_bool(BASE, "hp", true) == true
+		and _manager.data_asset_access_warnings_emitted == 3)
+
+	# An unknown ASSET latches on the asset alone, with no variable to key on.
+	_check("an unknown asset refuses", _host.get_data_asset_int("da_nope", "hp", -7) == -7)
+	_check("and warns once", _manager.data_asset_access_warnings_emitted == 4)
+	_check("and not twice", _host.get_data_asset_int("da_nope", "other", -7) == -7
+		and _manager.data_asset_access_warnings_emitted == 4)
+
+	# A WRITE shares the latch with a READ that hit the SAME gate for the same reason, which is
+	# the key being (asset, variable, kind) rather than (asset, variable, kind, direction): the
+	# boolean read of hp above already said hp is not a boolean, and the write has nothing to add.
+	_check("a wrong-type write refuses", not _host.set_data_asset_bool(BASE, "hp", true))
+	_check("and stays silent, since the read already reported that exact problem",
+		_manager.data_asset_access_warnings_emitted == 4)
+
+	# A wrong-type write on a variable no read has complained about still gets its own line.
+	_check("a write refusal on an unreported variable refuses", not _host.set_data_asset_bool(BASE, "speed", true))
+	_check("and warns", _manager.data_asset_access_warnings_emitted == 5)
+	_check("repeating that write stays silent", not _host.set_data_asset_bool(BASE, "speed", true)
+		and _manager.data_asset_access_warnings_emitted == 5)
+
+	# RE-ARM: a re-import is where a name that was wrong may have become right, so a DIFFERENT
+	# problem appearing afterwards must be allowed to say so.
+	_manager.set_project(_manager.get_project())
+	_check("set_project re-arms the latch", _manager.warned_data_asset_access.is_empty())
+	_check("and resets the counter", _manager.data_asset_access_warnings_emitted == 0)
+	_check("so the same refusal warns again", _host.get_data_asset_int(BASE, "ghost", -7) == -7
+		and _manager.data_asset_access_warnings_emitted == 1)
+
+	_manager.reset_all_state()
+	_check("reset_all_state re-arms it too", _manager.warned_data_asset_access.is_empty())
 
 
 # =============================================================================
