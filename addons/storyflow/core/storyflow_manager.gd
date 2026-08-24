@@ -211,37 +211,80 @@ func register_dialogue_end() -> void:
 
 func save_to_slot(slot_name: String) -> bool:
 	return StoryFlowSaveData.save_to_slot(
-		slot_name, _global_variables, _runtime_characters, _used_once_only_options
+		slot_name, _global_variables, _runtime_characters, _used_once_only_options,
+		_data_asset_seed, _data_asset_overlay
 	)
 
 
+## Restore a save of either dialect (the reader sniffs; see StoryFlowSaveData._sniff_dialect).
+##
+## EVERY store is mutated IN PLACE - never rebound. The dictionaries here are handed out by
+## reference at dialogue start (and to any host holding get_global_variables), so rebinding one
+## strands every live reference on the pre-load object, splitting reads and writes into two
+## divergent stores for the rest of the session. That was the v1.2.3 bug in reset_global_variables
+## and it lived on this function's global-variable line until the v1 unification.
+##
+## A saved VALUE is applied onto the variable record the project already declares, rather than
+## the whole record replacing it. The declaration is the project's to own: enum value lists, the
+## input/output flags and the map K/V metadata all come from the import and none of them are
+## state a save has any business rewriting. A save that predates a newly added variable therefore
+## leaves it alone instead of deleting it, and an id the project no longer declares is dropped.
 func load_from_slot(slot_name: String) -> bool:
+	# The .sfd overlay's typing needs the live seed, so it is handed to the reader rather than
+	# applied afterwards.
+	#
+	# NO EVALUATOR CACHE IS CLEARED after this load, and that is a determination rather than an
+	# omission: the guard below refuses a load while ANY dialogue is registered as active, and
+	# the only path that unregisters one (StoryFlowComponent.stop_dialogue) nulls that
+	# component's evaluator BEFORE it calls register_dialogue_end. The other teardown path,
+	# _exit_tree, nulls the evaluator without unregistering at all, so the count only ever errs
+	# toward refusing. There is therefore no live evaluator holding a memoized read at the moment
+	# a load lands, and nothing to invalidate. Host WRITES are a different story and do clear -
+	# see the data-asset setters on StoryFlowComponent.
 	if is_dialogue_active():
 		push_warning("[StoryFlow] Cannot load while dialogue is active")
 		return false
 
-	var data := StoryFlowSaveData.load_from_slot(slot_name)
+	var data := StoryFlowSaveData.load_from_slot(slot_name, _data_asset_seed)
 	if data.is_empty():
 		return false
 
-	# Restore global variables
-	if data.has("global_variables"):
-		_global_variables = data["global_variables"]
+	# Global variables: values only, onto the records already there.
+	var saved_globals: Dictionary = data.get("global_variables", {})
+	for var_id in saved_globals:
+		if _global_variables.has(var_id):
+			_global_variables[var_id]["value"] = saved_globals[var_id].get("value", null)
 
-	# Restore runtime characters (merge saved variable state into existing characters)
-	if data.has("runtime_characters"):
-		var saved_chars: Dictionary = data["runtime_characters"]
-		for path in saved_chars:
-			if _runtime_characters.has(path):
-				var character: StoryFlowCharacter = _runtime_characters[path]
-				var saved_vars: Dictionary = saved_chars[path]
-				for vname in saved_vars:
-					if character.variables.has(vname):
-						character.variables[vname] = saved_vars[vname]
+	# Runtime characters: saved variable values merged into the existing characters, plus the
+	# display name and portrait when the document carries them (a legacy save does not, and
+	# their absence means keep the current ones).
+	var saved_chars: Dictionary = data.get("runtime_characters", {})
+	for path in saved_chars:
+		if not _runtime_characters.has(path):
+			continue
+		var character: StoryFlowCharacter = _runtime_characters[path]
+		var saved: Dictionary = saved_chars[path]
+		if saved.has("name"):
+			character.character_name = saved["name"]
+		if saved.has("image"):
+			character.image_key = saved["image"]
+		var saved_vars: Dictionary = saved.get("variables", {})
+		for vname in saved_vars:
+			if character.variables.has(vname):
+				character.variables[vname]["value"] = saved_vars[vname].get("value", null)
 
-	# Restore once-only options
-	if data.has("used_once_only_options"):
-		_used_once_only_options = data["used_once_only_options"]
+	# Once-only options: the saved set IS the complete set, so this replaces rather than merges.
+	_used_once_only_options.clear()
+	var saved_once_only: Dictionary = data.get("used_once_only_options", {})
+	for key in saved_once_only:
+		_used_once_only_options[key] = true
+
+	# .sfd overlay: REPLACE, not merge (contract 7). Clearing unconditionally means an absent or
+	# malformed key - and every legacy save, which carries none - restores seed state.
+	StoryFlowDataAssetStore.reset_overlay(_data_asset_overlay)
+	var saved_assets: Dictionary = data.get("data_assets", {})
+	for asset_id in saved_assets:
+		_data_asset_overlay[asset_id] = saved_assets[asset_id]
 
 	return true
 

@@ -620,6 +620,234 @@ func get_character_portrait(character_path: String, asset_key: String = "") -> T
 
 
 # =============================================================================
+# Data Asset Access (.sfd)
+# =============================================================================
+#
+# The HOST-side door onto the .sfd store — the counterpart to the three node types, for game code
+# that wants to read or write a Data Asset variable without going through a graph.
+#
+# [param asset] takes an asset's ID or its display NAME, because both audiences exist: the
+# exporter keys everything by id (ids survive a rename) while a programmer holds the name they
+# typed in the editor. The ID is tried first and exactly; a name must match exactly ONE asset.
+#
+# Reads and writes go through the MANAGER's seed and overlay rather than the execution context's,
+# so they work outside a dialogue too. Inside one they are the same two dictionaries — the
+# context holds non-owning references to these very objects — so there is no second store and no
+# staleness to reason about.
+#
+# THE TYPE GATE IS STRICT and lives on the DECLARATION, never on the stored value: within the
+# string family a value carries no evidence of its declared type, which is the same reason the
+# degraded ladder's declMatches check is on the declaration. So get_data_asset_string answers for
+# a string, image, audio or character declaration (all of which store as bare strings in this
+# engine) but NOT for an enum — an enum has its own accessor, and letting the string door read
+# one would make a typo'd variable name that happened to hit an enum look like it worked.
+#
+# The typed accessors are SCALAR-ONLY. Arrays and maps come out through get_data_asset_variant,
+# which is read-only: a write needs a declaration to mint the right element tags against, and the
+# graph's Set node is what does that.
+#
+# WARNINGS ARE PER-CALL, matching the accessor idiom already in this file
+# (_find_variable_by_display_name warns on every miss). The node arms latch theirs because an
+# option condition re-evaluates on every render; a host accessor is called by game code that owns
+# its own call rate.
+#
+# .sfd STRINGS ARE LITERALS and are NOT routed through the strings table, unlike
+# get_string_variable above: data-assets.json ships no strings table (engine contract 2.1), so a
+# lookup here would replace every literal with a failed one.
+
+const _DATA_ASSET_STRING_TYPES := [
+	StoryFlowTypes.VariableType.STRING, StoryFlowTypes.VariableType.IMAGE,
+	StoryFlowTypes.VariableType.AUDIO, StoryFlowTypes.VariableType.CHARACTER,
+]
+
+
+## The asset id [param asset] names, or "" when nothing (or more than one thing) matches.
+##
+## ID first and EXACTLY, then a unique display NAME. An ambiguous name FAILS rather than picking:
+## a lookup with two right answers has no better one, and silently choosing would make which
+## asset a game reads depend on dictionary order.
+func _resolve_data_asset_id(asset: String) -> String:
+	if asset.is_empty():
+		return ""
+	var mgr := get_manager()
+	if not mgr:
+		return ""
+	var seed: Dictionary = mgr.get_data_asset_seed()
+	if seed.has(asset):
+		return asset
+
+	var matched := ""
+	for asset_id in seed:
+		var def = seed[asset_id]
+		if def is Dictionary and str(def.get("name", "")) == asset:
+			if not matched.is_empty():
+				push_warning("StoryFlow: Data Asset name '%s' is ambiguous - it matches at least '%s' and '%s'. Use the asset id." % [asset, matched, asset_id])
+				return ""
+			matched = str(asset_id)
+	if matched.is_empty():
+		push_warning("StoryFlow: No Data Asset with the id or name '%s'" % asset)
+	return matched
+
+
+## The declaration [param variable_name] names on the asset's chain (root-most wins), or {}.
+## Warns on both misses, which is the whole of what the typed accessors share above the gate.
+func _find_data_asset_declaration(asset: String, asset_id: String, variable_name: String) -> Dictionary:
+	var mgr := get_manager()
+	if not mgr:
+		return {}
+	var declaration := StoryFlowDataAssetStore.find_declaration_by_name(
+		mgr.get_data_asset_seed(), asset_id, variable_name)
+	if declaration.is_empty():
+		push_warning("StoryFlow: Data Asset '%s' declares no variable named '%s'" % [asset, variable_name])
+	return declaration
+
+
+## The scalar type gate: the declared type must be one this accessor answers for, and it must not
+## be array-shaped.
+func _data_asset_scalar_gate(asset: String, variable_name: String, declaration: Dictionary, expected: Array) -> bool:
+	if not expected.has(declaration.get("type", StoryFlowTypes.VariableType.NONE)):
+		push_warning("StoryFlow: Data Asset '%s.%s' is not of the requested type" % [asset, variable_name])
+		return false
+	if bool(declaration.get("is_array", false)):
+		push_warning("StoryFlow: Data Asset '%s.%s' is an array - use get_data_asset_variant" % [asset, variable_name])
+		return false
+	return true
+
+
+## One host scalar read: the resolved variant, or null with the warning already emitted.
+func _read_data_asset_scalar(asset: String, variable_name: String, expected: Array) -> StoryFlowVariant:
+	var mgr := get_manager()
+	if not mgr:
+		return null
+	var asset_id := _resolve_data_asset_id(asset)
+	if asset_id.is_empty():
+		return null
+	var declaration := _find_data_asset_declaration(asset, asset_id, variable_name)
+	if declaration.is_empty():
+		return null
+	if not _data_asset_scalar_gate(asset, variable_name, declaration, expected):
+		return null
+	return StoryFlowDataAssetStore.try_resolve(mgr.get_data_asset_seed(),
+		mgr.get_data_asset_overlay(), asset_id, str(declaration.get("id", "")))
+
+
+## One host scalar write into the overlay, reporting whether it landed.
+##
+## The variant is minted against the DECLARATION rather than from the caller's Godot type, so an
+## image-declared variable written through set_data_asset_string lands with the tag the store
+## expects (StoryFlowDataAssetStore.storage_type) and an enum lands ENUM-tagged.
+func _write_data_asset_scalar(asset: String, variable_name: String, expected: Array, raw) -> bool:
+	var mgr := get_manager()
+	if not mgr:
+		return false
+	var asset_id := _resolve_data_asset_id(asset)
+	if asset_id.is_empty():
+		return false
+	var declaration := _find_data_asset_declaration(asset, asset_id, variable_name)
+	if declaration.is_empty():
+		return false
+	if not _data_asset_scalar_gate(asset, variable_name, declaration, expected):
+		return false
+
+	var declared_type = declaration.get("type", StoryFlowTypes.VariableType.NONE)
+	var value := StoryFlowVariant.new()
+	match declared_type:
+		StoryFlowTypes.VariableType.BOOLEAN: value.set_bool(bool(raw))
+		StoryFlowTypes.VariableType.INTEGER: value.set_int(int(raw))
+		StoryFlowTypes.VariableType.FLOAT: value.set_float(float(raw))
+		StoryFlowTypes.VariableType.ENUM: value.set_enum(str(raw))
+		_: value.set_string(str(raw))
+
+	if not StoryFlowDataAssetStore.try_set(mgr.get_data_asset_seed(),
+			mgr.get_data_asset_overlay(), asset_id, str(declaration.get("id", "")), value):
+		push_warning("StoryFlow: Data Asset write '%s.%s' was refused" % [asset, variable_name])
+		return false
+
+	# THE CACHE-CLEAR OBLIGATION every .sfd writer carries (StoryFlowDataAssetStore.try_set's
+	# header). The accessor's own read is carved out of the boolean memo, but a memoized PARENT
+	# above it is not: an option gated through andBool(accessor, true) keeps answering the
+	# pre-write value until this runs. Same line, same reason, as _handle_set_data_asset_var.
+	if _evaluator:
+		_evaluator.clear_cache()
+	return true
+
+
+## Read a boolean-declared Data Asset variable. Returns [param default] on any miss.
+func get_data_asset_bool(asset: String, variable_name: String, default := false) -> bool:
+	var value := _read_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.BOOLEAN])
+	return default if value == null else value.get_bool(default)
+
+
+## Write a boolean-declared Data Asset variable into the session overlay.
+## Returns false (having warned) when the asset, the variable or the type does not check out.
+func set_data_asset_bool(asset: String, variable_name: String, value: bool) -> bool:
+	return _write_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.BOOLEAN], value)
+
+
+func get_data_asset_int(asset: String, variable_name: String, default := 0) -> int:
+	var value := _read_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.INTEGER])
+	return default if value == null else value.get_int(default)
+
+
+func set_data_asset_int(asset: String, variable_name: String, value: int) -> bool:
+	return _write_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.INTEGER], value)
+
+
+func get_data_asset_float(asset: String, variable_name: String, default := 0.0) -> float:
+	var value := _read_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.FLOAT])
+	return default if value == null else value.get_float(default)
+
+
+func set_data_asset_float(asset: String, variable_name: String, value: float) -> bool:
+	return _write_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.FLOAT], value)
+
+
+## Read a string-family Data Asset variable: string, image, audio or character, all of which
+## store as bare strings here. ENUM IS EXCLUDED — see [method get_data_asset_enum].
+##
+## The value is the LITERAL from the .sfd, never routed through the strings table.
+func get_data_asset_string(asset: String, variable_name: String, default := "") -> String:
+	var value := _read_data_asset_scalar(asset, variable_name, _DATA_ASSET_STRING_TYPES)
+	return default if value == null else value.get_string(default)
+
+
+func set_data_asset_string(asset: String, variable_name: String, value: String) -> bool:
+	return _write_data_asset_scalar(asset, variable_name, _DATA_ASSET_STRING_TYPES, value)
+
+
+func get_data_asset_enum(asset: String, variable_name: String, default := "") -> String:
+	var value := _read_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.ENUM])
+	return default if value == null else value.get_string(default)
+
+
+func set_data_asset_enum(asset: String, variable_name: String, value: String) -> bool:
+	return _write_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.ENUM], value)
+
+
+## The UNTYPED door: the resolved value whatever its declared type, as a DETACHED copy, or null.
+##
+## READ-ONLY on purpose. It is how a host reaches an array or a map (the typed accessors above
+## are scalar-only) and how it reads a value whose type it does not want to hardcode. A write
+## needs a declaration to mint the right element tags against — that is what the typed setters
+## and the graph's Set node do.
+##
+## No type gate runs here, so the caller owns checking what came back; the variant's own type tag
+## says what it is.
+func get_data_asset_variant(asset: String, variable_name: String) -> StoryFlowVariant:
+	var mgr := get_manager()
+	if not mgr:
+		return null
+	var asset_id := _resolve_data_asset_id(asset)
+	if asset_id.is_empty():
+		return null
+	var declaration := _find_data_asset_declaration(asset, asset_id, variable_name)
+	if declaration.is_empty():
+		return null
+	return StoryFlowDataAssetStore.try_resolve(mgr.get_data_asset_seed(),
+		mgr.get_data_asset_overlay(), asset_id, str(declaration.get("id", "")))
+
+
+# =============================================================================
 # Array Variable Access
 # =============================================================================
 
