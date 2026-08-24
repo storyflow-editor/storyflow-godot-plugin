@@ -612,6 +612,13 @@ static func _walk_for_value(seed: Dictionary, overlay: Dictionary, asset_id: Str
 ##
 ## The CALLER owns the warning: the node arms have a per-node warn latch (contract section 6)
 ## and the host API does not, so this reports the refusal rather than logging it.
+##
+## THE CALLER ALSO OWNS CACHE INVALIDATION. A successful write here invalidates NOTHING — this
+## file knows about a seed and an overlay and has never heard of an evaluator. Node-graph
+## writers clear through the component (see _handle_set_data_asset_var's rationale for why the
+## accessor's own memo carve-out is not enough: a memoized boolean PARENT above an accessor
+## keeps answering the pre-write value). ANY NEW CALLER — the host accessors, a save load — must
+## do the same, or option conditions go stale for the rest of the session.
 static func try_set(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String, value: StoryFlowVariant) -> bool:
 	if value == null:
 		return false

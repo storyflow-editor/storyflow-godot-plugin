@@ -31,13 +31,13 @@ extends SceneTree
 ## Or: powershell -File tests/run_tests.ps1 -GodotExe <path-to-godot>
 
 const ComponentScript := preload("res://addons/storyflow/core/storyflow_component.gd")
+const Graph := preload("res://tests/data_asset_test_graph.gd")
 const ContextScript := preload("res://addons/storyflow/core/storyflow_execution_context.gd")
 const EvaluatorScript := preload("res://addons/storyflow/core/storyflow_evaluator.gd")
 const Handles := preload("res://addons/storyflow/core/storyflow_handles.gd")
 const ImporterScript := preload("res://addons/storyflow/editor/storyflow_importer.gd")
 const ManagerScript := preload("res://addons/storyflow/core/storyflow_manager.gd")
 const ProjectScript := preload("res://addons/storyflow/core/storyflow_project.gd")
-const ScriptScript := preload("res://addons/storyflow/core/storyflow_script.gd")
 const StoreScript := preload("res://addons/storyflow/core/storyflow_data_asset_store.gd")
 const Types := preload("res://addons/storyflow/core/storyflow_types.gd")
 const VariantScript := preload("res://addons/storyflow/core/storyflow_variant.gd")
@@ -211,92 +211,78 @@ func _test_set_side(cases: Array) -> void:
 ## from the node directly.
 func _build_read_script(entry: Dictionary) -> StoryFlowScript:
 	var accessor: Dictionary = entry.get("accessor", {})
-	var script := ScriptScript.new()
-	script.script_path = "scripts/Read.sfe"
-	script.nodes = {
-		ACCESSOR: _node(ACCESSOR, Types.NodeType.GET_DATA_ASSET_VARIABLE, "getDataAssetVariable", accessor.duplicate()),
-		CONSUMER: _node(CONSUMER, Types.NodeType.ARRAY_LENGTH_STRING, "arrayLength", {
-			"keyType": str(accessor.get("keyType", "")),
-			"valueType": str(accessor.get("valueType", "")),
+	var key_type := str(accessor.get("keyType", ""))
+	var value_type := str(accessor.get("valueType", ""))
+	var nodes := {
+		ACCESSOR: Graph.accessor(ACCESSOR, accessor),
+		CONSUMER: Graph.node(CONSUMER, Types.NodeType.ARRAY_LENGTH_STRING, "arrayLength", {
+			"keyType": key_type, "valueType": value_type,
 		}),
 	}
-	script.connections = []
-	_wire_pill(script, entry, ACCESSOR)
-	# The container consumer's input edge. Harmless for scalar cases — nothing reads it.
+	var connections: Array = []
+	_wire_pill(nodes, connections, entry, ACCESSOR)
+	# The container consumer's input edge. Scalar cases get none - nothing reads one.
 	if bool(accessor.get("isArray", false)):
-		var array_suffix: String = "%s-array" % str(accessor.get("variableType", ""))
-		script.connections.append(_edge("c", ACCESSOR, "source-%s-%s-" % [ACCESSOR, array_suffix], CONSUMER, Handles.target(CONSUMER, array_suffix)))
+		var element_type := "%s-array" % str(accessor.get("variableType", ""))
+		connections.append(Graph.data_wire(ACCESSOR, element_type, CONSUMER, element_type))
 	elif str(accessor.get("variableType", "")) == "map":
-		var map_suffix := Handles.in_map(str(accessor.get("keyType", "")), str(accessor.get("valueType", "")), "1")
-		script.connections.append(_edge("c", ACCESSOR, "source-%s-map-%s-%s" % [ACCESSOR, str(accessor.get("keyType", "")), str(accessor.get("valueType", ""))], CONSUMER, Handles.target(CONSUMER, map_suffix)))
-	script.build_indices()
-	return script
+		connections.append(Graph.map_wire(ACCESSOR, CONSUMER, key_type, value_type, "1"))
+	return Graph.build("scripts/Read.sfe", nodes, connections)
 
 
 ## All 20 Set nodes chained exec-out to exec-in, parked on a dialogue node at the end so the
 ## execution context stays alive for the assertions.
 func _build_write_chain_script(cases: Array) -> StoryFlowScript:
-	var script := ScriptScript.new()
-	script.script_path = "scripts/Degraded.sfe"
-	# The two value sources every wired value pin in the fixture needs. Local script
-	# variables, so the Set nodes read a real evaluated value rather than a literal.
-	script.variables = {
-		"v_int": {"id": "v_int", "name": "n", "type": Types.VariableType.INTEGER, "value": VariantScript.from_int(42)},
-		"v_str": {"id": "v_str", "name": "s", "type": Types.VariableType.STRING, "value": VariantScript.from_string("x")},
+	var nodes := {
+		"0": Graph.start(),
+		"VI": Graph.node("VI", Types.NodeType.GET_INT, "getInt", {"variable": "v_int", "isGlobal": false}),
+		"VS": Graph.node("VS", Types.NodeType.GET_STRING, "getString", {"variable": "v_str", "isGlobal": false}),
+		"D": Graph.dialogue("D"),
 	}
-	script.nodes = {
-		"0": _node("0", Types.NodeType.START, "start", {}),
-		"VI": _node("VI", Types.NodeType.GET_INT, "getInt", {"variable": "v_int", "isGlobal": false}),
-		"VS": _node("VS", Types.NodeType.GET_STRING, "getString", {"variable": "v_str", "isGlobal": false}),
-		"D": _node("D", Types.NodeType.DIALOGUE, "dialogue", {"title": "", "text": "done"}),
-	}
-	script.connections = []
+	var connections: Array = []
 
-	var previous_handle := Handles.source("0")
+	# Chained by NODE ID rather than by handle, so every edge goes through the shared builders.
+	var previous_id := "0"
 	for index in cases.size():
 		var entry: Dictionary = cases[index]
 		var accessor: Dictionary = entry.get("accessor", {})
 		var setter_id := "S%d" % index
-		script.nodes[setter_id] = _node(setter_id, Types.NodeType.SET_DATA_ASSET_VARIABLE, "setDataAssetVariable", accessor.duplicate())
-		script.connections.append(_edge("x%d" % index, "", previous_handle, setter_id, Handles.target(setter_id)))
-		_wire_pill(script, entry, setter_id)
+		nodes[setter_id] = Graph.setter(setter_id, accessor)
+		# The start node flows from a bare source handle; every Set flows from its OUT_FLOW pin.
+		if previous_id == "0":
+			connections.append(Graph.exec(previous_id, setter_id))
+		else:
+			connections.append(Graph.exec_flow(previous_id, setter_id))
+		_wire_pill(nodes, connections, entry, setter_id)
 		if entry.get("setValuePinWired", false):
 			var variable_type := str(accessor.get("variableType", ""))
 			var source_id := "VS" if variable_type == "string" else "VI"
-			var source_handle := "source-%s-%s-" % [source_id, variable_type]
-			script.connections.append(_edge("v%d" % index, source_id, source_handle, setter_id, Handles.target(setter_id, Handles.in_data_asset_value(variable_type, false))))
-		previous_handle = Handles.source(setter_id, Handles.OUT_FLOW)
+			connections.append(Graph.data_wire(source_id, variable_type, setter_id, Handles.in_data_asset_value(variable_type)))
+		previous_id = setter_id
 
-	script.connections.append(_edge("done", "", previous_handle, "D", Handles.target("D")))
-	# The connection helper needs a real source id for the exec edges it just built.
-	for connection in script.connections:
-		if connection["source"].is_empty():
-			connection["source"] = Handles.parse(connection["source_handle"]).get("node_id", "")
-	script.build_indices()
-	return script
+	connections.append(Graph.exec_flow(previous_id, "D"))
+	return Graph.build("scripts/Degraded.sfe", nodes, connections, {
+		# The two value sources every wired value pin in the fixture needs. Local script
+		# variables, so the Set nodes read a real evaluated value rather than a literal.
+		"v_int": Graph.scalar_var("v_int", "n", Types.VariableType.INTEGER, VariantScript.from_int(42)),
+		"v_str": Graph.scalar_var("v_str", "s", Types.VariableType.STRING, VariantScript.from_string("x")),
+	})
 
 
 ## Whatever the case says sits on the accessor's dataAsset pin: a bound pill, an unbound pill,
 ## a node that is not a pill at all, or nothing.
-func _wire_pill(script: StoryFlowScript, entry: Dictionary, target_id: String) -> void:
+func _wire_pill(nodes: Dictionary, connections: Array, entry: Dictionary, target_id: String) -> void:
 	if not entry.get("pillWired", false):
 		return
 	var pill_id := "%s_%s" % [PILL, target_id]
+	var asset_id := str(entry.get("pillAssetId", ""))
 	if entry.get("pillIsRefNode", false):
-		script.nodes[pill_id] = _node(pill_id, Types.NodeType.GET_DATA_ASSET, "getDataAsset", {"assetId": str(entry.get("pillAssetId", ""))})
+		nodes[pill_id] = Graph.pill(pill_id, asset_id)
 	else:
-		# A node that is NOT a getDataAsset pill, carrying an assetId anyway — the arm must
+		# A node that is NOT a getDataAsset pill, carrying an assetId anyway - the arm must
 		# refuse to read data off it rather than trusting whatever is on the far end.
-		script.nodes[pill_id] = _node(pill_id, Types.NodeType.GET_INT, "getInt", {"assetId": str(entry.get("pillAssetId", ""))})
-	script.connections.append(_edge("p_%s" % target_id, pill_id, "source-%s-dataAsset-" % pill_id, target_id, Handles.target(target_id, Handles.IN_DATA_ASSET)))
-
-
-func _node(id: String, node_type: Types.NodeType, type_string: String, data: Dictionary) -> Dictionary:
-	return {"id": id, "type": node_type, "type_string": type_string, "data": data}
-
-
-func _edge(id: String, source: String, source_handle: String, target: String, target_handle: String) -> Dictionary:
-	return {"id": id, "source": source, "target": target, "source_handle": source_handle, "target_handle": target_handle}
+		nodes[pill_id] = Graph.node(pill_id, Types.NodeType.GET_INT, "getInt", {"assetId": asset_id})
+	connections.append(Graph.pill_wire(pill_id, target_id))
 
 
 # =============================================================================
@@ -326,7 +312,7 @@ func _read_accessor(evaluator, accessor: Dictionary):
 
 
 func _map_consumer(accessor: Dictionary) -> Dictionary:
-	return _node(CONSUMER, Types.NodeType.MAP_SIZE, "mapSize", {
+	return Graph.node(CONSUMER, Types.NodeType.MAP_SIZE, "mapSize", {
 		"keyType": str(accessor.get("keyType", "")),
 		"valueType": str(accessor.get("valueType", "")),
 	})

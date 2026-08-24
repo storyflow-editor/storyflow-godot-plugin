@@ -87,13 +87,20 @@ const IN_DATA_ASSET := "dataAsset-asset"
 const DATA_ASSET_VALUE_OPTION := "2"
 
 
-## Build a .sfd Set node's value input suffix for a SCALAR or ARRAY binding:
-## "{variable_type}-2" or "{variable_type}-array-2". Maps use [method in_map] with
-## [constant DATA_ASSET_VALUE_OPTION] instead — their K/V types are baked into the handle id.
-static func in_data_asset_value(variable_type: String, is_array: bool) -> String:
-	if is_array:
-		return "%s-array-%s" % [variable_type, DATA_ASSET_VALUE_OPTION]
+## A .sfd Set node's value input suffix for a SCALAR binding: "{variable_type}-2".
+static func in_data_asset_value(variable_type: String) -> String:
 	return "%s-%s" % [variable_type, DATA_ASSET_VALUE_OPTION]
+
+
+## A .sfd Set node's value input suffix for an ARRAY binding: "{variable_type}-array-2".
+##
+## Its own function rather than a boolean flag on the scalar one: an array pin and a scalar
+## pin of the same type are DIFFERENT pins (the same distinction decl_matches draws), and
+## `in_data_asset_value(type, false)` at a call site says nothing about which it asked for.
+## Maps have no builder here — they use [method in_map] with
+## [constant DATA_ASSET_VALUE_OPTION], since their K/V types are baked into the handle id.
+static func in_data_asset_array_value(variable_type: String) -> String:
+	return "%s-array-%s" % [variable_type, DATA_ASSET_VALUE_OPTION]
 
 
 # Media node inputs

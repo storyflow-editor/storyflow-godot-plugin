@@ -23,8 +23,9 @@ extends SceneTree
 ## _process_node in the pull-write-pull triple, which exists precisely to write WITHOUT the
 ## cache clear every ordinary re-render path performs.
 ##
-## The seed is the shared golden fixture (see tests/test_data_asset_store.gd's header for the
-## sync rules), parsed through the REAL importer helper.
+## Graphs are assembled with tests/data_asset_test_graph.gd, which owns the editor's handle
+## formats. The seed is the shared golden fixture (see tests/test_data_asset_store.gd's header
+## for the sync rules), parsed through the REAL importer helper.
 ##
 ## Run from the repository root (import first to build the class cache):
 ##   godot --headless --import
@@ -32,11 +33,11 @@ extends SceneTree
 ## Or: powershell -File tests/run_tests.ps1 -GodotExe <path-to-godot>
 
 const ComponentScript := preload("res://addons/storyflow/core/storyflow_component.gd")
+const Graph := preload("res://tests/data_asset_test_graph.gd")
 const Handles := preload("res://addons/storyflow/core/storyflow_handles.gd")
 const ImporterScript := preload("res://addons/storyflow/editor/storyflow_importer.gd")
 const ManagerScript := preload("res://addons/storyflow/core/storyflow_manager.gd")
 const ProjectScript := preload("res://addons/storyflow/core/storyflow_project.gd")
-const ScriptScript := preload("res://addons/storyflow/core/storyflow_script.gd")
 const StoreScript := preload("res://addons/storyflow/core/storyflow_data_asset_store.gd")
 const Types := preload("res://addons/storyflow/core/storyflow_types.gd")
 const VariantScript := preload("res://addons/storyflow/core/storyflow_variant.gd")
@@ -98,29 +99,25 @@ func _check(label: String, ok: bool) -> void:
 ## because the base declares 100 and the child overrides it to 150.
 func _test_wire_is_the_binding() -> void:
 	print("-- the wire is the binding --")
-	var script := _script("scripts/Wire.sfe")
-	script.variables = {
-		"a": _var("a", "FromBase", Types.VariableType.INTEGER, VariantScript.from_int(0)),
-		"b": _var("b", "FromChild", Types.VariableType.INTEGER, VariantScript.from_int(0)),
-	}
 	var accessor := {"variableId": V_HP, "variable": "hp", "variableType": "integer"}
-	script.nodes = {
-		"0": _node("0", Types.NodeType.START, "start", {}),
-		"PB": _pill("PB", BASE),
-		"PC": _pill("PC", CHILD),
-		"G1": _accessor("G1", accessor),
-		"G2": _accessor("G2", accessor),
-		"SA": _node("SA", Types.NodeType.SET_INT, "setInt", {"variable": "a", "isGlobal": false}),
-		"SB": _node("SB", Types.NodeType.SET_INT, "setInt", {"variable": "b", "isGlobal": false}),
-		"D": _dialogue("D", []),
-	}
-	script.connections = [
-		_exec("0", "SA"), _exec_flow("SA", "SB"), _exec_flow("SB", "D"),
-		_pill_wire("PB", "G1"), _pill_wire("PC", "G2"),
-		_data_wire("G1", "integer", "SA", Handles.IN_INTEGER),
-		_data_wire("G2", "integer", "SB", Handles.IN_INTEGER),
-	]
-	script.build_indices()
+	var script := Graph.build("scripts/Wire.sfe", {
+		"0": Graph.start(),
+		"PB": Graph.pill("PB", BASE),
+		"PC": Graph.pill("PC", CHILD),
+		"G1": Graph.accessor("G1", accessor),
+		"G2": Graph.accessor("G2", accessor),
+		"SA": Graph.node("SA", Types.NodeType.SET_INT, "setInt", {"variable": "a", "isGlobal": false}),
+		"SB": Graph.node("SB", Types.NodeType.SET_INT, "setInt", {"variable": "b", "isGlobal": false}),
+		"D": Graph.dialogue("D"),
+	}, [
+		Graph.exec("0", "SA"), Graph.exec_flow("SA", "SB"), Graph.exec_flow("SB", "D"),
+		Graph.pill_wire("PB", "G1"), Graph.pill_wire("PC", "G2"),
+		Graph.data_wire("G1", "integer", "SA", Handles.IN_INTEGER),
+		Graph.data_wire("G2", "integer", "SB", Handles.IN_INTEGER),
+	], {
+		"a": Graph.scalar_var("a", "FromBase", Types.VariableType.INTEGER, VariantScript.from_int(0)),
+		"b": Graph.scalar_var("b", "FromChild", Types.VariableType.INTEGER, VariantScript.from_int(0)),
+	})
 
 	var component := _run(script)
 	_check("the base-bound accessor reads the base declaration (100)", component.get_int_variable("FromBase") == 100)
@@ -137,47 +134,44 @@ func _test_wire_is_the_binding() -> void:
 ## emptied array losing its element type) and a read-back would hide it behind get_string().
 func _test_writes() -> void:
 	print("-- Set writes --")
-	var script := _script("scripts/Writes.sfe")
-	script.variables = {
-		"v_secret": _var("v_secret", "s", Types.VariableType.STRING, VariantScript.from_string("written-secret")),
-		"v_rank": _var("v_rank", "r", Types.VariableType.ENUM, VariantScript.from_enum("Boss")),
-		"v_tags": _array_var("v_tags", "t", Types.VariableType.STRING, ["a", "b"]),
-		"v_empty": _array_var("v_empty", "e", Types.VariableType.STRING, []),
-		"v_loot": _map_var("v_loot", "l", {"sword": VariantScript.from_int(7)}),
-	}
-	script.nodes = {
-		"0": _node("0", Types.NodeType.START, "start", {}),
-		"PB": _pill("PB", BASE),
-		"PC": _pill("PC", CHILD),
-		"PG": _pill("PG", GRANDCHILD),
-		"GS": _node("GS", Types.NodeType.GET_STRING, "getString", {"variable": "v_secret", "isGlobal": false}),
-		"GE": _node("GE", Types.NodeType.GET_ENUM, "getEnum", {"variable": "v_rank", "isGlobal": false}),
-		"GA": _node("GA", Types.NodeType.GET_STRING_ARRAY, "getStringArray", {"variable": "v_tags", "isGlobal": false}),
-		"GZ": _node("GZ", Types.NodeType.GET_STRING_ARRAY, "getStringArray", {"variable": "v_empty", "isGlobal": false}),
-		"GM": _node("GM", Types.NodeType.GET_MAP, "getMap", {"variable": "v_loot", "isGlobal": false, "keyType": "string", "valueType": "integer"}),
+	var script := Graph.build("scripts/Writes.sfe", {
+		"0": Graph.start(),
+		"PB": Graph.pill("PB", BASE),
+		"PC": Graph.pill("PC", CHILD),
+		"PG": Graph.pill("PG", GRANDCHILD),
+		"GS": Graph.node("GS", Types.NodeType.GET_STRING, "getString", {"variable": "v_secret", "isGlobal": false}),
+		"GE": Graph.node("GE", Types.NodeType.GET_ENUM, "getEnum", {"variable": "v_rank", "isGlobal": false}),
+		"GA": Graph.node("GA", Types.NodeType.GET_STRING_ARRAY, "getStringArray", {"variable": "v_tags", "isGlobal": false}),
+		"GZ": Graph.node("GZ", Types.NodeType.GET_STRING_ARRAY, "getStringArray", {"variable": "v_empty", "isGlobal": false}),
+		"GM": Graph.node("GM", Types.NodeType.GET_MAP, "getMap", {"variable": "v_loot", "isGlobal": false, "keyType": "string", "valueType": "integer"}),
 		# On the BASE, so the write has descendants to cascade to.
-		"S1": _setter("S1", {"variableId": V_SECRET, "variable": "secret", "variableType": "string"}),
-		"S2": _setter("S2", {"variableId": V_RANK, "variable": "rank", "variableType": "enum"}),
-		"S3": _setter("S3", {"variableId": V_TAGS, "variable": "tags", "variableType": "string", "isArray": true}),
+		"S1": Graph.setter("S1", {"variableId": V_SECRET, "variable": "secret", "variableType": "string"}),
+		"S2": Graph.setter("S2", {"variableId": V_RANK, "variable": "rank", "variableType": "enum"}),
+		"S3": Graph.setter("S3", {"variableId": V_TAGS, "variable": "tags", "variableType": "string", "isArray": true}),
 		# Healthy binding, NOTHING on the value pin: the refusal that proves there is no
 		# inline fallback (contract 5 — never write the type's zero over a declared default).
-		"S4": _setter("S4", {"variableId": V_TITLE, "variable": "title", "variableType": "string"}),
-		"S5": _setter("S5", {"variableId": V_TAGS, "variable": "tags", "variableType": "string", "isArray": true}),
-		"S6": _setter("S6", {"variableId": V_LOOT, "variable": "loot", "variableType": "map", "keyType": "string", "valueType": "integer"}),
-		"D": _dialogue("D", []),
-	}
-	script.connections = [
-		_exec("0", "S1"), _exec_flow("S1", "S2"), _exec_flow("S2", "S3"), _exec_flow("S3", "S4"),
-		_exec_flow("S4", "S5"), _exec_flow("S5", "S6"), _exec_flow("S6", "D"),
-		_pill_wire("PB", "S1"), _pill_wire("PC", "S2"), _pill_wire("PC", "S3"),
-		_pill_wire("PC", "S4"), _pill_wire("PG", "S5"), _pill_wire("PC", "S6"),
-		_data_wire("GS", "string", "S1", "string-2"),
-		_data_wire("GE", "enum", "S2", "enum-2"),
-		_data_wire("GA", "string-array", "S3", "string-array-2"),
-		_data_wire("GZ", "string-array", "S5", "string-array-2"),
-		_map_wire("GM", "S6", "string", "integer"),
-	]
-	script.build_indices()
+		"S4": Graph.setter("S4", {"variableId": V_TITLE, "variable": "title", "variableType": "string"}),
+		"S5": Graph.setter("S5", {"variableId": V_TAGS, "variable": "tags", "variableType": "string", "isArray": true}),
+		"S6": Graph.setter("S6", {"variableId": V_LOOT, "variable": "loot", "variableType": "map", "keyType": "string", "valueType": "integer"}),
+		"D": Graph.dialogue("D"),
+	}, [
+		Graph.exec("0", "S1"), Graph.exec_flow("S1", "S2"), Graph.exec_flow("S2", "S3"),
+		Graph.exec_flow("S3", "S4"), Graph.exec_flow("S4", "S5"), Graph.exec_flow("S5", "S6"),
+		Graph.exec_flow("S6", "D"),
+		Graph.pill_wire("PB", "S1"), Graph.pill_wire("PC", "S2"), Graph.pill_wire("PC", "S3"),
+		Graph.pill_wire("PC", "S4"), Graph.pill_wire("PG", "S5"), Graph.pill_wire("PC", "S6"),
+		Graph.data_wire("GS", "string", "S1", Handles.in_data_asset_value("string")),
+		Graph.data_wire("GE", "enum", "S2", Handles.in_data_asset_value("enum")),
+		Graph.data_wire("GA", "string-array", "S3", Handles.in_data_asset_array_value("string")),
+		Graph.data_wire("GZ", "string-array", "S5", Handles.in_data_asset_array_value("string")),
+		Graph.map_wire("GM", "S6", "string", "integer", Handles.DATA_ASSET_VALUE_OPTION),
+	], {
+		"v_secret": Graph.scalar_var("v_secret", "s", Types.VariableType.STRING, VariantScript.from_string("written-secret")),
+		"v_rank": Graph.scalar_var("v_rank", "r", Types.VariableType.ENUM, VariantScript.from_enum("Boss")),
+		"v_tags": Graph.array_var("v_tags", "t", Types.VariableType.STRING, ["a", "b"]),
+		"v_empty": Graph.array_var("v_empty", "e", Types.VariableType.STRING, []),
+		"v_loot": Graph.map_var("v_loot", "l", {"sword": VariantScript.from_int(7)}),
+	})
 
 	_manager.reset_data_assets()
 	var component := _run(script)
@@ -243,31 +237,27 @@ func _test_writes() -> void:
 ## That failure is what settled the cache-invalidation question for this task.
 func _test_option_gating_and_cache() -> void:
 	print("-- option gating + pull-write-pull --")
-	var script := _script("scripts/Gating.sfe")
-	script.variables = {
-		"v_false": _var("v_false", "f", Types.VariableType.BOOLEAN, VariantScript.from_bool(false)),
-	}
 	var accessor := {"variableId": V_ALIVE, "variable": "alive", "variableType": "boolean"}
-	script.nodes = {
-		"0": _node("0", Types.NodeType.START, "start", {}),
-		"PB": _pill("PB", BASE),
-		"GA": _accessor("GA", accessor),
+	var script := Graph.build("scripts/Gating.sfe", {
+		"0": Graph.start(),
+		"PB": Graph.pill("PB", BASE),
+		"GA": Graph.accessor("GA", accessor),
 		# A memoized parent: process_boolean_chain recurses into an andBool's inputs but does
 		# not recompute the andBool itself, so its cached output is what a stale read returns.
-		"AND": _node("AND", Types.NodeType.AND_BOOL, "andBool", {"value2": VariantScript.from_bool(true)}),
-		"GF": _node("GF", Types.NodeType.GET_BOOL, "getBool", {"variable": "v_false", "isGlobal": false}),
-		"W": _setter("W", accessor),
-		"D": _dialogue("D", [{"id": "o1", "text": "direct"}, {"id": "o2", "text": "behind an and"}]),
-	}
-	script.connections = [
-		_exec("0", "D"),
-		_pill_wire("PB", "GA"), _pill_wire("PB", "W"),
-		_data_wire("GA", "boolean", "D", "boolean-o1"),
-		_data_wire("GA", "boolean", "AND", Handles.IN_BOOLEAN1),
-		_data_wire("AND", "boolean", "D", "boolean-o2"),
-		_data_wire("GF", "boolean", "W", "boolean-2"),
-	]
-	script.build_indices()
+		"AND": Graph.node("AND", Types.NodeType.AND_BOOL, "andBool", {"value2": VariantScript.from_bool(true)}),
+		"GF": Graph.node("GF", Types.NodeType.GET_BOOL, "getBool", {"variable": "v_false", "isGlobal": false}),
+		"W": Graph.setter("W", accessor),
+		"D": Graph.dialogue("D", [{"id": "o1", "text": "direct"}, {"id": "o2", "text": "behind an and"}]),
+	}, [
+		Graph.exec("0", "D"),
+		Graph.pill_wire("PB", "GA"), Graph.pill_wire("PB", "W"),
+		Graph.data_wire("GA", "boolean", "D", "boolean-o1"),
+		Graph.data_wire("GA", "boolean", "AND", Handles.IN_BOOLEAN1),
+		Graph.data_wire("AND", "boolean", "D", "boolean-o2"),
+		Graph.data_wire("GF", "boolean", "W", Handles.in_data_asset_value("boolean")),
+	], {
+		"v_false": Graph.scalar_var("v_false", "f", Types.VariableType.BOOLEAN, VariantScript.from_bool(false)),
+	})
 
 	_manager.reset_data_assets()
 	var component := _run(script)
@@ -318,29 +308,24 @@ func _test_option_gating_and_cache() -> void:
 ## than the table simply missing.
 func _test_string_literal_exemption() -> void:
 	print("-- .sfd strings are literals --")
-	var script := _script("scripts/Literal.sfe")
-	script.strings = {"en.Grunt": "LOCALIZED-GRUNT"}
-	script.variables = {
-		"v_key": _var("v_key", "k", Types.VariableType.STRING, VariantScript.from_string("Grunt")),
-		"out_da": _var("out_da", "FromDataAsset", Types.VariableType.STRING, VariantScript.from_string("")),
-		"out_var": _var("out_var", "FromScriptVar", Types.VariableType.STRING, VariantScript.from_string("")),
-	}
-	script.nodes = {
-		"0": _node("0", Types.NodeType.START, "start", {}),
-		"PB": _pill("PB", BASE),
-		"GT": _accessor("GT", {"variableId": V_TITLE, "variable": "title", "variableType": "string"}),
-		"GK": _node("GK", Types.NodeType.GET_STRING, "getString", {"variable": "v_key", "isGlobal": false}),
-		"S1": _node("S1", Types.NodeType.SET_STRING, "setString", {"variable": "out_da", "isGlobal": false}),
-		"S2": _node("S2", Types.NodeType.SET_STRING, "setString", {"variable": "out_var", "isGlobal": false}),
-		"D": _dialogue("D", []),
-	}
-	script.connections = [
-		_exec("0", "S1"), _exec_flow("S1", "S2"), _exec_flow("S2", "D"),
-		_pill_wire("PB", "GT"),
-		_data_wire("GT", "string", "S1", Handles.IN_STRING),
-		_data_wire("GK", "string", "S2", Handles.IN_STRING),
-	]
-	script.build_indices()
+	var script := Graph.build("scripts/Literal.sfe", {
+		"0": Graph.start(),
+		"PB": Graph.pill("PB", BASE),
+		"GT": Graph.accessor("GT", {"variableId": V_TITLE, "variable": "title", "variableType": "string"}),
+		"GK": Graph.node("GK", Types.NodeType.GET_STRING, "getString", {"variable": "v_key", "isGlobal": false}),
+		"S1": Graph.node("S1", Types.NodeType.SET_STRING, "setString", {"variable": "out_da", "isGlobal": false}),
+		"S2": Graph.node("S2", Types.NodeType.SET_STRING, "setString", {"variable": "out_var", "isGlobal": false}),
+		"D": Graph.dialogue("D"),
+	}, [
+		Graph.exec("0", "S1"), Graph.exec_flow("S1", "S2"), Graph.exec_flow("S2", "D"),
+		Graph.pill_wire("PB", "GT"),
+		Graph.data_wire("GT", "string", "S1", Handles.IN_STRING),
+		Graph.data_wire("GK", "string", "S2", Handles.IN_STRING),
+	], {
+		"v_key": Graph.scalar_var("v_key", "k", Types.VariableType.STRING, VariantScript.from_string("Grunt")),
+		"out_da": Graph.scalar_var("out_da", "FromDataAsset", Types.VariableType.STRING, VariantScript.from_string("")),
+		"out_var": Graph.scalar_var("out_var", "FromScriptVar", Types.VariableType.STRING, VariantScript.from_string("")),
+	}, {"en.Grunt": "LOCALIZED-GRUNT"})
 
 	var component := _run(script)
 	# Read the STORED variant, not get_string_variable, which resolves through the table again
@@ -363,35 +348,31 @@ func _test_string_literal_exemption() -> void:
 ## through to the name lookup silently clobbers the local instead.
 func _test_array_ops() -> void:
 	print("-- array ops route into the overlay --")
-	var add_script := _script("scripts/ArrayAdd.sfe")
-	add_script.variables = {
-		# THE DECOY: same display name as the accessor's snapshot below.
-		"tags": _array_var("tags", "tags", Types.VariableType.STRING, ["local-only"]),
-		"echo": _array_var("echo", "echo", Types.VariableType.STRING, []),
-	}
-	add_script.nodes = {
-		"0": _node("0", Types.NodeType.START, "start", {}),
-		"PC": _pill("PC", CHILD),
-		"GT": _accessor("GT", {"variableId": V_TAGS, "variable": "tags", "variableType": "string", "isArray": true}),
-		"GH": _accessor("GH", {"variableId": V_HP, "variable": "hp", "variableType": "integer"}),
-		"ADD": _node("ADD", Types.NodeType.ADD_TO_STRING_ARRAY, "addToStringArray", {"value": VariantScript.from_string("new")}),
+	var add_script := Graph.build("scripts/ArrayAdd.sfe", {
+		"0": Graph.start(),
+		"PC": Graph.pill("PC", CHILD),
+		"GT": Graph.accessor("GT", {"variableId": V_TAGS, "variable": "tags", "variableType": "string", "isArray": true}),
+		"GH": Graph.accessor("GH", {"variableId": V_HP, "variable": "hp", "variableType": "integer"}),
+		"ADD": Graph.node("ADD", Types.NodeType.ADD_TO_STRING_ARRAY, "addToStringArray", {"value": VariantScript.from_string("new")}),
 		# Reads ADD's own output. The routing clears the evaluation cache after its write, and
 		# _handle_array_modify stamps that output BEFORE the routing runs — so this node is
 		# what proves the clear was ordered against the stamp instead of wiping it.
-		"OUT": _node("OUT", Types.NodeType.SET_STRING_ARRAY, "setStringArray", {"variable": "echo", "isGlobal": false}),
+		"OUT": Graph.node("OUT", Types.NodeType.SET_STRING_ARRAY, "setStringArray", {"variable": "echo", "isGlobal": false}),
 		# Bound to a SCALAR: the array op must refuse it rather than write an array over a
 		# value the declaration promises is one integer.
-		"BAD": _node("BAD", Types.NodeType.ADD_TO_STRING_ARRAY, "addToStringArray", {"value": VariantScript.from_string("nope")}),
-		"D": _dialogue("D", []),
-	}
-	add_script.connections = [
-		_exec("0", "ADD"), _exec_flow("ADD", "OUT"), _exec_flow("OUT", "BAD"), _exec_flow("BAD", "D"),
-		_pill_wire("PC", "GT"), _pill_wire("PC", "GH"),
-		_data_wire("GT", "string-array", "ADD", Handles.IN_STRING_ARRAY),
-		_data_wire("ADD", "string-array", "OUT", Handles.IN_STRING_ARRAY),
-		_data_wire("GH", "string-array", "BAD", Handles.IN_STRING_ARRAY),
-	]
-	add_script.build_indices()
+		"BAD": Graph.node("BAD", Types.NodeType.ADD_TO_STRING_ARRAY, "addToStringArray", {"value": VariantScript.from_string("nope")}),
+		"D": Graph.dialogue("D"),
+	}, [
+		Graph.exec("0", "ADD"), Graph.exec_flow("ADD", "OUT"), Graph.exec_flow("OUT", "BAD"), Graph.exec_flow("BAD", "D"),
+		Graph.pill_wire("PC", "GT"), Graph.pill_wire("PC", "GH"),
+		Graph.data_wire("GT", "string-array", "ADD", Handles.IN_STRING_ARRAY),
+		Graph.data_wire("ADD", "string-array", "OUT", Handles.IN_STRING_ARRAY),
+		Graph.data_wire("GH", "string-array", "BAD", Handles.IN_STRING_ARRAY),
+	], {
+		# THE DECOY: same display name as the accessor's snapshot above.
+		"tags": Graph.array_var("tags", "tags", Types.VariableType.STRING, ["local-only"]),
+		"echo": Graph.array_var("echo", "echo", Types.VariableType.STRING, []),
+	})
 
 	_manager.reset_data_assets()
 	var component := _run(add_script)
@@ -414,21 +395,24 @@ func _test_array_ops() -> void:
 	_teardown(component)
 
 	# clearArray routes through the same single site (unlike the HTML runtime, which gives it
-	# its own branch), and the emptied array must keep its element type.
-	var clear_script := _script("scripts/ArrayClear.sfe")
-	clear_script.nodes = {
-		"0": _node("0", Types.NodeType.START, "start", {}),
-		"PC": _pill("PC", CHILD),
-		"GT": _accessor("GT", {"variableId": V_TAGS, "variable": "tags", "variableType": "string", "isArray": true}),
-		"CLR": _node("CLR", Types.NodeType.CLEAR_STRING_ARRAY, "clearStringArray", {}),
-		"D": _dialogue("D", []),
-	}
-	clear_script.connections = [
-		_exec("0", "CLR"), _exec_flow("CLR", "D"),
-		_pill_wire("PC", "GT"),
-		_data_wire("GT", "string-array", "CLR", Handles.IN_STRING_ARRAY),
-	]
-	clear_script.build_indices()
+	# its own branch), and the emptied array must keep its element type — on BOTH sides: in the
+	# overlay, and on the op's own output pin, which is what the re-stamp is for. An emptied
+	# array is exactly the case set_array cannot tag on its own, having no element zero to read.
+	#
+	# This chain DEAD-ENDS at the op instead of parking on a dialogue: _handle_dialogue clears
+	# every cached output on entry, so a dialogue after the op would wipe the very stamp the
+	# last two assertions read. A setStringArray consumer could not stand in for them either —
+	# _handle_array_set re-infers the tag off element zero, which an empty array does not have.
+	var clear_script := Graph.build("scripts/ArrayClear.sfe", {
+		"0": Graph.start(),
+		"PC": Graph.pill("PC", CHILD),
+		"GT": Graph.accessor("GT", {"variableId": V_TAGS, "variable": "tags", "variableType": "string", "isArray": true}),
+		"CLR": Graph.node("CLR", Types.NodeType.CLEAR_STRING_ARRAY, "clearStringArray", {}),
+	}, [
+		Graph.exec("0", "CLR"),
+		Graph.pill_wire("PC", "GT"),
+		Graph.data_wire("GT", "string-array", "CLR", Handles.IN_STRING_ARRAY),
+	])
 
 	_manager.reset_data_assets()
 	var clear_component := _run(clear_script)
@@ -436,6 +420,10 @@ func _test_array_ops() -> void:
 	_check("clearArray on a .sfd accessor empties it in the overlay",
 		cleared != null and cleared.get_array().is_empty())
 	_check("and the emptied array keeps its element type", cleared != null and cleared.type == Types.VariableType.STRING)
+	var clear_output = clear_component._context.get_node_state("CLR").cached_output
+	_check("the op's OUTPUT pin is emptied too", clear_output != null and clear_output.get_array().is_empty())
+	_check("and carries the same element type the overlay got, not an untagged array",
+		clear_output != null and clear_output.type == Types.VariableType.STRING)
 	_teardown(clear_component)
 
 
@@ -468,86 +456,6 @@ func _teardown(component: StoryFlowComponent) -> void:
 	component.stop_dialogue()
 	root.remove_child(component)
 	component.queue_free()
-
-
-# =============================================================================
-# Graph construction helpers
-# =============================================================================
-
-func _script(path: String) -> StoryFlowScript:
-	var script := ScriptScript.new()
-	script.script_path = path
-	return script
-
-
-func _node(id: String, node_type: Types.NodeType, type_string: String, data: Dictionary) -> Dictionary:
-	return {"id": id, "type": node_type, "type_string": type_string, "data": data}
-
-
-func _pill(id: String, asset_id: String) -> Dictionary:
-	return _node(id, Types.NodeType.GET_DATA_ASSET, "getDataAsset", {"assetId": asset_id})
-
-
-func _accessor(id: String, data: Dictionary) -> Dictionary:
-	return _node(id, Types.NodeType.GET_DATA_ASSET_VARIABLE, "getDataAssetVariable", data.duplicate())
-
-
-func _setter(id: String, data: Dictionary) -> Dictionary:
-	return _node(id, Types.NodeType.SET_DATA_ASSET_VARIABLE, "setDataAssetVariable", data.duplicate())
-
-
-func _dialogue(id: String, options: Array) -> Dictionary:
-	return _node(id, Types.NodeType.DIALOGUE, "dialogue", {"title": "", "text": id, "options": options})
-
-
-func _var(id: String, name: String, type: Types.VariableType, value) -> Dictionary:
-	return {"id": id, "name": name, "type": type, "value": value}
-
-
-func _array_var(id: String, name: String, type: Types.VariableType, values: Array) -> Dictionary:
-	var elements: Array = []
-	for value in values:
-		elements.append(VariantScript.from_string(str(value)))
-	var variant := VariantScript.new()
-	variant.set_array(elements)
-	variant.type = type
-	return {"id": id, "name": name, "type": type, "value": variant, "is_array": true}
-
-
-func _map_var(id: String, name: String, entries: Dictionary) -> Dictionary:
-	return {"id": id, "name": name, "type": Types.VariableType.MAP, "value": VariantScript.from_map(entries)}
-
-
-func _edge(source: String, source_handle: String, target: String, target_handle: String) -> Dictionary:
-	return {
-		"id": "%s->%s:%s" % [source, target, target_handle],
-		"source": source, "target": target,
-		"source_handle": source_handle, "target_handle": target_handle,
-	}
-
-
-## The exec edge out of a node with no OUT_FLOW suffix (start, dialogue).
-func _exec(source: String, target: String) -> Dictionary:
-	return _edge(source, Handles.source(source), target, Handles.target(target))
-
-
-## The exec edge out of a Set node, which flows from its OUT_FLOW pin.
-func _exec_flow(source: String, target: String) -> Dictionary:
-	return _edge(source, Handles.source(source, Handles.OUT_FLOW), target, Handles.target(target))
-
-
-## The .sfd reference wire: pill -> accessor, the ONLY thing that binds an accessor.
-func _pill_wire(pill: String, target: String) -> Dictionary:
-	return _edge(pill, "source-%s-dataAsset-" % pill, target, Handles.target(target, Handles.IN_DATA_ASSET))
-
-
-func _data_wire(source: String, source_type: String, target: String, target_suffix: String) -> Dictionary:
-	return _edge(source, "source-%s-%s-" % [source, source_type], target, Handles.target(target, target_suffix))
-
-
-func _map_wire(source: String, target: String, key_type: String, value_type: String) -> Dictionary:
-	return _edge(source, "source-%s-map-%s-%s" % [source, key_type, value_type],
-		target, Handles.target(target, Handles.in_map(key_type, value_type, Handles.DATA_ASSET_VALUE_OPTION)))
 
 
 # =============================================================================

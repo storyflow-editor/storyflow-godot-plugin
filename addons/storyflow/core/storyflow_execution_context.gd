@@ -140,9 +140,14 @@ var data_asset_warnings_emitted: int = 0
 
 ## Claim the warn latch for one (node, reason) pair (engine contract 6).
 ##
-## Returns true exactly once per pair per run; the CALLER formats the message and calls
-## push_warning INSIDE the if, so the suppressed path — which is the common one, since
-## option conditions re-evaluate on every render — allocates no string at all.
+## Returns true exactly once per pair per run. The CALLER formats the message and calls
+## push_warning INSIDE the if, which is what keeps the suppressed path — the common one, since
+## option conditions re-evaluate on every render — off the expensive allocation: the warning
+## text interpolates an asset id, a variable id and a node id, and is never built at all once
+## the latch is claimed. The composite key below is still built per call; a nested
+## node -> reason -> true Dictionary would avoid even that, and was judged not worth the
+## lookup indirection and the less legible test assertions for a path that only runs while a
+## graph is broken.
 func should_warn_data_asset(node_id: String, reason: String) -> bool:
 	var key := "%s|%s" % [node_id, reason]
 	if warned_data_asset_nodes.has(key):

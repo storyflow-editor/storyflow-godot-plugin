@@ -2210,9 +2210,16 @@ func _update_connected_array_variable(node: Dictionary, array_handle_suffix: Str
 		# not: _handle_array_modify already stamped THIS op's result onto its own node state
 		# before calling us, and a downstream array read pulls that cached output. Clearing
 		# without restoring it would break array chaining, so the stamp is re-applied here.
+		#
+		# It is re-applied from da_elements and re-TAGGED, not copied from new_array: what this
+		# op hands downstream must be what it stored. An enum-declared array fed plain strings
+		# would otherwise show STRING-tagged elements on the output pin and ENUM-tagged ones in
+		# the overlay, and an op that emptied the array would hand out an untagged one — the
+		# exact hole the write's own stamp two lines up exists to close.
 		_evaluator.clear_cache()
 		var restamp := StoryFlowVariant.new()
-		restamp.set_array(new_array)
+		restamp.set_array(da_elements)
+		restamp.type = StoryFlowDataAssetStore.storage_type(da_declared)
 		_context.get_node_state(node_id).cached_output = restamp
 		return
 
@@ -3007,7 +3014,7 @@ func _read_data_asset_set_input(node: Dictionary, data: Dictionary) -> StoryFlow
 		return StoryFlowVariant.from_map(snapshot)
 
 	if bool(data.get("isArray", false)):
-		var array_suffix := StoryFlowHandles.in_data_asset_value(variable_type, true)
+		var array_suffix := StoryFlowHandles.in_data_asset_array_value(variable_type)
 		if _context.current_script.find_input_edge(node_id, array_suffix).is_empty():
 			return null
 		# Reuses the character path's typed-array dispatcher — it is generic, only its name is
@@ -3022,7 +3029,7 @@ func _read_data_asset_set_input(node: Dictionary, data: Dictionary) -> StoryFlow
 		array_variant.type = StoryFlowDataAssetStore.storage_type(declared)
 		return array_variant
 
-	var scalar_suffix := StoryFlowHandles.in_data_asset_value(variable_type, false)
+	var scalar_suffix := StoryFlowHandles.in_data_asset_value(variable_type)
 	var edge: Dictionary = _context.current_script.find_input_edge(node_id, scalar_suffix)
 	if edge.is_empty():
 		return null

@@ -1006,6 +1006,9 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 		_:
 			result = ""
 
+	# NOT EVERY ARM REACHES THIS TAIL: the .sfd accessor arm above returns early, because
+	# data-assets.json carries no strings table and its values are literals (contract 2.1).
+	# Anything added here must be added there too, or the two paths silently diverge.
 	var resolved_result := _resolve_string_key(result)
 	_sf_trace("EVAL %s %s result=%s" % [node_id, node.get("type_string", ""), resolved_result])
 
