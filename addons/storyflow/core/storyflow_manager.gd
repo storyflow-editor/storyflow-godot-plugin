@@ -224,23 +224,29 @@ func save_to_slot(slot_name: String) -> bool:
 ## divergent stores for the rest of the session. That was the v1.2.3 bug in reset_global_variables
 ## and it lived on this function's global-variable line until the v1 unification.
 ##
-## A saved VALUE is applied onto the variable record the project already declares, rather than
-## the whole record replacing it. The declaration is the project's to own: enum value lists, the
-## input/output flags and the map K/V metadata all come from the import and none of them are
-## state a save has any business rewriting. A save that predates a newly added variable therefore
-## leaves it alone instead of deleting it, and an id the project no longer declares is dropped.
+## THE FOUR SECTIONS SPLIT INTO TWO KINDS, and the split is deliberate:
+##
+##  - GLOBALS and CHARACTERS take VALUES onto the records the project already declares. The
+##    declaration is the project's to own: enum value lists, the input/output flags and the map
+##    K/V metadata all come from the import and none of them are state a save has any business
+##    rewriting. A save that predates a newly added variable therefore leaves it alone instead of
+##    deleting it, and an id the project no longer declares is dropped.
+##  - ONCE-ONLY OPTIONS and the .sfd OVERLAY are REPLACED wholesale. Each is one complete SET
+##    rather than a collection of independent entries: an option key absent from the save means
+##    the player has not used it, and an overlay entry absent from the save means that variable
+##    is back on seed state. Merging either would let the pre-load session leak into the loaded
+##    game, which for the overlay is contract 7's replace-not-merge rule verbatim.
 func load_from_slot(slot_name: String) -> bool:
 	# The .sfd overlay's typing needs the live seed, so it is handed to the reader rather than
 	# applied afterwards.
 	#
 	# NO EVALUATOR CACHE IS CLEARED after this load, and that is a determination rather than an
 	# omission: the guard below refuses a load while ANY dialogue is registered as active, and
-	# the only path that unregisters one (StoryFlowComponent.stop_dialogue) nulls that
-	# component's evaluator BEFORE it calls register_dialogue_end. The other teardown path,
-	# _exit_tree, nulls the evaluator without unregistering at all, so the count only ever errs
-	# toward refusing. There is therefore no live evaluator holding a memoized read at the moment
-	# a load lands, and nothing to invalidate. Host WRITES are a different story and do clear -
-	# see the data-asset setters on StoryFlowComponent.
+	# BOTH paths that give a registration back - StoryFlowComponent.stop_dialogue and its
+	# _exit_tree - go through that component's _end_dialogue_registration, which nulls its
+	# evaluator before it decrements. A count that reaches zero therefore cannot leave a live
+	# evaluator holding a memoized read, so there is nothing here to invalidate. Host WRITES are
+	# a different story and do clear - see the data-asset setters on StoryFlowComponent.
 	if is_dialogue_active():
 		push_warning("[StoryFlow] Cannot load while dialogue is active")
 		return false

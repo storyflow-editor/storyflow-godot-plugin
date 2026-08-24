@@ -21,6 +21,8 @@ extends SceneTree
 ## Or: powershell -File tests/run_tests.ps1 -GodotExe <path-to-godot>
 
 const CharacterScript := preload("res://addons/storyflow/core/storyflow_character.gd")
+const ComponentScript := preload("res://addons/storyflow/core/storyflow_component.gd")
+const Graph := preload("res://tests/data_asset_test_graph.gd")
 const ImporterScript := preload("res://addons/storyflow/editor/storyflow_importer.gd")
 const ManagerScript := preload("res://addons/storyflow/core/storyflow_manager.gd")
 const ProjectScript := preload("res://addons/storyflow/core/storyflow_project.gd")
@@ -62,6 +64,7 @@ func _initialize() -> void:
 	_test_load_rules()
 	_test_in_place_pins()
 	_test_character_name_and_image()
+	await _test_dialogue_registration_balance()
 	_test_enum_array_element_tags()
 
 	if _failures == 0:
@@ -202,6 +205,12 @@ func _test_round_trip_and_resave() -> void:
 	# RESAVE STABILITY: a save -> load -> save cycle must be a fixed point. This is what a
 	# declaration-typed load buys — a read cannot tell an enum from a string, but the next save
 	# can.
+	#
+	# BYTE-IDENTITY IS THE INSTRUMENT, NOT THE CONTRACT. It is simply the sharpest comparison
+	# available here, and it over-pins: it also asserts key ORDER, which the format does not
+	# require of anyone (JSON object key order is not meaningful, and this only holds because
+	# JSON.stringify sorts). A deliberate change to how keys are ordered is expected to update
+	# this assertion; a change to what is IN the document is not.
 	_check("resave writes a slot", _manager.save_to_slot("unified_rt2"))
 	_check("save -> load -> save is byte-identical",
 		_read_slot_text("unified_rt") == _read_slot_text("unified_rt2"))
@@ -430,6 +439,66 @@ func _test_character_name_and_image() -> void:
 	_check("the runtime portrait survives the round trip", hero.image_key == "portraits/warden_angry.png")
 	_check("and the restore reached the LIVE character object, not a copy",
 		_manager.get_runtime_character(HERO_PATH).character_name == "The Warden")
+
+
+# =============================================================================
+# 8b. The active-dialogue count that gates every load
+# =============================================================================
+
+## THE COUNT MUST BALANCE, because it is what every load is gated on. A component freed
+## mid-dialogue - a scene change, a queue_free - used to keep its registration forever, which
+## silently disabled .sfd persistence for the rest of the session with no way back short of
+## restarting the game. It is also the invariant the loader's no-cache-clear reasoning rests on.
+##
+## TWO COMPONENTS, because each interesting failure is invisible with one: a LEAKED registration
+## hides behind "some dialogue really is running", and a DOUBLE decrement is clamped away by
+## register_dialogue_end's maxi(0, ...). With two, each one shows up as the count landing on the
+## wrong side of the load guard while the other component's state says otherwise.
+func _test_dialogue_registration_balance() -> void:
+	print("-- the active-dialogue count balances --")
+	_manager.reset_all_state()
+	var script := Graph.build("scripts/Idle.sfe", {
+		"0": Graph.start(),
+		"D": Graph.dialogue("D"),
+	}, [Graph.exec("0", "D")])
+	_manager.get_project().scripts[script.script_path] = script
+
+	var a := _start_component(script.script_path)
+	var b := _start_component(script.script_path)
+	_check("two running dialogues refuse a load", not _manager.load_from_slot("unified_shape"))
+
+	# A stops NORMALLY and is only then torn out of the tree. _exit_tree must not decrement a
+	# second time: if it did, the count would already be at zero and the load below would be
+	# allowed while B is still parked in its dialogue.
+	a.stop_dialogue()
+	root.remove_child(a)
+	a.queue_free()
+	_check("a stopped-then-freed component gives its registration back exactly once",
+		not _manager.load_from_slot("unified_shape"))
+
+	# B is torn out of the tree MID-DIALOGUE, with no stop_dialogue at all. This is the leak.
+	root.remove_child(b)
+	b.queue_free()
+	_check("a component freed mid-dialogue gives its registration back",
+		_manager.load_from_slot("unified_shape"))
+	_check("and the manager agrees no dialogue is active", not _manager.is_dialogue_active())
+
+	# The real-world shape, rather than a hand-rolled remove_child: queue_free reaches the same
+	# _exit_tree notification one frame later, which is how a scene change actually looks.
+	var c := _start_component(script.script_path)
+	_check("a fresh dialogue refuses a load again", not _manager.load_from_slot("unified_shape"))
+	c.queue_free()
+	await process_frame
+	_check("and a queue_free'd component releases its registration too",
+		_manager.load_from_slot("unified_shape"))
+
+
+func _start_component(script_path: String) -> Node:
+	var component := ComponentScript.new()
+	component.dialogue_ui_scene = null
+	root.add_child(component)
+	component.start_dialogue_with_script(script_path)
+	return component
 
 
 # =============================================================================

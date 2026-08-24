@@ -95,6 +95,18 @@ var _dialogue_dirty: bool = false
 var _waiting_for_audio_advance: bool = false
 var _audio_advance_allow_skip: bool = false
 
+## Whether THIS component currently holds a registration on the manager's active-dialogue count.
+##
+## That count gates save loading - StoryFlowManager.load_from_slot refuses while it is above zero
+## - so a registration that is never given back disables .sfd persistence for the rest of the
+## session, silently and with no way back short of restarting the game. _exit_tree was exactly
+## that hole: a component freed mid-dialogue (a scene change, a queue_free) tore its state down
+## without ever unregistering.
+##
+## One witness, set beside the increment and honoured by BOTH teardown paths, is what makes the
+## count balance by construction instead of by every exit remembering to.
+var _counted_dialogue_start: bool = false
+
 ## NodeType enum value -> Callable
 var _node_handlers: Dictionary = {}
 
@@ -116,14 +128,36 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	if _audio:
 		_audio.stop()
-	# Silently clean up without emitting signals or accessing the manager,
-	# which may already be freed during tree teardown.
+	# Silently clean up without emitting signals - listeners are being torn down too and a
+	# script_ended fired from here reaches nobody useful. The manager registration is the one
+	# thing that must still be given back: it gates save loading, so a component freed
+	# mid-dialogue would otherwise hold it for the rest of the session.
 	if _context and _context.is_executing:
 		_context.reset()
-		_evaluator = null
 		if _dialogue_ui_instance and is_instance_valid(_dialogue_ui_instance):
 			_dialogue_ui_instance.queue_free()
 			_dialogue_ui_instance = null
+	_end_dialogue_registration()
+
+
+## Drop this component's evaluator AND give back its active-dialogue registration, together.
+##
+## THE TWO BELONG ON ONE PATH. StoryFlowManager.load_from_slot refuses to load while the count is
+## above zero and clears no evaluator cache when it does load, and that is only sound because a
+## count reaching zero means every component that was counted has already dropped its evaluator.
+## Splitting them would turn that invariant into a coincidence maintained by two call sites.
+##
+## IDEMPOTENT, which is the whole point of the witness: a redundant stop_dialogue, or a
+## stop_dialogue followed by _exit_tree, decrements once. get_node_or_null (through get_manager)
+## keeps a teardown where the autoload is already freed a no-op rather than an error.
+func _end_dialogue_registration() -> void:
+	_evaluator = null
+	if not _counted_dialogue_start:
+		return
+	_counted_dialogue_start = false
+	var mgr := get_manager()
+	if mgr:
+		mgr.register_dialogue_end()
 
 # =============================================================================
 # Control Functions
@@ -186,8 +220,9 @@ func start_dialogue_with_script(path: String) -> void:
 	_text.set_manager(mgr)
 	_text.set_language_code(language_code)
 
-	# Register with manager
+	# Register with manager, and witness it so both teardown paths can give it back exactly once.
 	mgr.register_dialogue_start()
+	_counted_dialogue_start = true
 
 	# Create dialogue UI (use built-in default if none assigned)
 	var ui_scene: PackedScene = dialogue_ui_scene
@@ -377,11 +412,7 @@ func stop_dialogue() -> void:
 		current_script_path = _context.current_script.script_path
 
 	_context.reset()
-	_evaluator = null
-
-	var mgr := get_manager()
-	if mgr:
-		mgr.register_dialogue_end()
+	_end_dialogue_registration()
 
 	script_ended.emit(current_script_path)
 	dialogue_ended.emit()
@@ -629,6 +660,24 @@ func get_character_portrait(character_path: String, asset_key: String = "") -> T
 # [param asset] takes an asset's ID or its display NAME, because both audiences exist: the
 # exporter keys everything by id (ids survive a rename) while a programmer holds the name they
 # typed in the editor. The ID is tried first and exactly; a name must match exactly ONE asset.
+#
+# TWO NAMING DECISIONS, both departures from their nearest neighbours in this file:
+#
+#  - NO _variable SUFFIX. get_bool_variable reads a script or global variable and the suffix is
+#    what separates it from get_character_variable; here the get_data_asset_ prefix already says
+#    what is being read, and get_data_asset_bool_variable would be saying it twice.
+#  - TYPED, WHERE THE CHARACTER ACCESSORS ARE UNTYPED. get_character_variable hands back a
+#    StoryFlowVariant and lets the caller pick a getter, which works because a character variable
+#    has no declaration to refuse against - the built-in Name and Image fields are not declared
+#    anywhere. A .sfd variable does have one, and the whole value of the strict gate above is
+#    refusing a mistyped read instead of quietly answering the wrong thing, which needs one
+#    accessor per type to have something to refuse. get_data_asset_variant is the untyped door
+#    for callers that want the character-accessor shape.
+#
+# CROSS-PORT: this matches Unity's GetDataAssetBool. Unreal spells the same call
+# GetDataAssetBoolVariable - two of the three ports agree, and the contract does not pin API
+# naming (section 1 is about node semantics, not host surfaces), so the divergence is recorded
+# rather than resolved.
 #
 # Reads and writes go through the MANAGER's seed and overlay rather than the execution context's,
 # so they work outside a dialogue too. Inside one they are the same two dictionaries — the
