@@ -138,9 +138,16 @@ func duplicate_variant() -> StoryFlowVariant:
 	v._int_value = _int_value
 	v._float_value = _float_value
 	v._string_value = _string_value
-	v._array_value = _array_value.duplicate(true)
-	# duplicate(true) deep-copies nested containers but NOT Object values, so the
-	# StoryFlowVariant entries must be duplicated explicitly to detach the copy.
+	# duplicate(true) deep-copies nested containers but NOT Object values, and
+	# StoryFlowVariant is a RefCounted - so BOTH containers must duplicate their
+	# variant members explicitly or the copy keeps handing out the source's own
+	# element objects, and writing through one of them reaches the original.
+	v._array_value = []
+	for element in _array_value:
+		if element is StoryFlowVariant:
+			v._array_value.append(element.duplicate_variant())
+		else:
+			v._array_value.append(element)
 	for key in _map_value:
 		var entry_value = _map_value[key]
 		if entry_value is StoryFlowVariant:
@@ -207,6 +214,11 @@ static func from_map(value: Dictionary) -> StoryFlowVariant:
 
 
 ## Deep-copy a variables dictionary (id -> { ..., "value": StoryFlowVariant }).
+##
+## "value" is the ONLY variant-bearing field in a variable dictionary — the rest is
+## declaration metadata (name, type flags, enum value lists) that nothing mutates at
+## runtime — so the shallow duplicate() plus the explicit value copy below is a full
+## detach, and this inherits whatever duplicate_variant guarantees.
 static func deep_copy_variables(source: Dictionary) -> Dictionary:
 	var result := {}
 	for var_id in source:

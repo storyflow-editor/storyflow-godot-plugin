@@ -32,7 +32,10 @@ const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.
 ## hand back the declaration Dictionary BY REFERENCE into the seed, and GDScript has no
 ## const to stop a caller writing through it. Everything else here copies —
 ## [method try_resolve] duplicates out, [method try_set] duplicates in — so those two are the
-## only way to reach seed storage. Read declarations, never write to them.
+## only way to reach seed storage. And it is not only SEED storage: [method build_seed] shares
+## each level's declaration ARRAY by reference with the project's own data_assets table, so a
+## caller writing through a declaration corrupts the imported project too, and a game reset
+## rebuilds the seed straight back onto the damage. Read declarations, never write to them.
 ##
 ## Deliberately does NOT resolve string-table keys the way character and global variables do:
 ## data-assets.json carries no strings table (the exporter writes .sfd values verbatim), so a
@@ -50,6 +53,24 @@ const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.
 ## is a CONTRACT value shared by all four runtimes, and moving it would make Godot resolve a
 ## chain the other three abandon (or the reverse).
 const MAX_CHAIN_DEPTH := 64
+
+## What ONE chain walk found for a bound accessor: either a usable value, or which CHAIN-SIDE
+## rung of the degraded ladder (contract section 6) the binding fell off.
+##
+## Only the two rungs the walk itself can answer are here. The other three ladder reasons —
+## no variableId on the node, no pill wired to its dataAsset pin, and an assetId the seed does
+## not carry — are GRAPH-side questions the caller settles before there is a chain to walk
+## (the last one via [method has_asset], which is what draws the dead-reference line). An
+## unknown asset reaching [method read_bound] anyway answers MISSING, because a walk that
+## visits no level declares nothing.
+enum Binding {
+	## The chain declares the id and the declaration still matches the spawn snapshot.
+	OK,
+	## No level of the chain declares the id.
+	MISSING,
+	## Declared, but the declaration no longer matches the spawn snapshot (section 6.1).
+	CHANGED,
+}
 
 
 # =============================================================================
@@ -252,9 +273,21 @@ static func _type_scalar(declared_type: StoryFlowTypes.VariableType, raw) -> Sto
 ## Godot Dictionaries preserve insertion order.
 ##
 ## Keys are raw values coerced from the declared keyType — never strings-table keys — matching
-## [code]StoryFlowImporter._coerce_map_key[/code]. An entry whose value does not fit the
-## declared valueType keeps its key with the type default rather than vanishing: a missing KEY
-## makes an entry unaddressable, a bad value does not.
+## [code]StoryFlowImporter._coerce_map_key[/code]. An entry with NO KEY is unaddressable and is
+## skipped; that part is not a choice.
+##
+## RECORDED DIVERGENCE, not parity: what happens to an entry whose VALUE does not fit the
+## declared valueType is left ENGINE-DEFINED by the contract, and all four runtimes answer
+## differently — the HTML reference keeps the raw value, Unreal shape-dispatches, Unity coerces,
+## and Godot (here) KEEPS THE KEY with the declared type's default. Do not "fix" this toward
+## another engine without changing the contract first; a shipped seed cannot reach it anyway,
+## because the collector strips invalid overrides before export.
+##
+## Note the INTERNAL ASYMMETRY this creates, deliberately: a bad ARRAY element drops the whole
+## array ([method type_value] returns null and the override is refused), while a bad MAP ENTRY
+## VALUE keeps its key with a default. An array is one value whose shape either fits or does
+## not; a map is a keyed collection where one bad entry should not cost the caller the other
+## twenty keys it can still address.
 static func _type_map_entries(declaration: Dictionary, raw: Array) -> Dictionary:
 	var key_type: StoryFlowTypes.VariableType = declaration.get("key_type", StoryFlowTypes.VariableType.NONE)
 	var value_type: StoryFlowTypes.VariableType = declaration.get("value_type", StoryFlowTypes.VariableType.NONE)
@@ -422,6 +455,48 @@ static func try_resolve(seed: Dictionary, overlay: Dictionary, asset_id: String,
 	var found := _walk_for_value(seed, overlay, asset_id, variable_id)
 	if not found["found"]:
 		return null
+	return _copy_out(found)
+
+
+## ONE WALK for a bound accessor's read: resolve the value AND settle which chain-side rung
+## (if any) the binding is on. Answers { "status": Binding, "value": StoryFlowVariant or null },
+## with a value only on [constant Binding.OK].
+##
+## The pair this replaces — [method find_declaration] for the ladder, then [method try_resolve]
+## for the value — walked the same chain TWICE on every read, and option conditions re-resolve
+## on every render. Splitting them also let the two disagree in principle (decl_matches checked
+## against one walk's declaration, the value taken from another's), which is a class of bug
+## this shape cannot have.
+##
+## The DECLARATION deliberately does not come back out. Past an OK result the caller's own
+## snapshot ([param wire_type] / [param is_array] / [param key_type] / [param value_type]) IS
+## the chain's declared shape, so it already holds everything a declaration would tell it — and
+## a declaration is a live reference into seed AND project storage (see this class's header).
+##
+## [method try_resolve] stays as the NO-SNAPSHOT variant rather than routing through here: the
+## host API and any caller holding an id it trusts have no pins to check, and would have to
+## invent a snapshot just to be told it matches. Both share the one walk and the one
+## [method _copy_out], so there is nothing left for them to disagree about.
+static func read_bound(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String, wire_type: String, is_array: bool, key_type: String, value_type: String) -> Dictionary:
+	var found := _walk_for_value(seed, overlay, asset_id, variable_id)
+	if not found["found"]:
+		return {"status": Binding.MISSING, "value": null}
+	# Section 6.1: the declaration moved under a live node. Treated as MISSING by every caller,
+	# never coerced — within the string family a value carries no evidence of its declared
+	# type, which is exactly why the check is on the DECLARATION.
+	if not decl_matches(found["declaration"], wire_type, is_array, key_type, value_type):
+		return {"status": Binding.CHANGED, "value": null}
+	return {"status": Binding.OK, "value": _copy_out(found)}
+
+
+## The value a completed walk hands OUT: the nearest overlay-or-override hit, else the
+## root-most declaration's own value, ALWAYS duplicated (contract section 3).
+##
+## A declaration carrying no value at all copies out as its TYPE DEFAULT rather than as
+## nothing. Nothing [method build_seed] produces has that shape — the importer stamps a default
+## — but the seed is a plain Dictionary any caller can assemble, and this walk should not
+## depend on a repair that happens somewhere else.
+static func _copy_out(found: Dictionary) -> StoryFlowVariant:
 	if found["has_nearest"]:
 		var nearest: StoryFlowVariant = found["nearest"]
 		return nearest.duplicate_variant()

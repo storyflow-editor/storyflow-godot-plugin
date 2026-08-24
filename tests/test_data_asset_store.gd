@@ -2,12 +2,21 @@ extends SceneTree
 ## Headless tests for the .sfd Data Asset seed store and chain resolver
 ## (StoryFlowDataAssetStore) plus the importer parse path that feeds it.
 ##
-## FIXTURES: tests/fixtures/engine-contract/data-assets-{seed,resolution,writes}.json are the
-## SHARED CROSS-ENGINE goldens, copied verbatim from the editor repo. They are GENERATED from
-## the HTML runtime by src/__tests__/runtime/engine-contract-fixtures.test.ts (regenerate with
-## REGEN_FIXTURES=1) — never hand-edit them here, and re-copy rather than patch when they move.
-## The same four files live in the Unreal and Unity plugin repos; byte drift between the copies
-## is the parity failure they exist to prevent.
+## FIXTURES: the shared CROSS-ENGINE goldens, copied verbatim from the editor repo and
+## GENERATED there from the HTML runtime by src/__tests__/runtime/engine-contract-fixtures.test.ts
+## (regenerate with REGEN_FIXTURES=1). Never hand-edit them here, and re-copy rather than patch
+## when they move — the same files live in the Unreal and Unity plugin repos, and byte drift
+## between the copies is the parity failure they exist to prevent.
+##
+## All five landed in one drop, but they belong to three different tasks:
+##   tests/fixtures/engine-contract/data-assets-seed.json        this file (the seed family)
+##   tests/fixtures/engine-contract/data-assets-resolution.json  this file (44 resolutions)
+##   tests/fixtures/engine-contract/data-assets-writes.json      this file (6 writes + 44 post-write);
+##                                                               its saveKey member is G3's
+##   tests/fixtures/engine-contract/data-assets-degraded.json    G2 (the 20 ladder cases)
+##   tests/fixtures/unified-state-v1.json                        G3 (the unified save shape)
+## Nothing here reads the last two, and that is not an oversight — the fixture drop is one
+## commit on purpose, the same way the Unreal port landed its set ahead of the arms.
 ##
 ## Every fixture-driven loop is COUNT-GUARDED: a fixture that silently shrinks would otherwise
 ## turn into a test that silently passes.
@@ -47,6 +56,7 @@ func _initialize() -> void:
 	_test_overlay_guards()
 	_test_chain_guards()
 	_test_seed_build_drops_and_typing()
+	_test_read_bound()
 	_test_decl_matches()
 
 	if _failures == 0:
@@ -125,11 +135,20 @@ func _test_overlay_guards() -> void:
 	var seed := _seed_from_fixture()
 	var overlay: Dictionary = {}
 
-	# Copy-on-read, ARRAYS: mutating a resolved array must not reach the seed.
+	# Copy-on-read, ARRAYS: mutating a resolved array must not reach the seed. The CONTAINER
+	# and its ELEMENTS are separate guarantees — Array.duplicate(true) copies nested
+	# containers but not Object values, so an array of RefCounted variants can come back
+	# with a fresh container still holding the seed's own element objects.
 	var tags := StoreScript.try_resolve(seed, overlay, BASE, V_TAGS)
 	tags.get_array().append(VariantScript.from_string("injected"))
 	var tags_again := StoreScript.try_resolve(seed, overlay, BASE, V_TAGS)
 	_check("copy-on-read: mutating a resolved array does not reach the seed", tags_again.get_array().size() == 2)
+
+	var tags_elements := StoreScript.try_resolve(seed, overlay, BASE, V_TAGS)
+	tags_elements.get_array()[0].set_string("injected")
+	var tags_elements_again := StoreScript.try_resolve(seed, overlay, BASE, V_TAGS)
+	_check("copy-on-read: mutating a resolved array ELEMENT does not reach the seed",
+		tags_elements_again.get_array()[0].get_string() == "mob")
 
 	# Copy-on-read, MAPS: the entry list AND its entry variants are detached.
 	var loot := StoreScript.try_resolve(seed, overlay, BASE, V_LOOT)
@@ -231,6 +250,8 @@ func _test_seed_build_drops_and_typing() -> void:
 				{"id": "valueless", "name": "valueless", "type": "integer"},
 				{"id": "badmap", "name": "badmap", "type": "map", "keyType": "string", "valueType": "integer",
 					"value": [{"key": "seeded", "value": 3}]},
+				{"id": "badentry", "name": "badentry", "type": "map", "keyType": "string", "valueType": "integer",
+					"value": [{"key": "gold", "value": "not-a-number"}]},
 				{"id": "lore", "name": "lore", "type": "category"},
 				{"id": "future", "name": "future", "type": "widget", "value": "?"},
 			],
@@ -256,6 +277,15 @@ func _test_seed_build_drops_and_typing() -> void:
 	_check("a malformed map override never enters the seed", not seed["child"]["overrides"].has("badmap"))
 	var badmap := StoreScript.try_resolve(seed, {}, "child", "badmap")
 	_check("a dropped map override falls back to the declared value", badmap.get_map().has("seeded"))
+
+	# RECORDED DIVERGENCE (the contract leaves a malformed entry VALUE engine-defined): Godot
+	# keeps the key and substitutes the declared type's default, where the HTML reference keeps
+	# the raw value. Pinned so a future "consistency" edit toward the array rule — which drops
+	# the whole value — has to be a deliberate contract change.
+	var badentry := StoreScript.try_resolve(seed, {}, "base", "badentry")
+	_check("a malformed map entry value keeps its key", badentry.get_map().has("gold"))
+	_check("a malformed map entry value becomes the declared type default",
+		badentry.get_map()["gold"].type == T.INTEGER and badentry.get_map()["gold"].get_int() == 0)
 
 	var kv := StoreScript.try_resolve(seed, {}, "child", "kv")
 	_check("an inherited map override is typed against the ANCESTOR's keyType", kv.get_map().has(7))
@@ -296,6 +326,57 @@ func _test_seed_build_drops_and_typing() -> void:
 	_check("find_declaration_by_name answers nothing for an unknown name", StoreScript.find_declaration_by_name(seed, "child", "nope").is_empty())
 	_check("is_declared_on_chain sees an inherited id", StoreScript.is_declared_on_chain(seed, "child", "kv"))
 	_check("is_declared_on_chain refuses an undeclared id", not StoreScript.is_declared_on_chain(seed, "child", "ghost"))
+
+
+# =============================================================================
+# The fused bound read
+# =============================================================================
+
+## read_bound answers the value AND the chain-side ladder rung from ONE walk. The graph-side
+## rungs (nodata / unwired / deadref) are G2's ladder, not this function's — an unknown asset
+## reaching here answers MISSING, which is asserted below so the caller knows it must draw the
+## dead-reference line itself with has_asset.
+func _test_read_bound() -> void:
+	print("-- read_bound (the fused walk) --")
+	var seed := _seed_from_fixture()
+	var overlay: Dictionary = {}
+	var B := StoreScript.Binding
+
+	var ok := StoreScript.read_bound(seed, overlay, BASE, V_HP, "integer", false, "", "")
+	_check("read_bound: a matching scalar binding is OK", ok["status"] == B.OK)
+	_check("read_bound: an OK binding carries the resolved value", ok["value"] != null and ok["value"].get_int() == 100)
+
+	var changed := StoreScript.read_bound(seed, overlay, BASE, V_HP, "string", false, "", "")
+	_check("read_bound: a moved declared type is CHANGED", changed["status"] == B.CHANGED)
+	_check("read_bound: a CHANGED binding hands out no value", changed["value"] == null)
+
+	var shape := StoreScript.read_bound(seed, overlay, BASE, V_TAGS, "string", false, "", "")
+	_check("read_bound: a scalar binding over an array declaration is CHANGED", shape["status"] == B.CHANGED)
+
+	var array_ok := StoreScript.read_bound(seed, overlay, BASE, V_TAGS, "string", true, "", "")
+	_check("read_bound: a matching array binding is OK", array_ok["status"] == B.OK)
+	_check("read_bound: an OK array binding carries its elements", array_ok["value"] != null and array_ok["value"].get_array().size() == 2)
+
+	var map_ok := StoreScript.read_bound(seed, overlay, BASE, V_LOOT, "map", false, "string", "integer")
+	_check("read_bound: a matching map binding is OK", map_ok["status"] == B.OK)
+	var map_kv := StoreScript.read_bound(seed, overlay, BASE, V_LOOT, "map", false, "string", "string")
+	_check("read_bound: a moved map valueType is CHANGED", map_kv["status"] == B.CHANGED)
+
+	var missing := StoreScript.read_bound(seed, overlay, BASE, "4c9a1e07b38f42d6a1057e2c93bd48f0", "integer", false, "", "")
+	_check("read_bound: an id no chain level declares is MISSING", missing["status"] == B.MISSING)
+	var category := StoreScript.read_bound(seed, overlay, BASE, "ae41b70c95d84e2fa3608c1b5f2d97e0", "string", false, "", "")
+	_check("read_bound: a dropped category row is MISSING", category["status"] == B.MISSING)
+	var dead := StoreScript.read_bound(seed, overlay, "da_nope", V_HP, "integer", false, "", "")
+	_check("read_bound: an unknown asset answers MISSING (deadref is the CALLER's rung)", dead["status"] == B.MISSING)
+
+	# It reads through the overlay, and it copies out, exactly like try_resolve.
+	_check("read_bound: setup write lands", StoreScript.try_set(seed, overlay, BASE, V_HP, VariantScript.from_int(7)))
+	var after_write := StoreScript.read_bound(seed, overlay, BASE, V_HP, "integer", false, "", "")
+	_check("read_bound: a session write is visible", after_write["value"] != null and after_write["value"].get_int() == 7)
+	var copied := StoreScript.read_bound(seed, overlay, BASE, V_TAGS, "string", true, "", "")
+	copied["value"].get_array()[0].set_string("injected")
+	var copied_again := StoreScript.read_bound(seed, overlay, BASE, V_TAGS, "string", true, "", "")
+	_check("read_bound: copy-on-read holds for elements too", copied_again["value"].get_array()[0].get_string() == "mob")
 
 
 # =============================================================================

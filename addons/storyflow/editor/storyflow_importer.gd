@@ -351,7 +351,9 @@ func import_project_from_json(project_json: Dictionary) -> StoryFlowProject:
 			project.characters[normalized_path] = character
 
 	# Data assets (inline). Accepts both the flat asset table and the data-assets.json
-	# wrapper shape, the same way the characters block above accepts either nesting.
+	# wrapper shape, the same way the characters block above accepts either nesting. The two
+	# cannot be confused: asset ids are always da_<32 hex>, so no asset can be keyed
+	# "dataAssets", and an inner "dataAssets" key is therefore always the wrapper.
 	if project_json.has("dataAssets"):
 		var data_assets_data = project_json["dataAssets"]
 		if data_assets_data is Dictionary and data_assets_data.has("dataAssets"):
