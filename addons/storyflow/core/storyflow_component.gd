@@ -342,6 +342,12 @@ func select_option(option_id: String) -> void:
 	# Clear cached node outputs
 	_context.clear_cached_outputs()
 
+	# ...but not the loop element of an enclosing array forEach, which lives in exactly the
+	# field that clear just nulled. A dialogue inside a loop body is a chain boundary for the
+	# chain, not for the loop: the iteration continues through the selected option, and every
+	# node after this one still reads the element. See restore_live_loop_outputs' header.
+	_context.restore_live_loop_outputs()
+
 	# Begin processing chain — defer variable-change re-renders
 	_is_processing_chain = true
 	_dialogue_dirty = false
@@ -402,6 +408,10 @@ func advance_dialogue() -> void:
 
 	if _evaluator:
 		_evaluator.clear_cache()
+
+	# Same boundary, same carve-out as select_option: advancing a narrative dialogue inside a
+	# forEach body must not cost the rest of the iteration its element.
+	_context.restore_live_loop_outputs()
 
 	_is_processing_chain = true
 	_dialogue_dirty = false
@@ -1785,6 +1795,12 @@ func _handle_dialogue(node: Dictionary) -> void:
 	if _evaluator:
 		_evaluator.clear_cache()
 
+	# The clear above is what makes the option gates re-evaluate; this is what leaves them
+	# something to read. An array forEach publishes its current element through cached_output,
+	# so without the restore a dialogue in a loop body renders its very first frame against the
+	# type default — the one render the gate was authored for.
+	_context.restore_live_loop_outputs()
+
 	# Build dialogue state
 	_context.current_dialogue_state = _build_dialogue_state(node)
 	_context.is_waiting_for_input = true
@@ -2647,11 +2663,11 @@ func _handle_for_each_loop(node: Dictionary) -> void:
 		# Clear evaluation caches from previous iteration so boolean chains re-evaluate
 		_context.clear_cached_outputs()
 
-		# Restore cached outputs for all active outer loops (nested forEach support)
-		for frame in _context.loop_stack:
-			var outer_state := _context.get_node_state(frame.node_id)
-			if outer_state.loop_initialized and outer_state.loop_index < outer_state.loop_array.size():
-				outer_state.cached_output = outer_state.loop_array[outer_state.loop_index]
+		# Restore cached outputs for all active outer loops (nested forEach support). THIS
+		# node's frame is not on the stack yet — it is pushed further down, and
+		# _continue_for_each_loop pops it before re-entering — so the stamp below is the only
+		# thing that publishes the current element.
+		_context.restore_live_loop_outputs()
 
 		# Set current element as cached output
 		node_state.cached_output = node_state.loop_array[node_state.loop_index]
@@ -2897,11 +2913,9 @@ func _handle_for_each_map(node: Dictionary) -> void:
 
 		# Restore cached outputs for all active outer ARRAY loops (nested
 		# forEach support — mirrors _handle_for_each_loop). Outer MAP loops need
-		# no restore: their loop_key/loop_value are not wiped by the cache clear.
-		for frame in _context.loop_stack:
-			var outer_state := _context.get_node_state(frame.node_id)
-			if outer_state.loop_initialized and outer_state.loop_index < outer_state.loop_array.size():
-				outer_state.cached_output = outer_state.loop_array[outer_state.loop_index]
+		# no restore: their loop_key/loop_value are not wiped by the cache clear,
+		# and the helper's bounds check skips their empty loop_array anyway.
+		_context.restore_live_loop_outputs()
 
 		# Expose the current entry's key/value (read by the typed evaluators
 		# via the "-key"/"-value" source handle suffixes)

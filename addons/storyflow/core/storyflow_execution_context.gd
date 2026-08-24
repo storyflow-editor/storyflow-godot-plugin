@@ -195,12 +195,14 @@ func clear_boolean_memo() -> void:
 
 ## Re-stamp the current element of every ACTIVE array forEach onto its node's cached_output.
 ##
-## CURRENTLY UNCALLED, and kept on purpose. It was the .sfd write path's repair until
-## clear_boolean_memo made the damage impossible to do in the first place - no forEach type is a
-## boolean memo type, so a selective clear cannot reach a loop element. What still needs it is
-## every remaining BLUNT clear_cached_outputs that can run inside a loop body: a dialogue node in
-## a forEach body loses its loop element on option selection or advance today, which is a
-## separate open item.
+## THE REPAIR FOR EVERY BLUNT clear_cached_outputs THAT CAN RUN INSIDE A LOOP BODY. It began as
+## the .sfd write path's repair, which no longer needs it - clear_boolean_memo made that damage
+## impossible to do in the first place, since no forEach type is a boolean memo type and a
+## selective clear cannot reach a loop element. What does need it is the three DIALOGUE
+## boundaries (dialogue entry, select_option, advance_dialogue), which clear everything because
+## the exec chain that produced those outputs is over - true of the chain, false of the loop the
+## dialogue sits inside. Both forEach handlers call it for their own per-iteration clear as well;
+## their outer-loop restore was a hand-inlined copy of this body.
 ##
 ## Call this after any clear_cached_outputs that happens INSIDE a loop body. An array forEach
 ## publishes its current element through cached_output, which clear_cached_outputs nulls along
