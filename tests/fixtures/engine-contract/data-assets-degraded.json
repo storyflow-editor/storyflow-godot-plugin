@@ -1,0 +1,451 @@
+{
+  "_comment": "Contract §9.4 / §6 — accessor snapshots vs data-assets-seed.json, one record per §6 condition plus the type-default sweep and a healthy positive control. \"accessor\" is the §2.2 node payload (isArray present only when true; keyType/valueType maps only). A degraded Get answers the type default; a degraded Set writes NOTHING. \"reason\" is the reference ladder's own token (novalue = the Set value-pin refusal, which the ladder does not name). Map values are entry lists, so an empty map reads as []. GENERATED from the HTML runtime by src/__tests__/runtime/engine-contract-fixtures.test.ts — do not hand-edit; regenerate with REGEN_FIXTURES=1.",
+  "seed": "data-assets-seed.json",
+  "cases": [
+    {
+      "case": "healthy-binding",
+      "description": "Positive control: a pill bound to the child, a matching snapshot and a wired value pin. Not a §6 row.",
+      "pillWired": true,
+      "pillIsRefNode": true,
+      "pillAssetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "accessor": {
+        "variableId": "2e8b6d0a1f4c47d3b95e2a70c6f81d34",
+        "variable": "hp",
+        "variableType": "integer"
+      },
+      "setValuePinWired": true,
+      "warnOnce": false,
+      "get": {
+        "outcome": "ok",
+        "value": 150
+      },
+      "set": {
+        "outcome": "written",
+        "value": 42
+      }
+    },
+    {
+      "case": "unwired-pin",
+      "description": "§6 row 1: nothing wired to the accessor's dataAsset pin. The value pin is wired, so the refusal is the ladder's, not the value's.",
+      "pillWired": false,
+      "pillIsRefNode": false,
+      "pillAssetId": "",
+      "accessor": {
+        "variableId": "2e8b6d0a1f4c47d3b95e2a70c6f81d34",
+        "variable": "hp",
+        "variableType": "integer"
+      },
+      "setValuePinWired": true,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": 0
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "unwired"
+      }
+    },
+    {
+      "case": "non-pill-source",
+      "description": "§6 row 1: the dataAsset pin is wired to a node that is not a getDataAsset pill — its data is never read as a binding.",
+      "pillWired": true,
+      "pillIsRefNode": false,
+      "pillAssetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "accessor": {
+        "variableId": "2e8b6d0a1f4c47d3b95e2a70c6f81d34",
+        "variable": "hp",
+        "variableType": "integer"
+      },
+      "setValuePinWired": false,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": 0
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "unwired"
+      }
+    },
+    {
+      "case": "pill-unbound",
+      "description": "§6 row 2: the wired pill carries no assetId.",
+      "pillWired": true,
+      "pillIsRefNode": true,
+      "pillAssetId": "",
+      "accessor": {
+        "variableId": "2e8b6d0a1f4c47d3b95e2a70c6f81d34",
+        "variable": "hp",
+        "variableType": "integer"
+      },
+      "setValuePinWired": false,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": 0
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "unwired"
+      }
+    },
+    {
+      "case": "dead-reference",
+      "description": "§6 row 3: the pill names an asset this seed does not carry (deleted since the node was made).",
+      "pillWired": true,
+      "pillIsRefNode": true,
+      "pillAssetId": "da_ff00ff00ff00ff00ff00ff00ff00ff00",
+      "accessor": {
+        "variableId": "2e8b6d0a1f4c47d3b95e2a70c6f81d34",
+        "variable": "hp",
+        "variableType": "integer"
+      },
+      "setValuePinWired": true,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": 0
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "deadref"
+      }
+    },
+    {
+      "case": "undeclared-variable",
+      "description": "§6 row 4: no level of the chain declares this variable id.",
+      "pillWired": true,
+      "pillIsRefNode": true,
+      "pillAssetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "accessor": {
+        "variableId": "4c9a1e07b38f42d6a1057e2c93bd48f0",
+        "variable": "gone",
+        "variableType": "integer"
+      },
+      "setValuePinWired": true,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": 0
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "missing"
+      }
+    },
+    {
+      "case": "type-changed-scalar",
+      "description": "§6.1: the node was spawned against a string; the chain declares hp as an integer. Treated as missing — never coerced.",
+      "pillWired": true,
+      "pillIsRefNode": true,
+      "pillAssetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "accessor": {
+        "variableId": "2e8b6d0a1f4c47d3b95e2a70c6f81d34",
+        "variable": "hp",
+        "variableType": "string"
+      },
+      "setValuePinWired": true,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": ""
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "changed"
+      }
+    },
+    {
+      "case": "type-changed-array-flip",
+      "description": "§6.1: a scalar snapshot over an array declaration is a different pin, not a compatible read.",
+      "pillWired": true,
+      "pillIsRefNode": true,
+      "pillAssetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "accessor": {
+        "variableId": "c58e2f13a0d64c9b871e3f05d2a76b48",
+        "variable": "tags",
+        "variableType": "string"
+      },
+      "setValuePinWired": false,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": ""
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "changed"
+      }
+    },
+    {
+      "case": "type-changed-map-value-type",
+      "description": "§6.1: the map's declared value type moved under the node — the K/V pair is baked into the pin id.",
+      "pillWired": true,
+      "pillIsRefNode": true,
+      "pillAssetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "accessor": {
+        "variableId": "6d0f39a8b21e47c5903af8d61c72e504",
+        "variable": "loot",
+        "variableType": "map",
+        "keyType": "string",
+        "valueType": "string"
+      },
+      "setValuePinWired": false,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": []
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "changed"
+      }
+    },
+    {
+      "case": "set-value-pin-unwired",
+      "description": "§6 row 6: the binding is healthy but the Set has nothing on its value pin. REFUSED, and this warning is not latched.",
+      "pillWired": true,
+      "pillIsRefNode": true,
+      "pillAssetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "accessor": {
+        "variableId": "2e8b6d0a1f4c47d3b95e2a70c6f81d34",
+        "variable": "hp",
+        "variableType": "integer"
+      },
+      "setValuePinWired": false,
+      "warnOnce": false,
+      "get": {
+        "outcome": "ok",
+        "value": 150
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "novalue"
+      }
+    },
+    {
+      "case": "type-default-boolean",
+      "description": "§6 type default for boolean, reached through an unwired dataAsset pin.",
+      "pillWired": false,
+      "pillIsRefNode": false,
+      "pillAssetId": "",
+      "accessor": {
+        "variableId": "7f3a1c9e4b2d40518a6f0c3e7d1b5a29",
+        "variable": "alive",
+        "variableType": "boolean"
+      },
+      "setValuePinWired": false,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": false
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "unwired"
+      }
+    },
+    {
+      "case": "type-default-integer",
+      "description": "§6 type default for integer, reached through an unwired dataAsset pin.",
+      "pillWired": false,
+      "pillIsRefNode": false,
+      "pillAssetId": "",
+      "accessor": {
+        "variableId": "2e8b6d0a1f4c47d3b95e2a70c6f81d34",
+        "variable": "hp",
+        "variableType": "integer"
+      },
+      "setValuePinWired": false,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": 0
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "unwired"
+      }
+    },
+    {
+      "case": "type-default-float",
+      "description": "§6 type default for float, reached through an unwired dataAsset pin.",
+      "pillWired": false,
+      "pillIsRefNode": false,
+      "pillAssetId": "",
+      "accessor": {
+        "variableId": "9c4f7e25a3b84a19bd60e2f7c81a5d03",
+        "variable": "speed",
+        "variableType": "float"
+      },
+      "setValuePinWired": false,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": 0
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "unwired"
+      }
+    },
+    {
+      "case": "type-default-string",
+      "description": "§6 type default for string, reached through an unwired dataAsset pin.",
+      "pillWired": false,
+      "pillIsRefNode": false,
+      "pillAssetId": "",
+      "accessor": {
+        "variableId": "5b1d8a04c6e2493fa72c9d0f31e6b8a7",
+        "variable": "title",
+        "variableType": "string"
+      },
+      "setValuePinWired": false,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": ""
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "unwired"
+      }
+    },
+    {
+      "case": "type-default-enum",
+      "description": "§6 type default for enum, reached through an unwired dataAsset pin.",
+      "pillWired": false,
+      "pillIsRefNode": false,
+      "pillAssetId": "",
+      "accessor": {
+        "variableId": "d0a37c65e91b4f28b4c1a5e7028d63f9",
+        "variable": "rank",
+        "variableType": "enum"
+      },
+      "setValuePinWired": false,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": ""
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "unwired"
+      }
+    },
+    {
+      "case": "type-default-image",
+      "description": "§6 type default for image, reached through an unwired dataAsset pin.",
+      "pillWired": false,
+      "pillIsRefNode": false,
+      "pillAssetId": "",
+      "accessor": {
+        "variableId": "3f9e0b7218ac4d6591f2c47a0e5b83d6",
+        "variable": "portrait",
+        "variableType": "image"
+      },
+      "setValuePinWired": false,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": ""
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "unwired"
+      }
+    },
+    {
+      "case": "type-default-character",
+      "description": "§6 type default for character, reached through an unwired dataAsset pin.",
+      "pillWired": false,
+      "pillIsRefNode": false,
+      "pillAssetId": "",
+      "accessor": {
+        "variableId": "84c2d61b7f0e4a3982d5b60c1e9a47f3",
+        "variable": "owner",
+        "variableType": "character"
+      },
+      "setValuePinWired": false,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": ""
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "unwired"
+      }
+    },
+    {
+      "case": "type-default-audio",
+      "description": "§6 type default for audio, reached through an unwired dataAsset pin.",
+      "pillWired": false,
+      "pillIsRefNode": false,
+      "pillAssetId": "",
+      "accessor": {
+        "variableId": "1a7b4e9032cd4b7e8f05a6c2d3908e41",
+        "variable": "roar",
+        "variableType": "audio"
+      },
+      "setValuePinWired": false,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": ""
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "unwired"
+      }
+    },
+    {
+      "case": "type-default-array",
+      "description": "§6 type default for array, reached through an unwired dataAsset pin.",
+      "pillWired": false,
+      "pillIsRefNode": false,
+      "pillAssetId": "",
+      "accessor": {
+        "variableId": "c58e2f13a0d64c9b871e3f05d2a76b48",
+        "variable": "tags",
+        "variableType": "string",
+        "isArray": true
+      },
+      "setValuePinWired": false,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": []
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "unwired"
+      }
+    },
+    {
+      "case": "type-default-map",
+      "description": "§6 type default for map, reached through an unwired dataAsset pin.",
+      "pillWired": false,
+      "pillIsRefNode": false,
+      "pillAssetId": "",
+      "accessor": {
+        "variableId": "6d0f39a8b21e47c5903af8d61c72e504",
+        "variable": "loot",
+        "variableType": "map",
+        "keyType": "string",
+        "valueType": "integer"
+      },
+      "setValuePinWired": false,
+      "warnOnce": true,
+      "get": {
+        "outcome": "default",
+        "value": []
+      },
+      "set": {
+        "outcome": "refused",
+        "reason": "unwired"
+      }
+    }
+  ]
+}

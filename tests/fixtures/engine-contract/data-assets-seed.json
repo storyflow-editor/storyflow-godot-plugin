@@ -1,0 +1,153 @@
+{
+  "_comment": "Contract §9.1 / §2.1 — the base -> child -> grandchild seed family, in the exact shape of the exported data-assets.json. GENERATED from the HTML runtime by src/__tests__/runtime/engine-contract-fixtures.test.ts — do not hand-edit; regenerate with REGEN_FIXTURES=1.",
+  "dataAssets": {
+    "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9": {
+      "id": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "name": "CreatureBase",
+      "parent": null,
+      "variables": [
+        {
+          "id": "7f3a1c9e4b2d40518a6f0c3e7d1b5a29",
+          "name": "alive",
+          "type": "boolean",
+          "value": true
+        },
+        {
+          "id": "2e8b6d0a1f4c47d3b95e2a70c6f81d34",
+          "name": "hp",
+          "type": "integer",
+          "value": 100
+        },
+        {
+          "id": "9c4f7e25a3b84a19bd60e2f7c81a5d03",
+          "name": "speed",
+          "type": "float",
+          "value": 1.5
+        },
+        {
+          "id": "5b1d8a04c6e2493fa72c9d0f31e6b8a7",
+          "name": "title",
+          "type": "string",
+          "value": "Grunt"
+        },
+        {
+          "id": "d0a37c65e91b4f28b4c1a5e7028d63f9",
+          "name": "rank",
+          "type": "enum",
+          "enumValues": [
+            "Grunt",
+            "Elite",
+            "Champion"
+          ],
+          "value": "Grunt"
+        },
+        {
+          "id": "3f9e0b7218ac4d6591f2c47a0e5b83d6",
+          "name": "portrait",
+          "type": "image",
+          "value": "images/creatures/grunt.png"
+        },
+        {
+          "id": "84c2d61b7f0e4a3982d5b60c1e9a47f3",
+          "name": "owner",
+          "type": "character",
+          "value": "characters/Warden.sfc"
+        },
+        {
+          "id": "1a7b4e9032cd4b7e8f05a6c2d3908e41",
+          "name": "roar",
+          "type": "audio",
+          "value": "audio/creatures/roar.ogg"
+        },
+        {
+          "id": "c58e2f13a0d64c9b871e3f05d2a76b48",
+          "name": "tags",
+          "type": "string",
+          "isArray": true,
+          "value": [
+            "mob",
+            "melee"
+          ]
+        },
+        {
+          "id": "6d0f39a8b21e47c5903af8d61c72e504",
+          "name": "loot",
+          "type": "map",
+          "keyType": "string",
+          "valueType": "integer",
+          "value": [
+            {
+              "key": "gold",
+              "value": 5
+            },
+            {
+              "key": "gems",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "id": "ae41b70c95d84e2fa3608c1b5f2d97e0",
+          "name": "lore",
+          "type": "category"
+        },
+        {
+          "id": "0b6c8f24e17d4a509c3b2e81a4f6d735",
+          "name": "secret",
+          "type": "string",
+          "value": "base-only"
+        }
+      ],
+      "overrides": {
+        "9c4f7e25a3b84a19bd60e2f7c81a5d03": 2.25
+      }
+    },
+    "da_1b2c3d4e5f60718293a4b5c6d7e8f90a": {
+      "id": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "name": "Goblin",
+      "parent": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "variables": [
+        {
+          "id": "f21c05e9a4b7436d80fe5c91b3a7d268",
+          "name": "armor",
+          "type": "float",
+          "value": 2.5
+        }
+      ],
+      "overrides": {
+        "2e8b6d0a1f4c47d3b95e2a70c6f81d34": 150,
+        "c58e2f13a0d64c9b871e3f05d2a76b48": [
+          "mob",
+          "elite"
+        ],
+        "d0a37c65e91b4f28b4c1a5e7028d63f9": "Elite"
+      }
+    },
+    "da_2c3d4e5f60718293a4b5c6d7e8f90a1b": {
+      "id": "da_2c3d4e5f60718293a4b5c6d7e8f90a1b",
+      "name": "GoblinChieftain",
+      "parent": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "variables": [
+        {
+          "id": "5b1d8a04c6e2493fa72c9d0f31e6b8a7",
+          "name": "title",
+          "type": "string",
+          "value": "Chieftain (must not win)"
+        }
+      ],
+      "overrides": {
+        "3f9e0b7218ac4d6591f2c47a0e5b83d6": "images/creatures/chieftain.png",
+        "6d0f39a8b21e47c5903af8d61c72e504": [
+          {
+            "key": "gold",
+            "value": 50
+          },
+          {
+            "key": "gems",
+            "value": 9
+          }
+        ]
+      }
+    }
+  }
+}

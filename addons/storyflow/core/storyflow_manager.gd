@@ -3,6 +3,7 @@ extends Node
 # Preloaded by path so parsing never depends on the global class name cache,
 # which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
 const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
+const StoryFlowDataAssetStore = preload("res://addons/storyflow/core/storyflow_data_asset_store.gd")
 const StoryFlowImporter = preload("res://addons/storyflow/editor/storyflow_importer.gd")
 const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
 const StoryFlowSaveData = preload("res://addons/storyflow/core/storyflow_save_data.gd")
@@ -20,6 +21,20 @@ var _global_variables: Dictionary = {}
 var _runtime_characters: Dictionary = {}
 var _used_once_only_options: Dictionary = {}
 var _active_dialogue_count: int = 0
+
+## .sfd Data Asset SEED (engine contract 3): asset_id → definition, built from the project.
+## Read-only once built — nothing anywhere writes into it.
+var _data_asset_seed: Dictionary = {}
+
+## .sfd Data Asset session OVERLAY: asset_id → { variable_id → StoryFlowVariant }.
+## Script writes only; cleared on a game reset.
+##
+## BOTH are assigned ONCE, here at declaration, and MUTATED IN PLACE forever - never rebound.
+## A running dialogue's execution context holds a reference to each (handed out at dialogue
+## start), so rebinding on a project change or a reset would strand it on the pre-reset object,
+## splitting reads and writes into two divergent stores for the rest of the session. That is
+## exactly the bug rebinding _global_variables caused before v1.2.3.
+var _data_asset_overlay: Dictionary = {}
 
 
 func _ready() -> void:
@@ -112,6 +127,29 @@ func reset_global_variables() -> void:
 		_global_variables.clear()
 		for var_id in fresh:
 			_global_variables[var_id] = fresh[var_id]
+
+
+# =============================================================================
+# Data Assets
+# =============================================================================
+
+## The .sfd seed table, handed to a starting dialogue by reference. Never write into it.
+func get_data_asset_seed() -> Dictionary:
+	return _data_asset_seed
+
+
+## The .sfd session overlay, handed to a starting dialogue by reference. Script writes land
+## here through StoryFlowDataAssetStore.try_set.
+func get_data_asset_overlay() -> Dictionary:
+	return _data_asset_overlay
+
+
+## Rebuild the seed from the project and drop every session write (contract 3 reset).
+## Both dictionaries are mutated in place - see their declarations.
+func reset_data_assets() -> void:
+	if _project:
+		StoryFlowDataAssetStore.build_seed(_project, _data_asset_seed)
+	StoryFlowDataAssetStore.reset_overlay(_data_asset_overlay)
 
 
 # =============================================================================
@@ -227,6 +265,7 @@ func list_save_slots() -> PackedStringArray:
 func reset_all_state() -> void:
 	reset_global_variables()
 	reset_runtime_characters()
+	reset_data_assets()
 	_used_once_only_options.clear()
 
 
@@ -241,6 +280,8 @@ func _initialize_from_project() -> void:
 	for path in _project.characters:
 		var original: StoryFlowCharacter = _project.characters[path]
 		_runtime_characters[path] = original.duplicate_character()
+
+	reset_data_assets()
 
 	_used_once_only_options.clear()
 	_active_dialogue_count = 0

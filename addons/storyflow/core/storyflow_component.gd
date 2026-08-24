@@ -170,6 +170,12 @@ func start_dialogue_with_script(path: String) -> void:
 	# Build global variable name index
 	_context.build_variable_name_index(mgr.get_global_variables(), true)
 
+	# .sfd Data Assets: NON-OWNING references to the manager's seed and session overlay,
+	# taken the same way the globals and characters above are. The manager mutates both in
+	# place forever, so they stay valid for the life of this dialogue.
+	_context.data_asset_seed = mgr.get_data_asset_seed()
+	_context.data_asset_overlay = mgr.get_data_asset_overlay()
+
 	# Create evaluator
 	_evaluator = StoryFlowEvaluator.new()
 	_evaluator.initialize(_context, mgr.get_global_variables(), mgr.get_runtime_characters(), language_code, project.global_strings)

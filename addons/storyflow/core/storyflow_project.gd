@@ -21,6 +21,14 @@ var global_variables: Dictionary = {}
 ## normalized_path → StoryFlowCharacter
 var characters: Dictionary = {}
 
+## asset_id → raw .sfd definition, as parsed from data-assets.json (engine contract 2.1):
+## { "id", "name", "parent", "variables": Array[declaration], "raw_overrides": { varId → raw JSON } }
+##
+## Overrides stay RAW here: typing one needs the declaration that owns its id, which may live
+## on an ancestor this table has not reached yet, so StoryFlowDataAssetStore.build_seed types
+## them in a second pass once every level is present.
+var data_assets: Dictionary = {}
+
 ## "lang.key" → "value"
 var global_strings: Dictionary = {}
 

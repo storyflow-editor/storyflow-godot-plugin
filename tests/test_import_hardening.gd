@@ -45,6 +45,8 @@ func _initialize() -> void:
 	_test_media_is_written_once_per_sync()
 	_test_media_whose_build_path_matches_the_asset_directory()
 	_test_media_whose_build_path_differs_only_in_case()
+	_test_data_assets_are_imported_and_never_become_a_script()
+	_test_inline_import_carries_data_assets()
 	# Runaway-recursion guard last: without it this scenario never returns.
 	_test_nested_output_is_refused()
 
@@ -476,6 +478,100 @@ func _test_nested_output_is_refused() -> void:
 		not DirAccess.dir_exists_absolute(out.path_join("out")))
 	_check("the refused copy is counted (got %d)" % importer.get_error_count(),
 		importer.get_error_count() == 1)
+
+
+# =============================================================================
+# Data Assets
+# =============================================================================
+
+## data-assets.json must land in project.data_assets AND must never be swept up as a script.
+##
+## THE KILLER REGRESSION: the standalone-script sweep walks every .json file in the build
+## directory, and load_project_local re-runs it on EVERY launch. A sidecar missing from the
+## exclusion list becomes a phantom script named after its filename, silently, in shipped
+## games — so the phantom check matters more than the parse check.
+func _test_data_assets_are_imported_and_never_become_a_script() -> void:
+	var build := _temp("data_assets/build")
+	var out := _temp("data_assets/out")
+	_write_build(build, "")
+	_write_text(build.path_join("data-assets.json"), JSON.stringify(_data_assets_payload(), "\t"))
+
+	var importer := ImporterScript.new()
+	var project := importer.import_project(build, out)
+	_check("import with data-assets.json returns a project", project != null)
+	if project == null:
+		return
+
+	_check("data-assets.json does not become a phantom script",
+		not project.scripts.has("data-assets"))
+	_check("only the real script is imported (got %s)" % [project.scripts.keys()],
+		project.scripts.size() == 1 and project.scripts.has("Main"))
+	_check("data assets land on the project (got %d)" % project.data_assets.size(),
+		project.data_assets.size() == 2)
+	_check("the category row is dropped and the rest keep declaration order",
+		project.data_assets.get("base", {}).get("variables", []).size() == 2)
+	_check("overrides stay RAW for the store's second pass",
+		project.data_assets.get("child", {}).get("raw_overrides", {}).has("hp"))
+
+	# The re-sweep an exported game performs on every launch must stay clean too.
+	var reloaded := importer.load_project_local(out)
+	_check("reloading the output directory still produces no phantom script",
+		reloaded != null and not reloaded.scripts.has("data-assets"))
+	_check("reloading the output directory still carries the data assets",
+		reloaded != null and reloaded.data_assets.size() == 2)
+
+
+## import_project_from_json is public API and must carry data assets too — the parallel inline
+## importer silently dropping them would leave a synced project with no .sfd state.
+func _test_inline_import_carries_data_assets() -> void:
+	var importer := ImporterScript.new()
+
+	var flat := importer.import_project_from_json({
+		"version": "1.0",
+		"scripts": {"Main": {"nodes": {"0": {"type": "start"}}, "connections": []}},
+		"dataAssets": _data_assets_payload()["dataAssets"],
+	})
+	_check("inline import returns a project", flat != null)
+	_check("inline import carries the data assets",
+		flat != null and flat.data_assets.size() == 2)
+	_check("inline import parses declarations the same way",
+		flat != null and flat.data_assets.get("base", {}).get("variables", []).size() == 2)
+
+	# The data-assets.json wrapper shape is accepted too, matching how the characters block
+	# accepts either nesting.
+	var wrapped := importer.import_project_from_json({
+		"version": "1.0",
+		"dataAssets": _data_assets_payload(),
+	})
+	_check("inline import accepts the data-assets.json wrapper shape",
+		wrapped != null and wrapped.data_assets.size() == 2)
+
+
+## A two-level .sfd family: a base with scalars and a category row, and a child overriding an
+## inherited id. Small on purpose — the resolver's own goldens live in test_data_asset_store.gd.
+func _data_assets_payload() -> Dictionary:
+	return {
+		"dataAssets": {
+			"base": {
+				"id": "base",
+				"name": "CreatureBase",
+				"parent": null,
+				"variables": [
+					{"id": "hp", "name": "hp", "type": "integer", "value": 100},
+					{"id": "alive", "name": "alive", "type": "boolean", "value": true},
+					{"id": "lore", "name": "lore", "type": "category"},
+				],
+				"overrides": {},
+			},
+			"child": {
+				"id": "child",
+				"name": "Goblin",
+				"parent": "base",
+				"variables": [],
+				"overrides": {"hp": 150},
+			},
+		},
+	}
 
 
 # =============================================================================

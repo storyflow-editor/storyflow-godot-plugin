@@ -1,0 +1,341 @@
+{
+  "_comment": "Contract §9.2 / §4 — resolve(assetId, variableId) over data-assets-seed.json with an EMPTY overlay. \"resolved\": false is the store's \"no value\" (unknown asset, an id no chain level declares, or a category declaration, which never resolves). GENERATED from the HTML runtime by src/__tests__/runtime/engine-contract-fixtures.test.ts — do not hand-edit; regenerate with REGEN_FIXTURES=1.",
+  "seed": "data-assets-seed.json",
+  "resolutions": [
+    {
+      "assetId": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "variableId": "7f3a1c9e4b2d40518a6f0c3e7d1b5a29",
+      "variableName": "alive",
+      "resolved": true,
+      "value": true
+    },
+    {
+      "assetId": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "variableId": "2e8b6d0a1f4c47d3b95e2a70c6f81d34",
+      "variableName": "hp",
+      "resolved": true,
+      "value": 100
+    },
+    {
+      "assetId": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "variableId": "9c4f7e25a3b84a19bd60e2f7c81a5d03",
+      "variableName": "speed",
+      "resolved": true,
+      "value": 2.25
+    },
+    {
+      "assetId": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "variableId": "5b1d8a04c6e2493fa72c9d0f31e6b8a7",
+      "variableName": "title",
+      "resolved": true,
+      "value": "Grunt"
+    },
+    {
+      "assetId": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "variableId": "d0a37c65e91b4f28b4c1a5e7028d63f9",
+      "variableName": "rank",
+      "resolved": true,
+      "value": "Grunt"
+    },
+    {
+      "assetId": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "variableId": "3f9e0b7218ac4d6591f2c47a0e5b83d6",
+      "variableName": "portrait",
+      "resolved": true,
+      "value": "images/creatures/grunt.png"
+    },
+    {
+      "assetId": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "variableId": "84c2d61b7f0e4a3982d5b60c1e9a47f3",
+      "variableName": "owner",
+      "resolved": true,
+      "value": "characters/Warden.sfc"
+    },
+    {
+      "assetId": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "variableId": "1a7b4e9032cd4b7e8f05a6c2d3908e41",
+      "variableName": "roar",
+      "resolved": true,
+      "value": "audio/creatures/roar.ogg"
+    },
+    {
+      "assetId": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "variableId": "c58e2f13a0d64c9b871e3f05d2a76b48",
+      "variableName": "tags",
+      "resolved": true,
+      "value": [
+        "mob",
+        "melee"
+      ]
+    },
+    {
+      "assetId": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "variableId": "6d0f39a8b21e47c5903af8d61c72e504",
+      "variableName": "loot",
+      "resolved": true,
+      "value": [
+        {
+          "key": "gold",
+          "value": 5
+        },
+        {
+          "key": "gems",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "assetId": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "variableId": "ae41b70c95d84e2fa3608c1b5f2d97e0",
+      "variableName": "lore",
+      "resolved": false
+    },
+    {
+      "assetId": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "variableId": "0b6c8f24e17d4a509c3b2e81a4f6d735",
+      "variableName": "secret",
+      "resolved": true,
+      "value": "base-only"
+    },
+    {
+      "assetId": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "variableId": "f21c05e9a4b7436d80fe5c91b3a7d268",
+      "variableName": "armor",
+      "resolved": false
+    },
+    {
+      "assetId": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "variableId": "4c9a1e07b38f42d6a1057e2c93bd48f0",
+      "variableName": "(declared nowhere)",
+      "resolved": false
+    },
+    {
+      "assetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "variableId": "7f3a1c9e4b2d40518a6f0c3e7d1b5a29",
+      "variableName": "alive",
+      "resolved": true,
+      "value": true
+    },
+    {
+      "assetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "variableId": "2e8b6d0a1f4c47d3b95e2a70c6f81d34",
+      "variableName": "hp",
+      "resolved": true,
+      "value": 150
+    },
+    {
+      "assetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "variableId": "9c4f7e25a3b84a19bd60e2f7c81a5d03",
+      "variableName": "speed",
+      "resolved": true,
+      "value": 2.25
+    },
+    {
+      "assetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "variableId": "5b1d8a04c6e2493fa72c9d0f31e6b8a7",
+      "variableName": "title",
+      "resolved": true,
+      "value": "Grunt"
+    },
+    {
+      "assetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "variableId": "d0a37c65e91b4f28b4c1a5e7028d63f9",
+      "variableName": "rank",
+      "resolved": true,
+      "value": "Elite"
+    },
+    {
+      "assetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "variableId": "3f9e0b7218ac4d6591f2c47a0e5b83d6",
+      "variableName": "portrait",
+      "resolved": true,
+      "value": "images/creatures/grunt.png"
+    },
+    {
+      "assetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "variableId": "84c2d61b7f0e4a3982d5b60c1e9a47f3",
+      "variableName": "owner",
+      "resolved": true,
+      "value": "characters/Warden.sfc"
+    },
+    {
+      "assetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "variableId": "1a7b4e9032cd4b7e8f05a6c2d3908e41",
+      "variableName": "roar",
+      "resolved": true,
+      "value": "audio/creatures/roar.ogg"
+    },
+    {
+      "assetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "variableId": "c58e2f13a0d64c9b871e3f05d2a76b48",
+      "variableName": "tags",
+      "resolved": true,
+      "value": [
+        "mob",
+        "elite"
+      ]
+    },
+    {
+      "assetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "variableId": "6d0f39a8b21e47c5903af8d61c72e504",
+      "variableName": "loot",
+      "resolved": true,
+      "value": [
+        {
+          "key": "gold",
+          "value": 5
+        },
+        {
+          "key": "gems",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "assetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "variableId": "ae41b70c95d84e2fa3608c1b5f2d97e0",
+      "variableName": "lore",
+      "resolved": false
+    },
+    {
+      "assetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "variableId": "0b6c8f24e17d4a509c3b2e81a4f6d735",
+      "variableName": "secret",
+      "resolved": true,
+      "value": "base-only"
+    },
+    {
+      "assetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "variableId": "f21c05e9a4b7436d80fe5c91b3a7d268",
+      "variableName": "armor",
+      "resolved": true,
+      "value": 2.5
+    },
+    {
+      "assetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a",
+      "variableId": "4c9a1e07b38f42d6a1057e2c93bd48f0",
+      "variableName": "(declared nowhere)",
+      "resolved": false
+    },
+    {
+      "assetId": "da_2c3d4e5f60718293a4b5c6d7e8f90a1b",
+      "variableId": "7f3a1c9e4b2d40518a6f0c3e7d1b5a29",
+      "variableName": "alive",
+      "resolved": true,
+      "value": true
+    },
+    {
+      "assetId": "da_2c3d4e5f60718293a4b5c6d7e8f90a1b",
+      "variableId": "2e8b6d0a1f4c47d3b95e2a70c6f81d34",
+      "variableName": "hp",
+      "resolved": true,
+      "value": 150
+    },
+    {
+      "assetId": "da_2c3d4e5f60718293a4b5c6d7e8f90a1b",
+      "variableId": "9c4f7e25a3b84a19bd60e2f7c81a5d03",
+      "variableName": "speed",
+      "resolved": true,
+      "value": 2.25
+    },
+    {
+      "assetId": "da_2c3d4e5f60718293a4b5c6d7e8f90a1b",
+      "variableId": "5b1d8a04c6e2493fa72c9d0f31e6b8a7",
+      "variableName": "title",
+      "resolved": true,
+      "value": "Grunt"
+    },
+    {
+      "assetId": "da_2c3d4e5f60718293a4b5c6d7e8f90a1b",
+      "variableId": "d0a37c65e91b4f28b4c1a5e7028d63f9",
+      "variableName": "rank",
+      "resolved": true,
+      "value": "Elite"
+    },
+    {
+      "assetId": "da_2c3d4e5f60718293a4b5c6d7e8f90a1b",
+      "variableId": "3f9e0b7218ac4d6591f2c47a0e5b83d6",
+      "variableName": "portrait",
+      "resolved": true,
+      "value": "images/creatures/chieftain.png"
+    },
+    {
+      "assetId": "da_2c3d4e5f60718293a4b5c6d7e8f90a1b",
+      "variableId": "84c2d61b7f0e4a3982d5b60c1e9a47f3",
+      "variableName": "owner",
+      "resolved": true,
+      "value": "characters/Warden.sfc"
+    },
+    {
+      "assetId": "da_2c3d4e5f60718293a4b5c6d7e8f90a1b",
+      "variableId": "1a7b4e9032cd4b7e8f05a6c2d3908e41",
+      "variableName": "roar",
+      "resolved": true,
+      "value": "audio/creatures/roar.ogg"
+    },
+    {
+      "assetId": "da_2c3d4e5f60718293a4b5c6d7e8f90a1b",
+      "variableId": "c58e2f13a0d64c9b871e3f05d2a76b48",
+      "variableName": "tags",
+      "resolved": true,
+      "value": [
+        "mob",
+        "elite"
+      ]
+    },
+    {
+      "assetId": "da_2c3d4e5f60718293a4b5c6d7e8f90a1b",
+      "variableId": "6d0f39a8b21e47c5903af8d61c72e504",
+      "variableName": "loot",
+      "resolved": true,
+      "value": [
+        {
+          "key": "gold",
+          "value": 50
+        },
+        {
+          "key": "gems",
+          "value": 9
+        }
+      ]
+    },
+    {
+      "assetId": "da_2c3d4e5f60718293a4b5c6d7e8f90a1b",
+      "variableId": "ae41b70c95d84e2fa3608c1b5f2d97e0",
+      "variableName": "lore",
+      "resolved": false
+    },
+    {
+      "assetId": "da_2c3d4e5f60718293a4b5c6d7e8f90a1b",
+      "variableId": "0b6c8f24e17d4a509c3b2e81a4f6d735",
+      "variableName": "secret",
+      "resolved": true,
+      "value": "base-only"
+    },
+    {
+      "assetId": "da_2c3d4e5f60718293a4b5c6d7e8f90a1b",
+      "variableId": "f21c05e9a4b7436d80fe5c91b3a7d268",
+      "variableName": "armor",
+      "resolved": true,
+      "value": 2.5
+    },
+    {
+      "assetId": "da_2c3d4e5f60718293a4b5c6d7e8f90a1b",
+      "variableId": "4c9a1e07b38f42d6a1057e2c93bd48f0",
+      "variableName": "(declared nowhere)",
+      "resolved": false
+    },
+    {
+      "assetId": "da_ff00ff00ff00ff00ff00ff00ff00ff00",
+      "variableId": "2e8b6d0a1f4c47d3b95e2a70c6f81d34",
+      "variableName": "hp",
+      "resolved": false
+    },
+    {
+      "assetId": "da_ff00ff00ff00ff00ff00ff00ff00ff00",
+      "variableId": "4c9a1e07b38f42d6a1057e2c93bd48f0",
+      "variableName": "(declared nowhere)",
+      "resolved": false
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "version": "1",
+  "globalVariables": {
+    "v1": { "id": "v1", "name": "gold", "type": "Integer", "isArray": false, "value": 42 },
+    "v2": { "id": "v2", "name": "playerName", "type": "String", "isArray": false, "value": "Ada" },
+    "v3": { "id": "v3", "name": "metKing", "type": "Boolean", "isArray": false, "value": true },
+    "v4": { "id": "v4", "name": "accuracy", "type": "Float", "isArray": false, "value": 0.75 },
+    "v5": { "id": "v5", "name": "mood", "type": "Enum", "isArray": false, "value": "Happy", "enumValues": ["Happy", "Sad"] },
+    "v6": { "id": "v6", "name": "inventory", "type": "String", "isArray": true, "value": ["rope", "lamp"] },
+    "v7": {
+      "id": "v7", "name": "scores", "type": "Map", "isArray": false,
+      "keyType": "String", "valueType": "Integer",
+      "value": [{ "key": "alice", "value": 10 }, { "key": "bob", "value": 20 }]
+    }
+  },
+  "characters": {
+    "characters\\hero.json": {
+      "name": "Hero",
+      "image": "portraits/hero.png",
+      "variables": {
+        "affection": { "id": "cv1", "name": "affection", "type": "Integer", "isArray": false, "value": 7 }
+      }
+    }
+  },
+  "usedOnceOnlyOptions": ["scriptA:node4:opt1", "scriptB:node9:opt2"]
+}

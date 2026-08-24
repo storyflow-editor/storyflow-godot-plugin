@@ -4,6 +4,7 @@ extends RefCounted
 # Preloaded by path so parsing never depends on the global class name cache,
 # which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
 const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
+const StoryFlowDataAssetStore = preload("res://addons/storyflow/core/storyflow_data_asset_store.gd")
 const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
 const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
 const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
@@ -171,6 +172,18 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 				print("StoryFlow: Imported character '%s'" % char_path)
 
 	# ------------------------------------------------------------------
+	# Data Assets (.sfd)
+	# ------------------------------------------------------------------
+	# Written beside characters.json, always (an empty object when the project references
+	# none). TRUSTED SEED: the editor's collector already stripped orphan and stale
+	# overrides and collapsed duplicate map keys, so nothing here re-validates or
+	# re-sanitizes — a plugin that "fixes" the seed diverges from the other three runtimes
+	# (engine contract 2.1).
+	var data_assets_json: Dictionary = _load_json_file(build_dir.path_join("data-assets.json"))
+	if not data_assets_json.is_empty():
+		project.data_assets = _parse_data_assets(data_assets_json.get("dataAssets", {}))
+
+	# ------------------------------------------------------------------
 	# Scripts – inline in project JSON
 	# ------------------------------------------------------------------
 	if project_json.has("scripts"):
@@ -194,8 +207,10 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 	var script_files := _find_json_files_recursive(build_dir)
 	for script_file in script_files:
 		var filename := script_file.get_file()
-		# Skip non-script files
-		if filename in ["project.json", "project.storyflow", "global-variables.json", "characters.json", IMPORT_META_FILENAME]:
+		# Skip non-script files. EVERY sidecar the export writes must be listed here:
+		# load_project_local re-runs this sweep on every launch, so an unlisted sidecar is
+		# imported as a phantom script named after its filename, silently, in shipped games.
+		if filename in ["project.json", "project.storyflow", "global-variables.json", "characters.json", "data-assets.json", IMPORT_META_FILENAME]:
 			continue
 
 		var relative := _make_relative(script_file, build_dir)
@@ -334,6 +349,14 @@ func import_project_from_json(project_json: Dictionary) -> StoryFlowProject:
 			if char_data.has("variables"):
 				character.variables = _parse_character_variables(char_data["variables"])
 			project.characters[normalized_path] = character
+
+	# Data assets (inline). Accepts both the flat asset table and the data-assets.json
+	# wrapper shape, the same way the characters block above accepts either nesting.
+	if project_json.has("dataAssets"):
+		var data_assets_data = project_json["dataAssets"]
+		if data_assets_data is Dictionary and data_assets_data.has("dataAssets"):
+			data_assets_data = data_assets_data["dataAssets"]
+		project.data_assets = _parse_data_assets(data_assets_data)
 
 	# Scripts (inline)
 	if project_json.has("scripts"):
@@ -857,6 +880,122 @@ func _parse_character_variables(raw: Dictionary) -> Dictionary:
 			"value_enum_values": value_enum_values,
 		}
 	return result
+
+
+# =============================================================================
+# Data Asset Parsing
+# =============================================================================
+
+## Parse the exported data-assets.json table (engine contract 2.1) into raw definitions:
+## asset_id → { "id", "name", "parent", "variables": Array[declaration], "raw_overrides" }.
+##
+## Declarations are parsed IN ORDER — declaration order is contractual. Overrides are kept as
+## RAW JSON, because typing one needs the declaration that owns its id, which may live on an
+## ancestor that has not been parsed yet; StoryFlowDataAssetStore.build_seed types them in a
+## second pass once every level is present.
+func _parse_data_assets(raw) -> Dictionary:
+	var result: Dictionary = {}
+	if not raw is Dictionary:
+		return result
+
+	for asset_id in raw:
+		var asset_obj = raw[asset_id]
+		if not asset_obj is Dictionary:
+			continue
+
+		var variables: Array = []
+		var variables_raw = asset_obj.get("variables", [])
+		if variables_raw is Array:
+			for var_obj in variables_raw:
+				if not var_obj is Dictionary:
+					continue
+				var declaration := _parse_data_asset_variable(var_obj)
+				if not declaration.is_empty():
+					variables.append(declaration)
+
+		var overrides_raw = asset_obj.get("overrides", {})
+		var parent = asset_obj.get("parent", null)
+		result[str(asset_id)] = {
+			# The MAP KEY is the authoritative assetId: it is what the pills, the resolver
+			# and the save key all use.
+			"id": str(asset_id),
+			"name": str(asset_obj.get("name", "")),
+			"parent": "" if parent == null else str(parent),
+			"variables": variables,
+			"raw_overrides": overrides_raw if overrides_raw is Dictionary else {},
+		}
+
+	return result
+
+
+## Parse one .sfd variable declaration, or an empty Dictionary when the row is DROPPED.
+##
+## Two kinds of row are dropped rather than carried:
+##  - "category" rows, which are section headers with no value at all and can never be
+##    resolved. StoryFlowTypes.VariableType has no CATEGORY member, and the contract's
+##    category-drop sanction lets a typed engine drop them at import — Unreal drops, so
+##    Godot drops. Silent, because it is the normal shape of an authored .sfd.
+##  - rows whose type string the shared table does not know, which is a broken or
+##    newer-than-this-plugin export and worth a warning.
+##
+## The declared VALUE is typed by StoryFlowDataAssetStore.type_value — the same one rule that
+## types stored overrides — so a declaration default and an override of it can never disagree
+## about the shape a read hands out. A row with no usable value keeps its TYPE DEFAULT and
+## still resolves; "is this id declared?" and "does it carry a value?" are different questions.
+func _parse_data_asset_variable(var_obj: Dictionary) -> Dictionary:
+	var var_id := str(var_obj.get("id", ""))
+	if var_id.is_empty():
+		return {}
+
+	var type_string := str(var_obj.get("type", ""))
+	if type_string == "category":
+		return {}
+
+	var var_type: StoryFlowTypes.VariableType = StoryFlowTypes.parse_variable_type(type_string)
+	if var_type == StoryFlowTypes.VariableType.NONE:
+		push_warning("StoryFlow: Data Asset variable '%s' has unknown type '%s' - dropping the declaration" % [var_obj.get("name", var_id), type_string])
+		return {}
+
+	var key_type_string := ""
+	var value_type_string := ""
+	var key_enum_values: Array = []
+	var value_enum_values: Array = []
+	if var_type == StoryFlowTypes.VariableType.MAP:
+		key_type_string = str(var_obj.get("keyType", "string"))
+		value_type_string = str(var_obj.get("valueType", "string"))
+		if var_obj.has("keyEnumValues"):
+			for ev in var_obj["keyEnumValues"]:
+				key_enum_values.append(str(ev))
+		if var_obj.has("valueEnumValues"):
+			for ev in var_obj["valueEnumValues"]:
+				value_enum_values.append(str(ev))
+
+	var enum_values: Array = []
+	if var_obj.has("enumValues"):
+		for ev in var_obj["enumValues"]:
+			enum_values.append(str(ev))
+
+	var declaration: Dictionary = {
+		"id": var_id,
+		"name": str(var_obj.get("name", "")),
+		"type": var_type,
+		"is_array": bool(var_obj.get("isArray", false)),
+		"key_type": StoryFlowTypes.parse_variable_type(key_type_string),
+		"value_type": StoryFlowTypes.parse_variable_type(value_type_string),
+		"enum_values": enum_values,
+		"key_enum_values": key_enum_values,
+		"value_enum_values": value_enum_values,
+		"value": null,
+	}
+
+	var value: StoryFlowVariant = null
+	if var_obj.has("value"):
+		value = StoryFlowDataAssetStore.type_value(declaration, var_obj["value"])
+	if value == null:
+		value = StoryFlowDataAssetStore.type_default(declaration)
+	declaration["value"] = value
+
+	return declaration
 
 
 # =============================================================================

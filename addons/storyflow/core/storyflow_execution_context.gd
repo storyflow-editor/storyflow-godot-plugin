@@ -61,6 +61,20 @@ var local_variable_name_index: Dictionary = {}
 var global_variable_name_index: Dictionary = {}
 
 # =============================================================================
+# Data Assets
+# =============================================================================
+
+## NON-OWNING references to StoryFlowManager's .sfd seed and session overlay (engine contract
+## 3), handed over at dialogue start. The manager mutates both in place forever, so these stay
+## valid for the life of the dialogue.
+##
+## REBIND these, never clear() them: the dictionaries belong to the manager, so clearing one
+## through this reference would wipe the whole game's data-asset state. reset() below rebinds
+## to fresh empties, which is the "no store" state every accessor checks.
+var data_asset_seed: Dictionary = {}
+var data_asset_overlay: Dictionary = {}
+
+# =============================================================================
 # Current Display State
 # =============================================================================
 
@@ -156,6 +170,9 @@ func reset() -> void:
 	local_variables.clear()
 	local_variable_name_index.clear()
 	global_variable_name_index.clear()
+	# REBOUND, not cleared - these point at manager-owned dictionaries (see above).
+	data_asset_seed = {}
+	data_asset_overlay = {}
 	current_dialogue_state = null
 	persistent_background_image = ""
 	persistent_image = ""
