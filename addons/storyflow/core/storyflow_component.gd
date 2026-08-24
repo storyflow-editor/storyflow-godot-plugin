@@ -829,9 +829,10 @@ func _write_data_asset_scalar(asset: String, variable_name: String, expected: Ar
 	# THE CACHE-CLEAR OBLIGATION every .sfd writer carries (StoryFlowDataAssetStore.try_set's
 	# header). The accessor's own read is carved out of the boolean memo, but a memoized PARENT
 	# above it is not: an option gated through andBool(accessor, true) keeps answering the
-	# pre-write value until this runs. Same line, same reason, as _handle_set_data_asset_var.
-	if _evaluator:
-		_evaluator.clear_cache()
+	# pre-write value until this runs. Same line, same reason and the same SELECTIVE reach as
+	# _handle_set_data_asset_var - a host write can land while a dialogue is parked mid-chain,
+	# so it has exactly as much business wiping array outputs as a graph write does: none.
+	_context.clear_boolean_memo()
 	return true
 
 
@@ -2506,9 +2507,10 @@ func _update_connected_array_variable(node: Dictionary, array_handle_suffix: Str
 		# op hands downstream must be what it stored. An enum-declared array fed plain strings
 		# would otherwise show STRING-tagged elements on the output pin and ENUM-tagged ones in
 		# the overlay, and an op that emptied the array would hand out an untagged one — the
-		# exact hole the write's own stamp two lines up exists to close.
-		_evaluator.clear_cache()
-		_context.restore_live_loop_outputs()
+		# exact hole the write's own stamp two lines up exists to close. The restamp survives the
+		# switch to a selective clear because its job was always the TAG; not being wiped was
+		# only ever the other half of it.
+		_context.clear_boolean_memo()
 		var restamp := StoryFlowVariant.new()
 		restamp.set_array(da_elements)
 		restamp.type = StoryFlowDataAssetStore.storage_type(da_declared)
@@ -3263,12 +3265,11 @@ func _handle_set_data_asset_var(node: Dictionary) -> void:
 	# evaluate_boolean_from_node answers from that node's stale cache: an option gated through
 	# andBool(accessor, true) stayed VISIBLE across a write to false until this line existed.
 	#
-	# ... and the clear is INDISCRIMINATE, which costs one thing worth paying back: an array
-	# forEach publishes its current element through cached_output, so a write from inside a loop
-	# body would blank the loop-element pin for the rest of that iteration. Restoring the live
-	# frames is the same clear-then-restore shape the forEach iteration itself already uses.
-	_evaluator.clear_cache()
-	_context.restore_live_loop_outputs()
+	# SELECTIVE, and it has to be: clear_cached_outputs nulls EVERY node output, and mid-chain
+	# that takes an array forEach's current element and every array op's result pin down with the
+	# booleans. clear_boolean_memo touches only the derived booleans the memo actually serves,
+	# which is both the whole of what needs invalidating here and the whole of what may be.
+	_context.clear_boolean_memo()
 
 	_handle_set_node_end(node, flow_handle)
 

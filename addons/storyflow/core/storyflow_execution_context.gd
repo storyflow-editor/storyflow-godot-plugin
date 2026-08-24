@@ -168,7 +168,39 @@ func clear_cached_outputs() -> void:
 		state.cached_output = null
 
 
+## Drop ONLY the memoized derived booleans, leaving every other node output standing.
+##
+## THE MID-CHAIN INVALIDATION. A .sfd write changes what an option condition should answer, so
+## the booleans computed above an accessor have to be recomputed - but clear_cached_outputs is
+## indiscriminate, and mid-chain that is a bug rather than a cost. It nulls every cached_output
+## there is, and two other things live in that field: an array forEach's current ELEMENT, and
+## every array op's RESULT PIN. Both used to vanish when a .sfd Set ran anywhere earlier in the
+## same exec chain, silently, with an identical trace.
+##
+## StoryFlowTypes.is_boolean_memo_node is the whole scope, and its header carries the reasoning
+## for every inclusion and exclusion. The reference runtime's clearNotBoolCache has the same
+## reach for the same reason.
+##
+## NOT a replacement for clear_cached_outputs at CHAIN BOUNDARIES - option selection, dialogue
+## advance, loop iteration. Those legitimately want everything gone, because the chain that
+## produced those outputs is over.
+func clear_boolean_memo() -> void:
+	for node_id in node_runtime_states:
+		var node := current_script.get_node(node_id) if current_script else {}
+		if node.is_empty():
+			continue
+		if StoryFlowTypes.is_boolean_memo_node(node.get("type", StoryFlowTypes.NodeType.UNKNOWN)):
+			node_runtime_states[node_id].cached_output = null
+
+
 ## Re-stamp the current element of every ACTIVE array forEach onto its node's cached_output.
+##
+## CURRENTLY UNCALLED, and kept on purpose. It was the .sfd write path's repair until
+## clear_boolean_memo made the damage impossible to do in the first place - no forEach type is a
+## boolean memo type, so a selective clear cannot reach a loop element. What still needs it is
+## every remaining BLUNT clear_cached_outputs that can run inside a loop body: a dialogue node in
+## a forEach body loses its loop element on option selection or advance today, which is a
+## separate open item.
 ##
 ## Call this after any clear_cached_outputs that happens INSIDE a loop body. An array forEach
 ## publishes its current element through cached_output, which clear_cached_outputs nulls along

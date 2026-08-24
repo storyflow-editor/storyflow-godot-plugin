@@ -43,6 +43,7 @@ const CHILD := "da_1b2c3d4e5f60718293a4b5c6d7e8f90a"
 const GRANDCHILD := "da_2c3d4e5f60718293a4b5c6d7e8f90a1b"
 const V_ALIVE := "7f3a1c9e4b2d40518a6f0c3e7d1b5a29"
 const V_TITLE := "5b1d8a04c6e2493fa72c9d0f31e6b8a7"
+const V_TAGS := "c58e2f13a0d64c9b871e3f05d2a76b48"
 
 var _checks: int = 0
 var _failures: int = 0
@@ -63,6 +64,7 @@ func _initialize() -> void:
 	_test_writes()
 	_test_write_refusals()
 	_test_write_cache_clear()
+	_test_host_write_mid_chain()
 	_test_string_literals()
 	_test_ambiguous_display_name()
 
@@ -301,6 +303,78 @@ func _test_write_cache_clear() -> void:
 		evaluator.evaluate_option_visibility({"id": "o2"}, "D") == false)
 
 	_teardown(component)
+
+
+# =============================================================================
+# 7b. A host write that lands MID-CHAIN
+# =============================================================================
+
+## THE HOST SETTER'S CLEAR MUST BE AS NARROW AS THE GRAPH'S, and this is the shape that can tell.
+##
+## At a PARKED dialogue nothing distinguishes them: _handle_dialogue runs a blunt
+## clear_cached_outputs of its own on the way in, so every node output is already gone before any
+## host call can reach one. The difference only shows while a chain is still running - and game
+## code reaches exactly there through variable_changed, which the component emits from inside
+## chain processing. A host reacting to a variable by writing a Data Asset is an ordinary
+## pattern, and it lands between two nodes of a live chain.
+##
+## Here the write fires from the handler for setBool, one exec step after an array op and one
+## before the node that copies that op's output pin. A blunt clear in the host setter wipes the
+## pin in between and the copy lands empty, exactly as it did on the graph path.
+func _test_host_write_mid_chain() -> void:
+	print("-- a host write landing mid-chain --")
+	_manager.reset_data_assets()
+	var script := Graph.build("scripts/HostMidChain.sfe", {
+		"0": Graph.start(),
+		"PB": Graph.pill("PB", BASE),
+		"GT": Graph.accessor("GT", {"variableId": V_TAGS, "variable": "tags", "variableType": "string", "isArray": true}),
+		"ADD": Graph.node("ADD", Types.NodeType.ADD_TO_STRING_ARRAY, "addToStringArray", {"value": VariantScript.from_string("new")}),
+		# Emits variable_changed from inside the chain, which is where the host write comes from.
+		"SB": Graph.node("SB", Types.NodeType.SET_BOOL, "setBool", {"variable": "trigger", "isGlobal": false, "value": VariantScript.from_bool(true)}),
+		"OUT": Graph.node("OUT", Types.NodeType.SET_STRING_ARRAY, "setStringArray", {"variable": "echo", "isGlobal": false}),
+		"D": Graph.dialogue("D"),
+	}, [
+		Graph.exec("0", "ADD"), Graph.exec_flow("ADD", "SB"), Graph.exec_flow("SB", "OUT"), Graph.exec_flow("OUT", "D"),
+		Graph.pill_wire("PB", "GT"),
+		Graph.data_wire("GT", "string-array", "ADD", Handles.IN_STRING_ARRAY),
+		Graph.data_wire("ADD", "string-array", "OUT", Handles.IN_STRING_ARRAY),
+	], {
+		"trigger": Graph.scalar_var("trigger", "trigger", Types.VariableType.BOOLEAN, VariantScript.from_bool(false)),
+		"echo": Graph.array_var("echo", "echo", Types.VariableType.STRING, []),
+	})
+
+	_manager.get_project().scripts[script.script_path] = script
+	var component := ComponentScript.new()
+	component.dialogue_ui_scene = null
+	root.add_child(component)
+	_mid_chain_target = component
+	component.variable_changed.connect(_on_variable_changed_write_data_asset)
+	component.start_dialogue_with_script(script.script_path)
+	component.variable_changed.disconnect(_on_variable_changed_write_data_asset)
+	_mid_chain_target = null
+
+	_check("the host write did fire from inside the chain", _mid_chain_writes == 1)
+	_check("and it landed in the overlay",
+		_overlay_value(BASE, V_ALIVE) != null and _overlay_value(BASE, V_ALIVE).get_bool() == false)
+	var echoed := component.get_array_variable("echo")
+	_check("the array op OUTPUT PIN survived the mid-chain host write (got %d elements)" % echoed.size(),
+		echoed.size() == 3)
+	_check("carrying the appended element rather than a blank",
+		echoed.size() == 3 and echoed[2].get_string() == "new")
+	_teardown(component)
+
+
+var _mid_chain_target: Node = null
+var _mid_chain_writes: int = 0
+
+
+## Writes a Data Asset from inside the chain, once. Guarded because the setter it calls can
+## itself emit variable_changed on some paths, and an unguarded handler would recurse.
+func _on_variable_changed_write_data_asset(_info) -> void:
+	if _mid_chain_writes > 0 or _mid_chain_target == null:
+		return
+	_mid_chain_writes += 1
+	_mid_chain_target.set_data_asset_bool(BASE, "alive", false)
 
 
 # =============================================================================

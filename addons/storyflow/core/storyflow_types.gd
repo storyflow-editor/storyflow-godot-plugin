@@ -616,6 +616,60 @@ static func is_logic_node(node_type: NodeType) -> bool:
 
 
 # =============================================================================
+# Boolean Memo Detection
+# =============================================================================
+
+## The node types whose cached_output is a DERIVED BOOLEAN and nothing else - the set the
+## boolean memo in evaluate_boolean_from_node actually serves, and the only set a mid-chain
+## invalidation may touch.
+##
+## WHY THIS IS A LIST AND NOT "cached_output.type == BOOLEAN": set_array tags an array variant
+## from its element zero, so a bool-ARRAY op's output pin is BOOLEAN-typed too. A value predicate
+## would wipe it, which is the exact bug this list exists to stop.
+##
+## DERIVED is the whole criterion. Every type here computes its boolean from INPUTS, so an
+## upstream .sfd write can change the right answer and a memo held across that write is a stale
+## one. Deliberately absent:
+##  - getBool / setBool, and the forEach loop element sources: their value comes from variable or
+##    loop storage, which no .sfd write touches, and a forEach node's cached_output IS the live
+##    loop element (clearing it blanks the loop-element pin mid-iteration).
+##  - getCharacterVar / setCharacterVar, runScript, the .sfd accessors, getMapValue / hasMapKey:
+##    each answers booleans through evaluate_boolean_from_node, but their cached_output doubles
+##    as a TYPED output pin carrying arrays and maps, and the last three are excluded from the
+##    memo on the read side anyway.
+##  - every array-op node (addTo/removeFrom/clear/setElement): not boolean producers at all, and
+##    their cached_output is the op's result pin.
+##
+## Mirrors the reference runtime's clearNotBoolCache scope (its boolean + comparison caches);
+## node OUTPUTS live outside that structure there, which is why the HTML runtime cannot have the
+## bug a blunt clear reintroduces here.
+static var _boolean_memo_node_types: Array[NodeType] = [
+	# Boolean logic
+	NodeType.NOT_BOOL, NodeType.AND_BOOL, NodeType.OR_BOOL, NodeType.EQUAL_BOOL,
+	# Integer comparisons
+	NodeType.GREATER_THAN, NodeType.GREATER_THAN_OR_EQUAL,
+	NodeType.LESS_THAN, NodeType.LESS_THAN_OR_EQUAL, NodeType.EQUAL_INT,
+	# Float comparisons
+	NodeType.GREATER_THAN_FLOAT, NodeType.GREATER_THAN_OR_EQUAL_FLOAT,
+	NodeType.LESS_THAN_FLOAT, NodeType.LESS_THAN_OR_EQUAL_FLOAT, NodeType.EQUAL_FLOAT,
+	# String and enum comparisons
+	NodeType.EQUAL_STRING, NodeType.CONTAINS_STRING, NodeType.EQUAL_ENUM,
+	# Numeric -> boolean conversions
+	NodeType.INT_TO_BOOLEAN, NodeType.FLOAT_TO_BOOLEAN,
+	# Array membership tests - an array input can be a .sfd accessor
+	NodeType.ARRAY_CONTAINS_BOOL, NodeType.ARRAY_CONTAINS_INT, NodeType.ARRAY_CONTAINS_FLOAT,
+	NodeType.ARRAY_CONTAINS_STRING, NodeType.ARRAY_CONTAINS_IMAGE,
+	NodeType.ARRAY_CONTAINS_CHARACTER, NodeType.ARRAY_CONTAINS_AUDIO,
+	# Boolean array element reads - array and index inputs, both derivable from a .sfd read
+	NodeType.GET_BOOL_ARRAY_ELEMENT, NodeType.GET_RANDOM_BOOL_ARRAY_ELEMENT,
+]
+
+
+static func is_boolean_memo_node(node_type: NodeType) -> bool:
+	return node_type in _boolean_memo_node_types
+
+
+# =============================================================================
 # ForEach Loop Detection
 # =============================================================================
 

@@ -74,6 +74,7 @@ func _initialize() -> void:
 	_test_string_literal_exemption()
 	_test_array_ops()
 	_test_write_inside_a_loop_body()
+	_test_array_op_output_survives_a_later_write()
 
 	if _failures == 0:
 		print("ALL %d CHECKS PASSED" % _checks)
@@ -540,6 +541,84 @@ func _test_write_inside_a_loop_body() -> void:
 		appended != null and appended.get_array()[2].get_string() == "alpha"
 		and appended.get_array()[3].get_string() == "beta")
 	_teardown(op_component)
+
+
+# =============================================================================
+# 7. An array op's OUTPUT PIN read after a later .sfd write
+# =============================================================================
+
+## THE SECOND CASUALTY CLASS OF A BLUNT CACHE CLEAR, and the one loop elements were the first of.
+##
+## An array op publishes its result on its own output pin, which is node cached_output like
+## everything else - so a setDataAssetVariable ANYWHERE LATER IN THE SAME EXEC CHAIN used to wipe
+## it, and a node reading that pin afterwards got an empty array with no warning and an identical
+## trace. The reference runtime cannot have this bug: its clearNotBoolCache touches the boolean
+## and comparison caches only, and node outputs live somewhere else entirely.
+##
+## The write here is to a DIFFERENT asset variable than the array the op touched, so nothing
+## about the .sfd store explains the loss - only the clear does. The control leg proves the graph
+## itself is sound: the identical chain with a plain setBool in place of the .sfd write copies
+## both elements.
+func _test_array_op_output_survives_a_later_write() -> void:
+	print("-- an array op output pin survives a later .sfd write --")
+	_manager.reset_data_assets()
+	var script := Graph.build("scripts/OutputPin.sfe", {
+		"0": Graph.start(),
+		"PC": Graph.pill("PC", CHILD),
+		"GT": Graph.accessor("GT", {"variableId": V_TAGS, "variable": "tags", "variableType": "string", "isArray": true}),
+		"ADD": Graph.node("ADD", Types.NodeType.ADD_TO_STRING_ARRAY, "addToStringArray", {"value": VariantScript.from_string("new")}),
+		# The .sfd write that sits BETWEEN the op and the read of its output.
+		"GS": Graph.node("GS", Types.NodeType.GET_STRING, "getString", {"variable": "v_new", "isGlobal": false}),
+		"W": Graph.setter("W", {"variableId": V_SECRET, "variable": "secret", "variableType": "string"}),
+		# Reads ADD's output pin, two exec steps later.
+		"OUT": Graph.node("OUT", Types.NodeType.SET_STRING_ARRAY, "setStringArray", {"variable": "echo", "isGlobal": false}),
+		"D": Graph.dialogue("D"),
+	}, [
+		Graph.exec("0", "ADD"), Graph.exec_flow("ADD", "W"), Graph.exec_flow("W", "OUT"), Graph.exec_flow("OUT", "D"),
+		Graph.pill_wire("PC", "GT"), Graph.pill_wire("PC", "W"),
+		Graph.data_wire("GT", "string-array", "ADD", Handles.IN_STRING_ARRAY),
+		Graph.data_wire("GS", "string", "W", Handles.in_data_asset_value("string")),
+		Graph.data_wire("ADD", "string-array", "OUT", Handles.IN_STRING_ARRAY),
+	], {
+		"v_new": Graph.scalar_var("v_new", "NewSecret", Types.VariableType.STRING, VariantScript.from_string("written")),
+		"echo": Graph.array_var("echo", "echo", Types.VariableType.STRING, []),
+	})
+
+	var component := _run(script)
+	var echoed := component.get_array_variable("echo")
+	_check("an array op OUTPUT PIN survives a .sfd Set later in the same chain (got %d elements)" % echoed.size(),
+		echoed.size() == 3)
+	_check("and carries the appended element, not a blank of the right length",
+		echoed.size() == 3 and echoed[2].get_string() == "new")
+	_check("while the .sfd write in between still landed",
+		_overlay_value(_manager.get_data_asset_overlay(), CHILD, V_SECRET) != null)
+	_teardown(component)
+
+	# THE CONTROL: the same chain with an ordinary setBool where the .sfd write was. If this leg
+	# ever fails, the graph is wrong and the leg above is passing or failing for its own reasons.
+	_manager.reset_data_assets()
+	var control := Graph.build("scripts/OutputPinControl.sfe", {
+		"0": Graph.start(),
+		"PC": Graph.pill("PC", CHILD),
+		"GT": Graph.accessor("GT", {"variableId": V_TAGS, "variable": "tags", "variableType": "string", "isArray": true}),
+		"ADD": Graph.node("ADD", Types.NodeType.ADD_TO_STRING_ARRAY, "addToStringArray", {"value": VariantScript.from_string("new")}),
+		"W": Graph.node("W", Types.NodeType.SET_BOOL, "setBool", {"variable": "flag", "isGlobal": false, "value": VariantScript.from_bool(true)}),
+		"OUT": Graph.node("OUT", Types.NodeType.SET_STRING_ARRAY, "setStringArray", {"variable": "echo", "isGlobal": false}),
+		"D": Graph.dialogue("D"),
+	}, [
+		Graph.exec("0", "ADD"), Graph.exec_flow("ADD", "W"), Graph.exec_flow("W", "OUT"), Graph.exec_flow("OUT", "D"),
+		Graph.pill_wire("PC", "GT"),
+		Graph.data_wire("GT", "string-array", "ADD", Handles.IN_STRING_ARRAY),
+		Graph.data_wire("ADD", "string-array", "OUT", Handles.IN_STRING_ARRAY),
+	], {
+		"flag": Graph.scalar_var("flag", "flag", Types.VariableType.BOOLEAN, VariantScript.from_bool(false)),
+		"echo": Graph.array_var("echo", "echo", Types.VariableType.STRING, []),
+	})
+
+	var control_component := _run(control)
+	_check("CONTROL: the same chain with a plain setBool copies both elements",
+		control_component.get_array_variable("echo").size() == 3)
+	_teardown(control_component)
 
 
 # =============================================================================
