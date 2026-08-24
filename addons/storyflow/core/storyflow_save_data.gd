@@ -24,6 +24,12 @@ const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.
 ##
 ## Globals key by variable ID, character variables key by NAME, and every record carries both an
 ## id and a name so any engine can match on its native key.
+##
+## COMPATIBILITY RUNS ONE WAY. This build reads both dialects, so every save a player already has
+## keeps loading. A save this build WRITES is NOT readable by a pre-v1.3.0 build: that reader
+## looks for the snake_case sections, finds none, and restores nothing while still reporting
+## success, which leaves the player on a fresh game rather than on an error. Downgrading the
+## plugin below 1.3.0 after saving is therefore not supported.
 const SAVE_FORMAT_VERSION := "1"
 const SAVE_DIR := "user://storyflow_saves/"
 
