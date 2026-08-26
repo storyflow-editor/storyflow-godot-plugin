@@ -307,9 +307,9 @@ func _test_host_latch_unloaded_and_cross_lane_independence() -> void:
 # =============================================================================
 
 ## First tier on get_character_variable (case-insensitive builtin arms, cf_ folded in);
-## SECOND tier on set_character_variable: ONLY the exact cf_ spellings divert - the native
-## spellings keep the case-sensitive dict behavior byte-identical, which is what the
-## double-row image/Image fixture protects.
+## SECOND tier on set_character_variable: ONLY the cf_ tokens divert, matched
+## case-insensitively per A6(a) - the native spellings keep the case-sensitive dict
+## behavior byte-identical, which is what the double-row image/Image fixture protects.
 func _test_public_lane_alias_tiers() -> void:
 	print("-- public lane alias tiers --")
 	_import_full_build("aliases", FX.index_text_valid())
@@ -337,9 +337,10 @@ func _test_public_lane_alias_tiers() -> void:
 	component.set_character_variable(FX.ALICE_KEY, "image", VariantScript.from_string("nope"))
 	_check("set lowercase 'image' is the pre-P4 silent no-op",
 		alice.image_key == "cellar" and _var_of(alice, "Image").get_string() == "custom-row-write")
-	component.set_character_variable(FX.ALICE_KEY, "Cf_Name", VariantScript.from_string("nope"))
-	_check("the second tier is EXACT - 'Cf_Name' diverts nothing", alice.character_name == "renamed.key")
-	_check("and none of the no-ops created a variable (got %d)" % alice.variables.size(),
+	component.set_character_variable(FX.ALICE_KEY, "Cf_Name", VariantScript.from_string("case.folded.key"))
+	_check("the second tier forgives case on the cf_ tokens (A6(a)) - 'Cf_Name' diverts to the builtin",
+		alice.character_name == "case.folded.key")
+	_check("and none of these writes created a variable (got %d)" % alice.variables.size(),
 		alice.variables.size() == var_count)
 	_free_component(component)
 

@@ -536,8 +536,8 @@ func _test_pre_p4_full_run_sweep() -> void:
 	# GP3 extension: the ById lanes on this same EMPTY bridge. The pure lookup answers its
 	# "" sentinel WITHOUT warning (A3(a) - an existence query is not a degraded resolution)
 	# and enumeration still answers the loaded set - neither lane needs the index to exist.
-	_check("path-by-id on an empty bridge answers '' (got '%s')" % component.get_character_path_by_id(FX.ALICE_ID),
-		component.get_character_path_by_id(FX.ALICE_ID) == "")
+	var by_id_path := component.get_character_path_by_id(FX.ALICE_ID)
+	_check("path-by-id on an empty bridge answers '' (got '%s')" % by_id_path, by_id_path == "")
 	var paths := component.get_character_paths()
 	_check("enumeration still answers the loaded records (got %s)" % str(paths),
 		paths == [FX.ALICE_KEY, FX.BOB_KEY])

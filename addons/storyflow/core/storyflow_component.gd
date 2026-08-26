@@ -640,17 +640,19 @@ func set_character_variable(character_path: String, variable_name: String, value
 ## lane changing shape.
 ##
 ## SECOND TIER of the A2(a) aliases: this lane has NO builtin arms and a
-## case-sensitive dict, so ONLY the exact reserved cf_ ids divert to the builtin
-## fields — the native spellings stay byte-untouched (a custom variable named "Name"
+## case-sensitive dict, so ONLY the reserved cf_ tokens divert to the builtin fields —
+## matched CASE-INSENSITIVELY per A6(a), since the reserved names can shadow nothing —
+## while the native spellings stay byte-untouched (a custom variable named "Name"
 ## or "Image" still writes exactly as pre-P4, and a name that matches nothing is still
 ## the same silent no-op, never a create).
 func _apply_character_variable(character: StoryFlowCharacter, variable_name: String, value: StoryFlowVariant) -> bool:
 	if not character:
 		return false
-	if variable_name == StoryFlowCharacter.CF_NAME_ID:
+	var lower := variable_name.to_lower()
+	if lower == StoryFlowCharacter.CF_NAME_ID:
 		character.character_name = value.get_string("")
 		return true
-	if variable_name == StoryFlowCharacter.CF_IMAGE_ID:
+	if lower == StoryFlowCharacter.CF_IMAGE_ID:
 		character.image_key = value.get_string("")
 		return true
 	if not character.variables.has(variable_name):
@@ -734,8 +736,9 @@ func get_character_portrait(character_path: String, asset_key: String = "") -> T
 
 ## HOST-LANE resolution of one character FILE id: the loaded record key, or "" with the
 ## dangling/unloaded warn already emitted at most once on the MANAGER pair. Each ById door
-## calls this exactly ONCE and then delegates — never a second resolution (the drift the
-## id-and-path-reach-one-record pin exists to catch).
+## resolves exactly ONCE and then delegates — never a second resolution (the drift the
+## id-and-path-reach-one-record pin exists to catch). The getters route through here; the
+## setter carries the same shape inline to reuse its own manager guard.
 ##
 ## A non-id-shaped value passes the resolver's verbatim non-id rung untouched and lands in
 ## the path delegate behind each door, so a record key from [method get_character_paths] is
@@ -795,10 +798,8 @@ func get_character_path_by_id(character_id: String) -> String:
 func get_character_paths() -> Array[String]:
 	var out: Array[String] = []
 	var mgr := get_manager()
-	if not mgr:
-		return out
-	for record_key in mgr.get_runtime_characters():
-		out.append(str(record_key))
+	if mgr:
+		out.assign(mgr.get_runtime_characters().keys())
 	return out
 
 
@@ -825,14 +826,18 @@ func get_character_variable_by_id(character_id: String, variable_name: String, d
 ## stays as silent as the void path lane this extends (the shared _apply_character_variable
 ## core) — the bool is the new idiom's reporting channel, not a new warning.
 ##
-## The SECOND-TIER aliases ride the shared core: only the exact cf_ spellings divert to the
-## builtins; native spellings keep the case-sensitive dict byte-identical. A2(b): emits
-## nothing.
+## The SECOND-TIER aliases ride the shared core: only the cf_ tokens divert to the builtins
+## (case-insensitive per A6(a)); native spellings keep the case-sensitive dict
+## byte-identical. A2(b): emits nothing.
 func set_character_variable_by_id(character_id: String, variable_name: String, value: StoryFlowVariant) -> bool:
-	var record_key := _resolve_character_id_host(character_id)
+	var mgr := get_manager()
+	if not mgr:
+		return false
+	var record_key := StoryFlowCharacter.resolve_character_key(
+		mgr.get_character_id_bridge(), mgr.get_runtime_characters(), character_id, mgr)
 	if record_key.is_empty():
 		return false
-	return _apply_character_variable(get_manager().get_runtime_character(record_key), variable_name, value)
+	return _apply_character_variable(mgr.get_runtime_character(record_key), variable_name, value)
 
 
 # =============================================================================

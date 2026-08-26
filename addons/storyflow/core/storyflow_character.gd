@@ -37,19 +37,21 @@ static func normalize_path(path: String) -> String:
 #
 # THE CASE CONTRAST (the Unreal F3 lesson): character FILE ids are CASE-SENSITIVE — the
 # da_ shape test and the bridge lookup below match exactly — while the builtin variable
-# ALIASES are case-insensitive on the lanes whose builtin arms were already
-# case-insensitive pre-P4. Ids identify, aliases address; only the FIRST-TIER aliases
-# forgive case — the second tier is exact by design. (Cross-engine divergence, recorded
-# for the close-out register: Unity's cf_ rewrite is case-insensitive, Godot's second tier
-# is exact to maximize native-spellings-byte-untouched — deliberate, both defensible.)
+# ALIASES are case-insensitive on every lane. Ids identify, aliases address; BOTH tiers
+# forgive case on the reserved cf_ tokens. That was a recorded divergence (Godot's second
+# tier was exact, Unity's case-insensitive) until the program close-out ruled it uniform —
+# A6(a): the cf_ names are absolutely reserved, so case-folding them can shadow nothing,
+# and a host calling set with CF_NAME must behave identically on every engine. Native
+# spellings on second-tier lanes still hit their case-sensitive dicts untouched.
 
 ## The reserved builtin variable ids (contract-reserved per V2 §8; the editor's locked
 ## cf_ rows). FIRST TIER of the A2(a) two-tier design: [method is_name_token] /
 ## [method is_image_token] fold these into the existing case-insensitive Name/Image arms
 ## (evaluator builtins, the node write arms, public get_character_variable, the DA-surface
 ## character branch, the interpolation name arms). SECOND TIER: lanes with NO builtin arm
-## and a case-sensitive dict (public set_character_variable) divert ONLY these exact
-## spellings, so the native spellings stay byte-untouched there.
+## and a case-sensitive dict (the set_character_variable core) divert ONLY these cf_
+## tokens — matched case-insensitively per A6(a) — so the native spellings stay
+## byte-untouched there.
 const CF_NAME_ID := "cf_name"
 const CF_IMAGE_ID := "cf_image"
 

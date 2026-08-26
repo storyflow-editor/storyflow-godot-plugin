@@ -131,10 +131,12 @@ func _test_pure_path_lookup_vs_record_getter() -> void:
 	_import_build("pure", FX.index_text_with_ghost())
 	var component := _make_component()
 
-	_check("path-by-id answers an indexed loaded id verbatim (got '%s')" % component.get_character_path_by_id(FX.ALICE_ID),
-		component.get_character_path_by_id(FX.ALICE_ID) == FX.ALICE_KEY)
-	_check("path-by-id answers an indexed UNLOADED id too (got '%s')" % component.get_character_path_by_id(FX.GHOST_ID),
-		component.get_character_path_by_id(FX.GHOST_ID) == FX.GHOST_KEY)
+	var alice_path := component.get_character_path_by_id(FX.ALICE_ID)
+	_check("path-by-id answers an indexed loaded id verbatim (got '%s')" % alice_path,
+		alice_path == FX.ALICE_KEY)
+	var ghost_path := component.get_character_path_by_id(FX.GHOST_ID)
+	_check("path-by-id answers an indexed UNLOADED id too (got '%s')" % ghost_path,
+		ghost_path == FX.GHOST_KEY)
 	_check("path-by-id answers '' for an unindexed id",
 		component.get_character_path_by_id(FX.DANGLING_ID) == "")
 	_check("and NO pure lookup warned (got %d)" % _manager.character_id_access_warnings_emitted,
@@ -185,14 +187,15 @@ func _test_variable_by_id_and_localization_scopes() -> void:
 	_import_build("a5", FX.index_text_valid(), true)
 	var component := _make_component()
 
-	_check("the id-bound read answers alice (Trust 3, got %d)" % component.get_character_variable_by_id(FX.ALICE_ID, "Trust").get_int(-1),
-		component.get_character_variable_by_id(FX.ALICE_ID, "Trust").get_int(-1) == 3)
+	var trust := component.get_character_variable_by_id(FX.ALICE_ID, "Trust").get_int(-1)
+	_check("the id-bound read answers alice (Trust 3, got %d)" % trust, trust == 3)
 	_check("the decoy id answers bob (Trust 9)",
 		component.get_character_variable_by_id(FX.BOB_ID, "Trust").get_int(-1) == 9)
 
 	# First tier rides the delegate, case-insensitively - and RESOLVES (A5).
-	_check("CF_NAME resolves to display text through the first tier (got '%s')" % component.get_character_variable_by_id(FX.ALICE_ID, "CF_NAME").get_string(),
-		component.get_character_variable_by_id(FX.ALICE_ID, "CF_NAME").get_string() == "Alicia")
+	var resolved_name := component.get_character_variable_by_id(FX.ALICE_ID, "CF_NAME").get_string()
+	_check("CF_NAME resolves to display text through the first tier (got '%s')" % resolved_name,
+		resolved_name == "Alicia")
 	_check("the DA-surface door answers the STORED key for the same builtin",
 		component.get_data_asset_string(FX.ALICE_ID, "cf_name") == "char.alice.name")
 	_check("and the raw record field holds the stored key",
@@ -237,7 +240,8 @@ func _test_set_by_id_tiers_and_refusals() -> void:
 		component.get_character_variable(FX.ALICE_KEY, "Trust").get_int(-1) == 77)
 	_check("the decoy is untouched (bob Trust 9)", _var_of(bob, "Trust").get_int(-1) == 9)
 
-	# SECOND tier, exact - the shared core with the void path lane.
+	# SECOND tier - the shared core with the void path lane: only the cf_ tokens divert,
+	# matched case-insensitively per A6(a); native spellings keep the case-sensitive dict.
 	_check("cf_image diverts to the builtin",
 		component.set_character_variable_by_id(FX.ALICE_ID, "cf_image", VariantScript.from_string("cellar"))
 			and alice.image_key == "cellar")
@@ -249,8 +253,9 @@ func _test_set_by_id_tiers_and_refusals() -> void:
 	_check("lowercase 'image' matches nothing - refused false, nothing written",
 		not component.set_character_variable_by_id(FX.ALICE_ID, "image", VariantScript.from_string("nope"))
 			and alice.image_key == "cellar" and _var_of(alice, "Image").get_string() == "row-write")
-	_check("the second tier is EXACT - 'Cf_Name' refuses",
-		not component.set_character_variable_by_id(FX.ALICE_ID, "Cf_Name", VariantScript.from_string("nope")))
+	_check("the second tier forgives case on the cf_ tokens (A6(a)) - 'Cf_Name' diverts and lands",
+		component.set_character_variable_by_id(FX.ALICE_ID, "Cf_Name", VariantScript.from_string("case.folded.key"))
+			and alice.character_name == "case.folded.key")
 
 	# A3(b) on this lane: refusal = false, never a create.
 	var var_count: int = alice.variables.size()
@@ -314,8 +319,8 @@ func _test_save_shape_id_bound() -> void:
 	# Load-back sanity: disturb the live value, load, and the id lane reads the save.
 	component.set_character_variable_by_id(FX.ALICE_ID, "Trust", VariantScript.from_int(5))
 	_check("load reports success", _manager.load_from_slot("gp3_shape"))
-	_check("the id lane reads the loaded value back (got %d)" % component.get_character_variable_by_id(FX.ALICE_ID, "Trust").get_int(-1),
-		component.get_character_variable_by_id(FX.ALICE_ID, "Trust").get_int(-1) == 21)
+	var loaded := component.get_character_variable_by_id(FX.ALICE_ID, "Trust").get_int(-1)
+	_check("the id lane reads the loaded value back (got %d)" % loaded, loaded == 21)
 	_free_component(component)
 
 
