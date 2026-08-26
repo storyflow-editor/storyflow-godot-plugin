@@ -1125,6 +1125,19 @@ func _run_localization_api() -> void:
 
 	_teardown(component)
 
+	# A SAVE LOAD must leave the language alone for the same reason a reset does: it is a player
+	# SETTING, not story state. Run with the dialogue torn down, because a load is refused while
+	# one is active.
+	_import_package("locapi_save", "verbatim", {}, true)
+	_check("api: a second localized import does not stack the registry (got %d rows)"
+		% _manager.get_languages().size(), _manager.get_languages().size() == 3)
+	_check("api: the language for the save", _manager.set_language("es"))
+	_check("api: a save is written", _manager.save_to_slot(SAVE_SLOT))
+	_check("api: the player then switches", _manager.set_language("fr"))
+	_check("api: the save loads", _manager.load_from_slot(SAVE_SLOT))
+	_check("api: and the LOAD left the language alone (got '%s')" % _manager.get_language(),
+		_manager.get_language() == "fr")
+
 
 # =============================================================================
 # Surface helpers

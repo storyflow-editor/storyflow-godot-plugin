@@ -87,6 +87,9 @@ func install_from_project(project) -> void:
 	if project != null:
 		for entry in project.languages:
 			languages.append({"code": str(entry.get("code", "")), "name": str(entry.get("name", ""))})
+		# The per-language tables are SHARED with the project rather than copied: nothing anywhere
+		# writes into them (the whole design is read-only, pre-resolved tables), and the outer
+		# clear() above drops only these references, never the project's own data.
 		for code in project.language_strings:
 			tables[str(code)] = project.language_strings[code]
 
@@ -214,6 +217,10 @@ static func language_for(localization, fallback_language: String) -> String:
 ##     key whenever the codes agree, which is every pre-localization project, so the second is
 ##     SKIPPED in that case rather than repeated - inherited from the Unity port, and the one
 ##     deliberate divergence from Unreal, which computes and probes both keys unconditionally.
+##     The source probe also fires for a project with NO sidecar whose caller asked in some other
+##     code: source_language is "en" there, so an id the requested code does not carry answers
+##     SOURCE TEXT instead of the raw key. That is the contract's never-undefined shape reaching
+##     one lane it did not use to, and it is pinned by the package's source-only case.
 ##  3. the caller's miss policy (never a lookup failure a caller has to test for).
 ##
 ## THE LOOKUP RUNS ON THE AUTHORED TEMPLATE. Every caller that interpolates `{Variable}` tokens
