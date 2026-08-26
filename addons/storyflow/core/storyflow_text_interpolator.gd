@@ -55,7 +55,10 @@ func interpolate(text: String) -> String:
 			var char_field: String = var_name.substr("Character.".length())
 			var char_data: StoryFlowCharacterData = _context.current_dialogue_state.character if _context.current_dialogue_state else null
 			if char_data:
-				if char_field.to_lower() == "name":
+				# First-tier A2(a) alias on the existing case-insensitive Name arm. There
+				# is NO Image arm in this snapshot lane (char_data carries no image field
+				# to answer with), so cf_image deliberately gets none either — engine-true.
+				if StoryFlowCharacter.is_name_token(char_field):
 					replacement = char_data.name
 				else:
 					replacement = char_data.variables.get(char_field, "{%s}" % var_name)
@@ -146,7 +149,9 @@ func _resolve_character_field(path_variant, inner_field: String, var_name: Strin
 	var character: StoryFlowCharacter = _manager.get_runtime_character(path)
 	if not character:
 		return literal
-	if inner_field.to_lower() == "name":
+	# First-tier A2(a) alias on the existing case-insensitive Name arm; like the
+	# {Character.X} lane, this one has no Image arm to alias.
+	if StoryFlowCharacter.is_name_token(inner_field):
 		return get_string(character.character_name, _language_code)
 	if character.variables.has(inner_field):
 		var v: Dictionary = character.variables[inner_field]

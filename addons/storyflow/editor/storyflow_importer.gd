@@ -928,6 +928,10 @@ func _parse_character_variables(raw: Dictionary) -> Dictionary:
 			"name": var_name,
 			"type": var_type,
 			"value": value,
+			# The wire's array marker, carried for the DA-surface character branch's
+			# scalar gate (P4): an array-valued row stores its ELEMENT type in "type", so
+			# without this flag a bool-array row would satisfy a scalar boolean read.
+			"is_array": bool(var_obj.get("isArray", false)),
 			"key_type": StoryFlowTypes.parse_variable_type(key_type_string),
 			"value_type": StoryFlowTypes.parse_variable_type(value_type_string),
 			"key_enum_values": key_enum_values,

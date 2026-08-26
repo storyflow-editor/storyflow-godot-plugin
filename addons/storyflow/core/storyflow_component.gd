@@ -606,12 +606,16 @@ func get_character_variable(character_path: String, variable_name: String) -> St
 	if not character:
 		return StoryFlowVariant.new()
 
-	# Handle built-in "Name" field (stored as string-table key, resolve it)
-	if variable_name.to_lower() == "name":
+	# Handle built-in "Name" field (stored as string-table key, resolve it). FIRST TIER of
+	# the A2(a) aliases: already case-insensitive pre-P4, so the shared predicate folds
+	# cf_name in (the cf_-only second tier lives on set_character_variable below). A5:
+	# this lane RESOLVES — it owns language state via _resolve_string — unlike the
+	# evaluator arm and the DA-surface branch, which answer the stored key.
+	if StoryFlowCharacter.is_name_token(variable_name):
 		return StoryFlowVariant.from_string(_resolve_string(character.character_name))
 
-	# Handle built-in "Image" field (current portrait asset key)
-	if variable_name.to_lower() == "image":
+	# Handle built-in "Image" field (current portrait asset key; first tier, as above)
+	if StoryFlowCharacter.is_image_token(variable_name):
 		return StoryFlowVariant.from_string(character.image_key)
 
 	var v: Dictionary = character.variables.get(variable_name, {})
@@ -626,7 +630,20 @@ func set_character_variable(character_path: String, variable_name: String, value
 	if not mgr:
 		return
 	var character: StoryFlowCharacter = mgr.get_runtime_character(character_path)
-	if not character or not character.variables.has(variable_name):
+	if not character:
+		return
+	# SECOND TIER of the A2(a) aliases: this lane has NO builtin arms and a
+	# case-sensitive dict, so ONLY the exact reserved cf_ ids divert to the builtin
+	# fields — the native spellings stay byte-untouched (a custom variable named "Name"
+	# or "Image" still writes exactly as pre-P4, and a name that matches nothing is still
+	# the same silent no-op, never a create).
+	if variable_name == StoryFlowCharacter.CF_NAME_ID:
+		character.character_name = value.get_string("")
+		return
+	if variable_name == StoryFlowCharacter.CF_IMAGE_ID:
+		character.image_key = value.get_string("")
+		return
+	if not character.variables.has(variable_name):
 		return
 	character.variables[variable_name]["value"] = value
 
@@ -819,6 +836,10 @@ func _read_data_asset_scalar(asset: String, variable_name: String, expected: Arr
 	var mgr := get_manager()
 	if not mgr:
 		return null
+	# P4 character branch: a seed-missing character id routes to the character system's
+	# state (seed-first — see the character-branch block below).
+	if not _character_routed_id(asset).is_empty():
+		return _read_character_scalar(asset, variable_name, expected)
 	var asset_id := _resolve_data_asset_id(asset)
 	if asset_id.is_empty():
 		return null
@@ -840,6 +861,9 @@ func _write_data_asset_scalar(asset: String, variable_name: String, expected: Ar
 	var mgr := get_manager()
 	if not mgr:
 		return false
+	# P4 character branch, same seed-first routing as the read above.
+	if not _character_routed_id(asset).is_empty():
+		return _write_character_scalar(asset, variable_name, expected, raw)
 	var asset_id := _resolve_data_asset_id(asset)
 	if asset_id.is_empty():
 		return false
@@ -872,6 +896,185 @@ func _write_data_asset_scalar(asset: String, variable_name: String, expected: Ar
 	# so it has exactly as much business wiping array outputs as a graph write does: none.
 	_context.clear_boolean_memo()
 	return true
+
+
+# =============================================================================
+# The P4 character branch of the Data Asset surface (characters engine contract §3/§4)
+# =============================================================================
+#
+# The DA-surface door onto CHARACTERS: a character FILE id passed as [param asset] routes the
+# typed accessors above to the character system's runtime state — the one store characters
+# have. get_data_asset_int("da_<char id>", "Trust") and a char-var node write are the same
+# state by construction.
+#
+# SEED-FIRST (Unity's inherited branch-order ruling, kept deliberately): an id the data-asset
+# seed carries IS a data asset, full stop; only a seed-missing da_ id consults the character
+# bridge. The two can never collide — characters never enter the seed (contract §2), pinned
+# by test through a real import — so the branch order is a tie-break that can never fire, and
+# that is exactly why it is safe to inherit unchanged.
+#
+# THE SCRIPT-LANE LADDER IS UNTOUCHED: scripts cannot bind characters through DA pins (the
+# reference pill's assetId always names a data asset; the editor never offers a character
+# there), so the node accessors keep their five-rung ladder with no character branch.
+#
+# NAME-ROUTED, per amendment A1: character variable access is name-keyed — the record's
+# variable map has no rename-stable ids to key by — and the reserved cf_name/cf_image ids
+# answer the builtin Name/Image through the shared first-tier predicates (A2(a)).
+# A5: this surface answers the STORED name key, never the localized string — it extends the
+# DA host surface, whose strings are literals (see the block header above); the public
+# get_character_variable is the RESOLVING door.
+# A2(b): no write on this branch raises character_variable_changed — the signal is node-lane
+# only, a contract property.
+# A3(b): a write naming a variable the record does not declare NEVER creates it — refusal
+# with this surface's posture (false, warned once).
+#
+# HOST LANE, so warns latch on the MANAGER's character pair (should_warn_character_id_access,
+# re-armed on set_project / reset_all_state only), never the context pair — a host call may
+# run with no dialogue anywhere. Refusal kinds compose the variable into the pair's
+# id|reason key shape ("novariable:<name>", "wrongtype:<name>", "isarray:<name>"); the
+# resolver's own "unloaded" rung joins the same pair. A DANGLING id — seed-missing AND
+# bridge-missing — never reaches this branch at all: it falls through to the DA ladder and
+# gets the pre-P4 noasset treatment, byte-identical.
+
+
+## The character id [param asset] routes to, or "" when the DA ladder should keep it.
+func _character_routed_id(asset: String) -> String:
+	var mgr := get_manager()
+	if not mgr:
+		return ""
+	if not asset.begins_with("da_"):
+		return ""
+	if mgr.get_data_asset_seed().has(asset):
+		return ""
+	if not mgr.get_character_id_bridge().has(asset):
+		return ""
+	return asset
+
+
+## Emit one character-branch refusal warning AT MOST ONCE per (id, reason), on the manager's
+## host-lane character pair — the same caller-formats-inside-the-if shape as
+## _warn_data_asset_once above.
+func _warn_character_access_once(id: String, reason: String, message: String) -> void:
+	var mgr := get_manager()
+	if not mgr or mgr.should_warn_character_id_access(id, reason):
+		push_warning(message)
+
+
+## The character record and variable row behind one branch access, shared by the read and the
+## write so the two degrade on exactly the same rungs. Returns {} with the warning already
+## emitted on any refusal; a builtin token returns {"builtin": "name"/"image"} instead of a row.
+func _resolve_character_branch(id: String, variable_name: String, expected: Array) -> Dictionary:
+	var mgr := get_manager()
+	var record_key := StoryFlowCharacter.resolve_character_key(
+		mgr.get_character_id_bridge(), mgr.get_runtime_characters(), id, mgr)
+	if record_key.is_empty():
+		return {} # unloaded — warned once by the resolver, on the manager pair
+	var character: StoryFlowCharacter = mgr.get_runtime_characters()[record_key]
+
+	# Builtins first — the same shadowing order every builtin arm keeps (first tier, A2(a)).
+	# Name behaves as a string declaration and Image as an image declaration, so the string
+	# door answers both and a mistyped read refuses like any other wrong type.
+	if StoryFlowCharacter.is_name_token(variable_name):
+		if not expected.has(StoryFlowTypes.VariableType.STRING):
+			_warn_character_access_once(id, "wrongtype:%s" % variable_name,
+				"StoryFlow: Character variable '%s.%s' is not of the requested type" % [id, variable_name])
+			return {}
+		return {"character": character, "builtin": "name"}
+	if StoryFlowCharacter.is_image_token(variable_name):
+		if not expected.has(StoryFlowTypes.VariableType.IMAGE):
+			_warn_character_access_once(id, "wrongtype:%s" % variable_name,
+				"StoryFlow: Character variable '%s.%s' is not of the requested type" % [id, variable_name])
+			return {}
+		return {"character": character, "builtin": "image"}
+
+	if not character.variables.has(variable_name):
+		_warn_character_access_once(id, "novariable:%s" % variable_name,
+			"StoryFlow: Character '%s' declares no variable named '%s'" % [id, variable_name])
+		return {}
+	var row: Dictionary = character.variables[variable_name]
+	if not expected.has(row.get("type", StoryFlowTypes.VariableType.NONE)):
+		_warn_character_access_once(id, "wrongtype:%s" % variable_name,
+			"StoryFlow: Character variable '%s.%s' is not of the requested type" % [id, variable_name])
+		return {}
+	if bool(row.get("is_array", false)):
+		_warn_character_access_once(id, "isarray:%s" % variable_name,
+			"StoryFlow: Character variable '%s.%s' is an array - use get_data_asset_variant" % [id, variable_name])
+		return {}
+	return {"character": character, "row": row}
+
+
+## One character-branch scalar read: the resolved variant, or null with the warning emitted.
+func _read_character_scalar(id: String, variable_name: String, expected: Array) -> StoryFlowVariant:
+	var resolved := _resolve_character_branch(id, variable_name, expected)
+	if resolved.is_empty():
+		return null
+	var character: StoryFlowCharacter = resolved["character"]
+	match resolved.get("builtin", ""):
+		"name":
+			return StoryFlowVariant.from_string(character.character_name)
+		"image":
+			return StoryFlowVariant.from_string(character.image_key)
+	var value = resolved["row"].get("value")
+	return value if value is StoryFlowVariant else null
+
+
+## One character-branch scalar write into the character's runtime state, reporting whether it
+## landed. The variant is minted against the row's declared type, like the .sfd write above;
+## the write REPLACES the row's value the way the node lane does. A3(b): a missing variable
+## was already refused in _resolve_character_branch — nothing here can create one.
+func _write_character_scalar(id: String, variable_name: String, expected: Array, raw) -> bool:
+	var resolved := _resolve_character_branch(id, variable_name, expected)
+	if resolved.is_empty():
+		return false
+	var character: StoryFlowCharacter = resolved["character"]
+	match resolved.get("builtin", ""):
+		"name":
+			character.character_name = str(raw)
+			_context.clear_boolean_memo()
+			return true
+		"image":
+			character.image_key = str(raw)
+			_context.clear_boolean_memo()
+			return true
+
+	var row: Dictionary = resolved["row"]
+	var value := StoryFlowVariant.new()
+	match row.get("type", StoryFlowTypes.VariableType.NONE):
+		StoryFlowTypes.VariableType.BOOLEAN: value.set_bool(bool(raw))
+		StoryFlowTypes.VariableType.INTEGER: value.set_int(int(raw))
+		StoryFlowTypes.VariableType.FLOAT: value.set_float(float(raw))
+		StoryFlowTypes.VariableType.ENUM: value.set_enum(str(raw))
+		_: value.set_string(str(raw))
+	row["value"] = value
+
+	# THE CACHE-CLEAR OBLIGATION, in parity with _write_data_asset_scalar above: a char-var
+	# boolean behind a memoized parent goes stale across a host write in exactly the same
+	# way a .sfd one does. No overlay is touched — character state lives on the character.
+	_context.clear_boolean_memo()
+	return true
+
+
+## The character branch of the untyped door: the value as a DETACHED copy (matching
+## get_data_asset_variant's promise — character variables are live runtime state), or null.
+func _character_variant(id: String, variable_name: String) -> StoryFlowVariant:
+	var mgr := get_manager()
+	var record_key := StoryFlowCharacter.resolve_character_key(
+		mgr.get_character_id_bridge(), mgr.get_runtime_characters(), id, mgr)
+	if record_key.is_empty():
+		return null
+	var character: StoryFlowCharacter = mgr.get_runtime_characters()[record_key]
+	if StoryFlowCharacter.is_name_token(variable_name):
+		return StoryFlowVariant.from_string(character.character_name)
+	if StoryFlowCharacter.is_image_token(variable_name):
+		return StoryFlowVariant.from_string(character.image_key)
+	if not character.variables.has(variable_name):
+		_warn_character_access_once(id, "novariable:%s" % variable_name,
+			"StoryFlow: Character '%s' declares no variable named '%s'" % [id, variable_name])
+		return null
+	var value = character.variables[variable_name].get("value")
+	if not value is StoryFlowVariant:
+		return null
+	return value.duplicate_variant()
 
 
 ## Read a boolean-declared Data Asset variable. Returns [param default] on any miss.
@@ -939,6 +1142,10 @@ func get_data_asset_variant(asset: String, variable_name: String) -> StoryFlowVa
 	var mgr := get_manager()
 	if not mgr:
 		return null
+	# P4 character branch, same seed-first routing as the typed accessors; this is how a
+	# host reads a character's array or map variable by id.
+	if not _character_routed_id(asset).is_empty():
+		return _character_variant(asset, variable_name)
 	var asset_id := _resolve_data_asset_id(asset)
 	if asset_id.is_empty():
 		return null
@@ -2566,6 +2773,14 @@ func _update_connected_array_variable(node: Dictionary, array_handle_suffix: Str
 		var char_path: String = source_data.get("characterPath", "")
 		var var_name: String = source_data.get("variableName", "")
 		var mgr := get_manager()
+		# Id-first here too (characters engine contract §4): this write-back binds to the
+		# SAME node fields the array READ resolved through — left path-keyed, an id-bound
+		# array chain would read one character and write the modification back to whatever
+		# stale record the path field names. NODE lane -> the context latch pair.
+		if mgr:
+			char_path = StoryFlowCharacter.resolve_character_ref(
+				_context.character_id_bridge, mgr.get_runtime_characters(),
+				str(source_data.get("characterId", "")), char_path, _context)
 		if mgr and not char_path.is_empty() and not var_name.is_empty():
 			var character: StoryFlowCharacter = mgr.get_runtime_character(char_path)
 			if character and character.variables.has(var_name):
@@ -3098,10 +3313,27 @@ func _handle_set_character_var(node: Dictionary) -> void:
 
 	# Check for connected character input
 	var char_edge: Dictionary = _context.current_script.find_input_edge(node["id"], StoryFlowHandles.IN_CHARACTER_INPUT)
+	var char_wired := false
 	if not char_edge.is_empty() and _evaluator:
 		var char_node: Dictionary = _context.current_script.get_node(char_edge.get("source", ""))
 		if not char_node.is_empty():
 			character_path = _evaluator.evaluate_string_from_node(char_node.get("id", ""), char_edge.get("source_handle", ""))
+			char_wired = true
+
+	# Id-first resolution (characters engine contract §4), NODE lane -> the context latch
+	# pair. Wired override wins outright (a dangling inline id under a healthy wire never
+	# warns); every fall-back returns the path VERBATIM, so the trace, the writes and the
+	# signal below behave byte-identically pre-P4. On an id hit character_path becomes the
+	# resolved record key, which is what the trace prints and the signal carries.
+	var res_mgr := get_manager()
+	if res_mgr:
+		if char_wired:
+			character_path = StoryFlowCharacter.resolve_character_key(
+				_context.character_id_bridge, res_mgr.get_runtime_characters(), character_path, _context)
+		else:
+			character_path = StoryFlowCharacter.resolve_character_ref(
+				_context.character_id_bridge, res_mgr.get_runtime_characters(),
+				str(data.get("characterId", "")), character_path, _context)
 
 	if character_path.is_empty():
 		_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
@@ -3205,12 +3437,14 @@ func _handle_set_character_var(node: Dictionary) -> void:
 	if mgr:
 		var character: StoryFlowCharacter = mgr.get_runtime_character(character_path)
 		if character:
-			# Handle built-in "Name" field
-			if variable_name.to_lower() == "name":
+			# Handle built-in "Name" field. FIRST TIER of the A2(a) aliases: already
+			# case-insensitive pre-P4, so the shared predicate folds cf_name in (the
+			# cf_-only second tier lives on public set_character_variable).
+			if StoryFlowCharacter.is_name_token(variable_name):
 				character.character_name = new_value.get_string("")
 				mutated = true
-			# Handle built-in "Image" field
-			elif variable_name.to_lower() == "image":
+			# Handle built-in "Image" field (first tier, same as Name above)
+			elif StoryFlowCharacter.is_image_token(variable_name):
 				character.image_key = new_value.get_string("")
 				mutated = true
 			# Custom variable
@@ -3489,6 +3723,13 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 
 	# IMPORTANT: Resolve character FIRST so {Character.Name} interpolation works
 	var character_path: String = data.get("character", "")
+	# Id-first speaker resolution (characters engine contract §4): characterRefId through
+	# the bridge — NODE lane, so the context's latch pair — with the path field as the
+	# fall-back, returned verbatim so the pre-P4 lines below behave byte-identically.
+	if mgr:
+		character_path = StoryFlowCharacter.resolve_character_ref(
+			_context.character_id_bridge, mgr.get_runtime_characters(),
+			str(data.get("characterRefId", "")), character_path, _context)
 	if character_path != "" and mgr:
 		var character: StoryFlowCharacter = mgr.get_runtime_character(character_path)
 		if character:
