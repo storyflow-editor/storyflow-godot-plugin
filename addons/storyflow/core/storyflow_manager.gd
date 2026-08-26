@@ -29,9 +29,9 @@ var _runtime_characters: Dictionary = {}
 ## on the pre-reset object, splitting reads into two divergent stores. That is exactly the
 ## bug rebinding _global_variables caused before v1.2.3.
 ##
-## Refreshed exactly where _runtime_characters refills (reset_runtime_characters and
-## _initialize_from_project) and NEVER by a save load - the bridge is import state, not
-## player state, so load_from_slot must not touch it.
+## Refreshed exactly where _runtime_characters refills (reset_runtime_characters, which
+## _initialize_from_project delegates to) and NEVER by a save load - the bridge is import
+## state, not player state, so load_from_slot must not touch it.
 var _character_id_bridge: Dictionary = {}
 
 var _used_once_only_options: Dictionary = {}
@@ -242,8 +242,9 @@ func reset_runtime_characters() -> void:
 		for path in _project.characters:
 			var original: StoryFlowCharacter = _project.characters[path]
 			_runtime_characters[path] = original.duplicate_character()
-		# The id bridge rides with the characters it points into: refreshed here and in
-		# _initialize_from_project, in place (see its declaration), values verbatim.
+		# The id bridge rides with the characters it points into: in place (see its
+		# declaration), values verbatim. THE ONE refill site - _initialize_from_project
+		# delegates here rather than repeating the block.
 		_character_id_bridge.clear()
 		for id in _project.character_id_index:
 			_character_id_bridge[id] = _project.character_id_index[id]
@@ -477,16 +478,7 @@ func _initialize_from_project() -> void:
 	for var_id in fresh:
 		_global_variables[var_id] = fresh[var_id]
 
-	_runtime_characters.clear()
-	for path in _project.characters:
-		var original: StoryFlowCharacter = _project.characters[path]
-		_runtime_characters[path] = original.duplicate_character()
-
-	# The id bridge rides with the characters it points into: refreshed here and in
-	# reset_runtime_characters, in place (see its declaration), values verbatim.
-	_character_id_bridge.clear()
-	for id in _project.character_id_index:
-		_character_id_bridge[id] = _project.character_id_index[id]
+	reset_runtime_characters()
 
 	reset_data_assets()
 	# A re-import is exactly when a name that was wrong may have become right, so the host

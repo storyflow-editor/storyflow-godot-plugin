@@ -755,7 +755,8 @@ func _parse_node_data(type_string: String, node_obj: Dictionary) -> Dictionary:
 		data["characterPath"] = data_src["characterPath"]
 		data["variableName"] = data_src.get("variable", "")
 	# P4 id sibling of "characterPath" (characters engine contract §1.3): additive on the
-	# wire, carried when shipped and absent otherwise.
+	# wire, carried when shipped and absent otherwise. Resolution prefers the id; the path
+	# stays the fall-back - the same rule as the dialogue block's characterRefId above.
 	if data_src.has("characterId"):
 		data["characterId"] = data_src["characterId"]
 	if data_src.has("variableName"):
@@ -969,13 +970,15 @@ func _parse_character_index(index_json: Dictionary) -> Dictionary:
 
 	if not index_json.has("schemaVersion") or str(index_json["schemaVersion"]) != "1":
 		# Absent and present-but-empty read differently in the warn - <missing> vs '' -
-		# the same distinction both sibling plugins print (the Unreal spelling).
+		# the same distinction both sibling plugins print (the Unreal spelling). str()
+		# first, so a numeric 1 is accepted as "1" - the Unity reader's tolerance
+		# (Unreal's typed field getter refuses it).
 		var shown: String = str(index_json["schemaVersion"]) if index_json.has("schemaVersion") else "<missing>"
 		push_warning("StoryFlow: character-index.json has an unknown schemaVersion ('%s'; this plugin reads '1') - the character id bridge was skipped; characters keep resolving by path" % shown)
 		return {}
 
 	var chars = index_json.get("characters")
-	if not chars is Dictionary:
+	if not (chars is Dictionary):
 		push_warning("StoryFlow: character-index.json carries no characters object - the character id bridge was skipped; characters keep resolving by path")
 		return {}
 
@@ -984,7 +987,7 @@ func _parse_character_index(index_json: Dictionary) -> Dictionary:
 		# Trusted-seed posture for malformed VALUES too: a non-String entry is skipped
 		# silently, precedent-exact with Unity's index reader - distinct from the
 		# unmigrated-id trust above, which is about entries the editor never ships.
-		if not chars[id] is String:
+		if not (chars[id] is String):
 			continue
 		result[str(id)] = chars[id]
 	return result
