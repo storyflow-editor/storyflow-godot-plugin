@@ -71,7 +71,7 @@
       },
       "expected": {
         "value": "Neutral",
-        "stored": "charvar_8_value"
+        "stored": "da_archetype000000000000000000000.v-arch-honor.value"
       },
       "comparison": "byte",
       "scope": "§9 entry 6 (A5): assert `value` on surfaces that own language state, `stored` on surfaces that answer the stored key verbatim; the save and export lanes ALWAYS write the stored key."
@@ -90,7 +90,7 @@
       },
       "expected": {
         "value": "Knight of the Vale",
-        "stored": "charvar_9_value"
+        "stored": "da_hero0000000000000000000000000a.v-hero-title.value"
       },
       "comparison": "byte",
       "scope": "§9 entry 6 (A5): assert `value` on surfaces that own language state, `stored` on surfaces that answer the stored key verbatim; the save and export lanes ALWAYS write the stored key."
@@ -114,8 +114,8 @@
           "Loyal"
         ],
         "stored": [
-          "charvar_10_value",
-          "charvar_11_value"
+          "da_hero0000000000000000000000000a.v-hero-traits.value.0",
+          "da_hero0000000000000000000000000a.v-hero-traits.value.1"
         ]
       },
       "comparison": "byte",
@@ -149,11 +149,11 @@
         "stored": [
           {
             "key": "weapon",
-            "value": "charvar_12_value"
+            "value": "da_hero0000000000000000000000000a.v-hero-loadout.value.weapon"
           },
           {
             "key": "armor",
-            "value": "charvar_13_value"
+            "value": "da_hero0000000000000000000000000a.v-hero-loadout.value.armor"
           }
         ]
       },
@@ -174,7 +174,7 @@
       },
       "expected": {
         "value": "Sir Roland",
-        "stored": "char_7_name"
+        "stored": "da_hero0000000000000000000000000a.cf_name"
       },
       "comparison": "byte",
       "scope": "§9 entry 6 (A5): assert `value` on surfaces that own language state, `stored` on surfaces that answer the stored key verbatim; the save and export lanes ALWAYS write the stored key."
@@ -212,7 +212,7 @@
       },
       "expected": {
         "value": "Sir Roland",
-        "stored": "char_7_name"
+        "stored": "da_hero0000000000000000000000000a.cf_name"
       },
       "comparison": "byte",
       "scope": "§9 entry 6 (A5): assert `value` on surfaces that own language state, `stored` on surfaces that answer the stored key verbatim; the save and export lanes ALWAYS write the stored key.",
@@ -232,7 +232,7 @@
       },
       "expected": {
         "value": "Sir Roland",
-        "stored": "char_7_name"
+        "stored": "da_hero0000000000000000000000000a.cf_name"
       },
       "comparison": "byte",
       "scope": "§9 entry 6 (A5): assert `value` on surfaces that own language state, `stored` on surfaces that answer the stored key verbatim; the save and export lanes ALWAYS write the stored key.",
@@ -323,7 +323,7 @@
       },
       "expected": {
         "value": "Usurper of the Vale",
-        "stored": "charvar_2_value"
+        "stored": "da_villain00000000000000000000000.v-vil-title.value"
       },
       "comparison": "byte",
       "scope": "§9 entry 6 (A5): assert `value` on surfaces that own language state, `stored` on surfaces that answer the stored key verbatim; the save and export lanes ALWAYS write the stored key."
@@ -347,8 +347,8 @@
           "Patient"
         ],
         "stored": [
-          "charvar_3_value",
-          "charvar_4_value"
+          "da_villain00000000000000000000000.v-vil-traits.value.0",
+          "da_villain00000000000000000000000.v-vil-traits.value.1"
         ]
       },
       "comparison": "byte",
@@ -382,11 +382,11 @@
         "stored": [
           {
             "key": "weapon",
-            "value": "charvar_5_value"
+            "value": "da_villain00000000000000000000000.v-vil-loadout.value.weapon"
           },
           {
             "key": "armor",
-            "value": "charvar_6_value"
+            "value": "da_villain00000000000000000000000.v-vil-loadout.value.armor"
           }
         ]
       },
@@ -407,7 +407,7 @@
       },
       "expected": {
         "value": "Morgrave",
-        "stored": "char_1_name"
+        "stored": "da_villain00000000000000000000000.cf_name"
       },
       "comparison": "byte",
       "scope": "§9 entry 6 (A5): assert `value` on surfaces that own language state, `stored` on surfaces that answer the stored key verbatim; the save and export lanes ALWAYS write the stored key."
@@ -425,7 +425,7 @@
       },
       "expected": {
         "value": "Knight of the Vale",
-        "stored": "charvar_9_value"
+        "stored": "da_hero0000000000000000000000000a.v-hero-title.value"
       },
       "comparison": "byte",
       "scope": "§9 entry 6 (A5): assert `value` on surfaces that own language state, `stored` on surfaces that answer the stored key verbatim; the save and export lanes ALWAYS write the stored key."
@@ -474,7 +474,7 @@
         "recordKey": "characters\\hero.sfc",
         "name": {
           "value": "Sir Roland",
-          "stored": "char_7_name"
+          "stored": "da_hero0000000000000000000000000a.cf_name"
         },
         "image": {
           "value": "images/hero.png",
@@ -496,7 +496,7 @@
         "recordKey": "characters\\villain.sfc",
         "name": {
           "value": "Morgrave",
-          "stored": "char_1_name"
+          "stored": "da_villain00000000000000000000000.cf_name"
         },
         "image": {
           "value": "images/villain.png",
@@ -520,7 +520,7 @@
       },
       "expected": {
         "value": "Usurper of the Vale",
-        "stored": "charvar_2_value"
+        "stored": "da_villain00000000000000000000000.v-vil-title.value"
       },
       "comparison": "byte",
       "scope": "§9 entry 6 (A5): assert `value` on surfaces that own language state, `stored` on surfaces that answer the stored key verbatim; the save and export lanes ALWAYS write the stored key.",

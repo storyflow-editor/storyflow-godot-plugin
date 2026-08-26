@@ -8,8 +8,8 @@
     "1": {
       "type": "dialogue",
       "id": "1",
-      "title": "dlg_1_title",
-      "text": "dlg_2",
+      "title": "1.title",
+      "text": "1.text",
       "character": "characters\\hero.sfc",
       "characterRefId": "da_hero0000000000000000000000000a"
     },
@@ -35,7 +35,7 @@
       "characterPath": "characters\\hero.sfc",
       "variable": "Title",
       "variableType": "string",
-      "value": "setcharvar_3",
+      "value": "4.value",
       "characterId": "da_hero0000000000000000000000000a"
     },
     "5": {
@@ -65,8 +65,8 @@
     "8": {
       "type": "dialogue",
       "id": "8",
-      "title": "dlg_4_title",
-      "text": "dlg_5",
+      "title": "8.title",
+      "text": "8.text",
       "character": "characters\\villain.sfc",
       "characterRefId": "da_villain00000000000000000000000"
     },
@@ -107,11 +107,11 @@
   },
   "strings": {
     "en": {
-      "dlg_1_title": "Greeting",
-      "dlg_2": "Well met.",
-      "setcharvar_3": "Champion",
-      "dlg_4_title": "Retort",
-      "dlg_5": "You again."
+      "1.title": "Greeting",
+      "1.text": "Well met.",
+      "4.value": "Champion",
+      "8.title": "Retort",
+      "8.text": "You again."
     }
   },
   "assets": {}

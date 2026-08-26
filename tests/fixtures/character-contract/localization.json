@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "1",
+  "sourceLanguage": "en",
+  "languages": [
+    {
+      "code": "fr",
+      "name": "French"
+    },
+    {
+      "code": "es",
+      "name": "Spanish"
+    }
+  ],
+  "strings": {
+    "fr": {
+      "1.title": "Salutations",
+      "1.text": "Bien le bonjour.",
+      "4.value": "Champion",
+      "8.title": "Retort",
+      "8.text": "You again.",
+      "da_villain00000000000000000000000.cf_name": "Morgrave le Fourbe",
+      "da_villain00000000000000000000000.v-vil-title.value": "Usurper of the Vale",
+      "da_villain00000000000000000000000.v-vil-traits.value.0": "Cruel",
+      "da_villain00000000000000000000000.v-vil-traits.value.1": "Patient",
+      "da_villain00000000000000000000000.v-vil-loadout.value.weapon": "Dagger",
+      "da_villain00000000000000000000000.v-vil-loadout.value.armor": "Cloak",
+      "da_hero0000000000000000000000000a.cf_name": "Sire Roland",
+      "da_archetype000000000000000000000.v-arch-honor.value": "Neutre",
+      "da_hero0000000000000000000000000a.v-hero-title.value": "Knight of the Vale",
+      "da_hero0000000000000000000000000a.v-hero-traits.value.0": "Brave",
+      "da_hero0000000000000000000000000a.v-hero-traits.value.1": "Loyal",
+      "da_hero0000000000000000000000000a.v-hero-loadout.value.weapon": "Longsword",
+      "da_hero0000000000000000000000000a.v-hero-loadout.value.armor": "Plate",
+      "da_archetype000000000000000000000.cf_name": "Wanderer"
+    },
+    "es": {
+      "1.title": "Saludo",
+      "1.text": "Well met.",
+      "4.value": "Champion",
+      "8.title": "Retort",
+      "8.text": "Otra vez tu.",
+      "da_villain00000000000000000000000.cf_name": "Morgrave",
+      "da_villain00000000000000000000000.v-vil-title.value": "Usurpador",
+      "da_villain00000000000000000000000.v-vil-traits.value.0": "Cruel",
+      "da_villain00000000000000000000000.v-vil-traits.value.1": "Patient",
+      "da_villain00000000000000000000000.v-vil-loadout.value.weapon": "Dagger",
+      "da_villain00000000000000000000000.v-vil-loadout.value.armor": "Cloak",
+      "da_hero0000000000000000000000000a.cf_name": "Sir Roland",
+      "da_archetype000000000000000000000.v-arch-honor.value": "Imparcial",
+      "da_hero0000000000000000000000000a.v-hero-title.value": "Caballero del Valle",
+      "da_hero0000000000000000000000000a.v-hero-traits.value.0": "Brave",
+      "da_hero0000000000000000000000000a.v-hero-traits.value.1": "Loyal",
+      "da_hero0000000000000000000000000a.v-hero-loadout.value.weapon": "Longsword",
+      "da_hero0000000000000000000000000a.v-hero-loadout.value.armor": "Plate",
+      "da_archetype000000000000000000000.cf_name": "Wanderer"
+    }
+  }
+}
