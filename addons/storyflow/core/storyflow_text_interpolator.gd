@@ -6,7 +6,9 @@ extends RefCounted
 const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
 const StoryFlowCharacterData = preload("res://addons/storyflow/core/storyflow_character_data.gd")
 const StoryFlowExecutionContext = preload("res://addons/storyflow/core/storyflow_execution_context.gd")
+const StoryFlowLocalization = preload("res://addons/storyflow/core/storyflow_localization.gd")
 const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
+const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
 const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
 const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.gd")
 
@@ -86,22 +88,34 @@ func interpolate(text: String) -> String:
 # String Resolution
 # =============================================================================
 
+## THE DIALOGUE-LANE DOOR onto the one shared ladder (StoryFlowLocalization.look_up) - the same
+## ladder StoryFlowEvaluator's node lane and StoryFlowComponent's outside-dialogue arm run, never a
+## copy of it. The miss policy is this plugin's long-standing one: a key that resolves nowhere is
+## its own text.
+##
+## [param language_code] is the PRE-LOCALIZATION language and is only the FALLBACK: once the loaded
+## project ships a localization.json the language is the player's and game-wide, and the manager's
+## state (reached through the context) owns it. Callers keep passing their own code so a project
+## exported before localization existed behaves exactly as it did.
+##
+## THE LOOKUP RUNS ON THE AUTHORED TEMPLATE (§9). Every caller interpolates the RESULT of this
+## call - `interpolate(get_string(key, code))`, never `get_string(interpolate(text), code)`. A
+## translated line is authored with the same `{Variable}` tokens as the source line, so
+## interpolating first would hand this lookup a string no table was ever keyed by; the line would
+## still render, in the source language, and only for lines that happen to carry a token. GDScript
+## cannot catch that ordering, so it is stated at every door.
 func get_string(key: String, language_code: String) -> String:
 	if key.is_empty():
 		return ""
-	# Try script-local strings first
-	if _context and _context.current_script:
-		var result := _context.current_script.get_localized_string(key, language_code)
-		if result != key:
-			return result
-	# Try global strings
+	var script: StoryFlowScript = _context.current_script if _context else null
+	var localization = _context.localization if _context else null
+	var global_strings: Dictionary = {}
 	if _manager:
 		var project: StoryFlowProject = _manager.get_project()
 		if project:
-			var result := project.get_localized_string(key, language_code)
-			if result != key:
-				return result
-	return key
+			global_strings = project.global_strings
+	var resolved = StoryFlowLocalization.look_up(localization, script, global_strings, key, language_code)
+	return key if resolved == null else resolved
 
 
 # =============================================================================

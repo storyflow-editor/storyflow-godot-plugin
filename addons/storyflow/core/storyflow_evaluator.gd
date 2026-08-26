@@ -7,6 +7,7 @@ const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_charac
 const StoryFlowDataAssetStore = preload("res://addons/storyflow/core/storyflow_data_asset_store.gd")
 const StoryFlowExecutionContext = preload("res://addons/storyflow/core/storyflow_execution_context.gd")
 const StoryFlowHandles = preload("res://addons/storyflow/core/storyflow_handles.gd")
+const StoryFlowLocalization = preload("res://addons/storyflow/core/storyflow_localization.gd")
 const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
 const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.gd")
 
@@ -23,6 +24,12 @@ var _context: StoryFlowExecutionContext = null
 var _global_variables: Dictionary = {} # id -> variable Dictionary
 var _characters: Dictionary = {} # normalized_path -> StoryFlowCharacter
 var _global_strings: Dictionary = {} # flattened "lang.key" -> value
+
+## PRE-LOCALIZATION ONLY (localization spec §9): the prefix into an artifact strings block that
+## carries more than one language block, still honored for a project exported before localization
+## existed. Once the project ships a localization.json the language is the PLAYER'S and game-wide,
+## StoryFlowManager.set_language owns it, and this is only the fallback - see
+## StoryFlowLocalization.language_for.
 var _language_code: String = "en"
 
 ## Callable for trace logging, set by the component. Signature: func(msg: String) -> void
@@ -1009,6 +1016,15 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 	# NOT EVERY ARM REACHES THIS TAIL: the .sfd accessor arm above returns early, because
 	# data-assets.json carries no strings table and its values are literals (contract 2.1).
 	# Anything added here must be added there too, or the two paths silently diverge.
+	#
+	# THE REACH DISCIPLINE (localization spec §9) lives here, and GDScript has no type that can
+	# enforce it: what gets looked up is THE KEY THE RECORD STORES, taken straight off the value
+	# the character arm above returned - never an id rebuilt from the character being read. An
+	# INHERITED-but-unoverridden character value stores the DECLARING ANCESTOR'S key (spec §3/§7b:
+	# one string, one translation, shared by every inheritor), so an implementation that composed
+	# `<characterBeingRead>.<variableId>.value` would key nothing anywhere, pass every
+	# non-inherited case, and silently show the raw id for the inherited ones. Pinned by the
+	# ancestor-key cases of the golden package (tests/test_character_contract.gd).
 	var resolved_result := _resolve_string_key(result)
 	_sf_trace("EVAL %s %s result=%s" % [node_id, node.get("type_string", ""), resolved_result])
 
@@ -2120,19 +2136,28 @@ func _get_data_string(data: Dictionary, key: String, fallback: String = "") -> S
 ## Resolves a string key through the localized strings dictionary.
 ## The JSON export stores all string-type values as keys into the strings table.
 ## Returns the resolved text, or the raw value if the key is not found.
+##
+## THE NODE-LANE DOOR onto the one shared ladder (StoryFlowLocalization.look_up) - the same ladder
+## the text interpolator and StoryFlowComponent's outside-dialogue arm run, never a copy of it.
+## The miss policy is this plugin's long-standing one: a value that keyed no table anywhere is its
+## own text.
+##
+## [member _language_code] is the PRE-LOCALIZATION language: it is only the fallback, honored for
+## a project exported before localization existed. Once the project ships a localization.json the
+## language is the player's and game-wide, and the manager's state (reached through the context)
+## owns it - which is why a mid-session set_language reaches a running dialogue here.
+##
+## THE LOOKUP RUNS ON THE AUTHORED TEMPLATE (§9): the interpolation of any `{Variable}` token
+## happens on the RESULT of this call, never before it. Interpolating first would hand the ladder
+## a string no table was ever keyed by, and the failure is invisible - the line still renders, in
+## the source language.
 func _resolve_string_key(value: String) -> String:
 	if value.is_empty():
 		return value
-	# Try script-local strings first
-	if _context and _context.current_script:
-		var result := _context.current_script.get_localized_string(value, _language_code)
-		if result != value:
-			return result
-	# Try global strings (includes character strings)
-	var full_key := _language_code + "." + value
-	if _global_strings.has(full_key):
-		return _global_strings[full_key]
-	return value
+	var script = _context.current_script if _context else null
+	var localization = _context.localization if _context else null
+	var resolved = StoryFlowLocalization.look_up(localization, script, _global_strings, value, _language_code)
+	return value if resolved == null else resolved
 
 
 ## Get a localized string from node data. The data value is used as a string

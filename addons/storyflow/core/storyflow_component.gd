@@ -13,6 +13,7 @@ const StoryFlowDialogueState = preload("res://addons/storyflow/core/storyflow_di
 const StoryFlowEvaluator = preload("res://addons/storyflow/core/storyflow_evaluator.gd")
 const StoryFlowExecutionContext = preload("res://addons/storyflow/core/storyflow_execution_context.gd")
 const StoryFlowHandles = preload("res://addons/storyflow/core/storyflow_handles.gd")
+const StoryFlowLocalization = preload("res://addons/storyflow/core/storyflow_localization.gd")
 const StoryFlowLoopFrame = preload("res://addons/storyflow/core/storyflow_loop_frame.gd")
 const StoryFlowNodeRuntimeState = preload("res://addons/storyflow/core/storyflow_node_runtime_state.gd")
 const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
@@ -227,6 +228,11 @@ func start_dialogue_with_script(path: String) -> void:
 
 	# P4 character id bridge: the same non-owning handover (characters engine contract §3).
 	_context.character_id_bridge = mgr.get_character_id_bridge()
+
+	# Localization state: the same non-owning handover (localization spec §9). The manager mutates
+	# it in place, so a set_language mid-dialogue reaches this running graph's very next lookup
+	# instead of a language copied at dialogue start.
+	_context.localization = mgr.get_localization()
 
 	# Create evaluator
 	_evaluator = StoryFlowEvaluator.new()
@@ -3888,6 +3894,10 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 		var character: StoryFlowCharacter = mgr.get_runtime_character(character_path)
 		if character:
 			var char_data := StoryFlowCharacterData.new()
+			# The speaker label resolves AT READ TIME from the key the runtime record stores, so a
+			# mid-session set_language flips it on the next rendered node (localization spec §9).
+			# This engine bakes no display name at import - the Unity port does, and its speaker
+			# labels lag a language switch until re-import; Unreal and this plugin do not.
 			char_data.name = _text.get_string(character.character_name, language_code)
 
 			# Resolve character portrait to actual Texture2D (reads from mutable
@@ -3911,7 +3921,15 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 		_context.current_dialogue_state = StoryFlowDialogueState.new()
 	_context.current_dialogue_state.character = state.character
 
-	# Get title and text from string table, then interpolate variables
+	# Get title and text from string table, then interpolate variables.
+	#
+	# THE AUTHORED-TEMPLATE INVARIANT (localization spec §9) governs this field and every one
+	# below it - the text blocks and the option labels: the table lookup runs FIRST and interpolate
+	# runs on its RESULT. A translated line is authored with the same {Variable} tokens as the
+	# source line, so interpolating first would hand the lookup a string no table was ever keyed
+	# by, and the failure is invisible - the text still renders, in the source language, only for
+	# lines that happen to carry a token. get_string IS the whole ladder; never build a
+	# `language_code + "." + key` probe here.
 	var title_key: String = data.get("title", "")
 	var text_key: String = data.get("text", "")
 
@@ -4004,6 +4022,20 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 # String Resolution
 # =============================================================================
 
+## The component's string door, on both sides of a dialogue.
+##
+## DURING dialogue it delegates to the text interpolator (whose lookup adds the current script's
+## own strings table); OUTSIDE dialogue there is no script and the project globals - which
+## characters.json merges into - are the only source tier. That split is the pre-localization
+## behavior kept exactly as it was; both sides now run the SAME shared ladder
+## (StoryFlowLocalization.look_up), so a string cannot resolve one way inside dialogue and another
+## way outside it.
+##
+## [member language_code] is the PRE-LOCALIZATION language and only the fallback; once the project
+## ships a localization.json the manager owns the language (see StoryFlowManager.set_language).
+##
+## THE LOOKUP RUNS ON THE AUTHORED TEMPLATE (§9): any caller that interpolates `{Variable}` tokens
+## does it on this RESULT, never before the call.
 func _resolve_string(key: String) -> String:
 	if key.is_empty():
 		return key
@@ -4015,7 +4047,9 @@ func _resolve_string(key: String) -> String:
 	if mgr:
 		var project: StoryFlowProject = mgr.get_project()
 		if project:
-			return project.get_localized_string(key, language_code)
+			var resolved = StoryFlowLocalization.look_up(
+				mgr.get_localization(), null, project.global_strings, key, language_code)
+			return key if resolved == null else resolved
 	return key
 
 

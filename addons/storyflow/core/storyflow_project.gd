@@ -40,6 +40,27 @@ var data_assets: Dictionary = {}
 ## "lang.key" → "value"
 var global_strings: Dictionary = {}
 
+## THE TRANSLATIONS SIDECAR as imported (localization spec §9), the raw product of
+## localization.json. StoryFlowManager installs these four onto its own StoryFlowLocalization -
+## the object every runtime lane holds by reference - and nothing reads them from here at runtime.
+##
+## THE FILE-PRESENCE MARKER: true when a localization.json sat beside the artifacts. An absent
+## sidecar and a sidecar carrying no rows are the same empty Dictionary once parsed, and only one
+## of them is a pre-localization export, so the branch is this bool and never a key count.
+var has_localization: bool = false
+
+## The language the documents are authored in, and therefore the language [member global_strings]
+## and every script's own strings block are keyed by. "en" without a sidecar.
+var source_language: String = "en"
+
+## TARGET languages as `[{ "code", "name" }]` in the author's registry order. Never the source
+## language, which has no table of its own.
+var languages: Array = []
+
+## `language code` → that language's FULL, PRE-RESOLVED table (`string id` → text). Empty without
+## a sidecar.
+var language_strings: Dictionary = {}
+
 ## asset_key → Resource (Texture2D, AudioStream, etc.)
 var resolved_assets: Dictionary = {}
 
@@ -52,6 +73,12 @@ func get_all_script_paths() -> PackedStringArray:
 	return PackedStringArray(scripts.keys())
 
 
+## A RAW, EXACT-KEY probe into this project's own globals: it builds `language.key` and no
+## language tier runs. It is NOT the localized door - StoryFlowLocalization.look_up is, and it
+## owns the whole ladder (spec §9). A caller that builds its own prefixed key here bypasses the
+## translation overlay and the source-table fall-through, which is the silent defect the shared
+## ladder exists to make impossible. Kept as public API for hosts that genuinely want one table
+## row; nothing inside this plugin resolves strings through it.
 func get_localized_string(key: String, language: String = "en") -> String:
 	var full_key := language + "." + key
 	return global_strings.get(full_key, key)

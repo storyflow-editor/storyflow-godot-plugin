@@ -183,6 +183,22 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 		project.character_id_index = _parse_character_index(_load_json_file(character_index_file))
 
 	# ------------------------------------------------------------------
+	# Localization (localization.json, §9)
+	# ------------------------------------------------------------------
+	# THE TRANSLATIONS SIDECAR, on the same degraded ladder as the character index above and for
+	# the same reason: absence is a FORMAT VERSION, not a fault.
+	#
+	# THE FILE-PRESENCE MARKER is the only branch this contract has. No localization.json beside
+	# the artifacts means a pre-localization export - source-only, byte-for-byte the behavior of
+	# every release before this one - and never a count of anything: a project whose author
+	# registered a language and translated nothing still exports FULL tables of source text, and
+	# that is a localized project. _apply_localization records which of the two a project is,
+	# because an absent sidecar and a sidecar with no rows parse to the same empty Dictionary.
+	var localization_file := build_dir.path_join("localization.json")
+	if FileAccess.file_exists(localization_file):
+		_apply_localization(project, _load_json_file(localization_file))
+
+	# ------------------------------------------------------------------
 	# Data Assets (.sfd)
 	# ------------------------------------------------------------------
 	# Written beside characters.json, always (an empty object when the project references
@@ -221,7 +237,7 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 		# Skip non-script files. EVERY sidecar the export writes must be listed here:
 		# load_project_local re-runs this sweep on every launch, so an unlisted sidecar is
 		# imported as a phantom script named after its filename, silently, in shipped games.
-		if filename in ["project.json", "project.storyflow", "global-variables.json", "characters.json", "data-assets.json", "character-index.json", IMPORT_META_FILENAME]:
+		if filename in ["project.json", "project.storyflow", "global-variables.json", "characters.json", "data-assets.json", "character-index.json", "localization.json", IMPORT_META_FILENAME]:
 			continue
 
 		var relative := _make_relative(script_file, build_dir)
@@ -375,6 +391,20 @@ func import_project_from_json(project_json: Dictionary) -> StoryFlowProject:
 			index_data = index_data["characterIndex"]
 		project.character_id_index = _parse_character_index(
 			index_data if index_data is Dictionary else {})
+
+	# Localization (inline). The presence of the KEY is the marker here, exactly as the presence
+	# of the FILE is on the disk arm - an absent key is a pre-localization payload. Accepts the
+	# localization.json document shape and a wrapper nesting, like the blocks around it; the two
+	# cannot be confused, because the document's own keys are schemaVersion/sourceLanguage/
+	# languages/strings, so an inner "localization" key is always the wrapper. The parse (degraded
+	# ladder, verbatim rows) is shared with the disk arm - the two arms must never diverge (the
+	# divergence lesson test_import_hardening.gd exists for).
+	if project_json.has("localization"):
+		var localization_data = project_json["localization"]
+		if localization_data is Dictionary and localization_data.has("localization"):
+			localization_data = localization_data["localization"]
+		_apply_localization(project,
+			localization_data if localization_data is Dictionary else {})
 
 	# Data assets (inline). Accepts both the flat asset table and the data-assets.json
 	# wrapper shape, the same way the characters block above accepts either nesting. The two
@@ -995,6 +1025,103 @@ func _parse_character_index(index_json: Dictionary) -> Dictionary:
 			continue
 		result[str(id)] = chars[id]
 	return result
+
+
+## Apply a PRESENT localization.json document (localization spec §9) to [param project], or leave
+## the project SOURCE-ONLY when a degraded rung refuses it. Both import arms funnel through here,
+## so the ladder and the verbatim-row rule cannot diverge.
+##
+## The degraded ladder - each refusing rung warns naming the consequence, once per import since an
+## import parses the document once:
+##   absent file/key      silent (a pre-localization export; never reaches this function)
+##   empty target tables  fine (a project whose author registered a language and translated
+##                        nothing still ships full tables of source text - and even a sidecar with
+##                        no tables at all is a LOCALIZED project, which is why the marker is set
+##                        before a single row is counted)
+##   unreadable document  warn + skip
+##   MISSING schemaVersion    warn + skip - a DISTINCT message from the rung below, because a
+##                        sidecar that declares no version and one that declares a version this
+##                        plugin cannot read are two different authoring situations; a .get()
+##                        with a default would answer the same thing for both and collapse them
+##   unsupported schemaVersion (a plain string compare against "1" - no schema-token machinery
+##                        exists in this plugin)  warn + skip
+##   no strings object    warn + skip
+## A skipped sidecar leaves has_localization false, so every string keeps resolving to its source
+## text exactly as it did before this file existed.
+##
+## THE TABLES ARE FULL AND PRE-RESOLVED: the export already applied every §7 fallback (an OUTDATED
+## row carries the OLD translation per user ruling 2, an UNTRANSLATED or CLEARED one carries the
+## source text, an ORPHAN has no row at all). Nothing here computes a status or compares a hash,
+## and the lookup that reads these tables holds no rule beyond the tiers in
+## StoryFlowLocalization.look_up.
+##
+## THE ID SET IS THE SHIPPED SET - the ids that KEYED an artifact this export wrote. `.sfui` widget
+## and dropdown strings have NO rows here: `.sfui` documents never reach a plugin, and their text
+## localizes in the HTML lane. Their absence is the contract, not a missing feature, and nothing
+## downstream should infer a bug from it.
+##
+## Ids and texts are stored VERBATIM and ids are OPAQUE: this plugin never parses one, and the
+## only thing it ever does with one is look it up.
+func _apply_localization(project: StoryFlowProject, localization_json: Dictionary) -> void:
+	if localization_json.is_empty():
+		# {} is both _load_json_file's parse-failure answer (the error it pushed carries the
+		# details) and what a literal empty object parses to - the two cannot be told apart here,
+		# so the warn names both. An inline payload that is no object lands here too.
+		push_warning("StoryFlow: localization.json is unreadable or empty - the language tables were skipped; strings keep resolving to their source text")
+		return
+
+	if not localization_json.has("schemaVersion"):
+		push_warning("StoryFlow: localization.json declares no schemaVersion (this plugin reads '1') - the language tables were skipped; strings keep resolving to their source text")
+		return
+
+	# A plain string compare through str(), like the character index's reader - no schema-token
+	# machinery exists in this plugin. Godot's JSON parses every number as a float, so an
+	# UNQUOTED 1 stringifies to "1.0" and lands on this rung rather than being accepted; the
+	# exporter always writes the quoted "1", so that only ever reaches a hand-edited sidecar, and
+	# refusing it degrades to source text with a warning that names the value it saw. A
+	# present-but-empty version prints as '' here, which is what keeps it readable apart from the
+	# missing-field rung above.
+	if str(localization_json["schemaVersion"]) != "1":
+		push_warning("StoryFlow: localization.json declares schemaVersion '%s', which this plugin does not support (it reads '1') - the language tables were skipped; strings keep resolving to their source text" % str(localization_json["schemaVersion"]))
+		return
+
+	var strings = localization_json.get("strings")
+	if not (strings is Dictionary):
+		push_warning("StoryFlow: localization.json carries no strings object - the language tables were skipped; strings keep resolving to their source text")
+		return
+
+	# Past every rung: this project IS localized. Set before a single row is counted, so a
+	# present-but-empty sidecar is still a localized project.
+	project.has_localization = true
+
+	var declared_source := str(localization_json.get("sourceLanguage", ""))
+	if not declared_source.is_empty():
+		project.source_language = declared_source
+
+	# Registry ORDER is the author's and is preserved: it is the order a picker draws.
+	var declared_languages = localization_json.get("languages", [])
+	if declared_languages is Array:
+		for entry in declared_languages:
+			if not (entry is Dictionary):
+				continue
+			var code := str(entry.get("code", ""))
+			if code.is_empty():
+				continue
+			var label := str(entry.get("name", ""))
+			project.languages.append({"code": code, "name": code if label.is_empty() else label})
+
+	for language_code in strings:
+		var table = strings[language_code]
+		if not (table is Dictionary):
+			continue
+		var rows: Dictionary = {}
+		for key in table:
+			# Trusted-seed posture for malformed VALUES, precedent-exact with the character
+			# index's reader: a non-String row is skipped silently.
+			if not (table[key] is String):
+				continue
+			rows[str(key)] = table[key]
+		project.language_strings[str(language_code)] = rows
 
 
 # =============================================================================

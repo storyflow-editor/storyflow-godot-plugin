@@ -80,6 +80,16 @@ var data_asset_overlay: Dictionary = {}
 ## fresh binding is the "no bridge" state every id lane falls through to the path on.
 var character_id_bridge: Dictionary = {}
 
+## NON-OWNING reference to StoryFlowManager's localization state (localization spec §9), handed
+## over at dialogue start the same way the three above are. Same rule: REBIND on reset, never
+## mutate through it - the object belongs to the manager, and a null binding is the
+## "no localization state" every lookup falls through to its pre-localization behavior on.
+##
+## THIS IS WHY A LANGUAGE SWITCH REACHES A RUNNING DIALOGUE: the manager mutates the object in
+## place, so the evaluator and the text interpolator - which hold it through this field - read the
+## new language on their very next lookup instead of a copy taken at dialogue start.
+var localization = null
+
 # =============================================================================
 # Current Display State
 # =============================================================================
@@ -301,6 +311,7 @@ func reset() -> void:
 	data_asset_seed = {}
 	data_asset_overlay = {}
 	character_id_bridge = {}
+	localization = null
 	current_dialogue_state = null
 	persistent_background_image = ""
 	persistent_image = ""

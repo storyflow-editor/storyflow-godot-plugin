@@ -23,6 +23,8 @@ extends SceneTree
 
 const CharacterScript := preload("res://addons/storyflow/core/storyflow_character.gd")
 const ComponentScript := preload("res://addons/storyflow/core/storyflow_component.gd")
+const ContextScript := preload("res://addons/storyflow/core/storyflow_execution_context.gd")
+const EvaluatorScript := preload("res://addons/storyflow/core/storyflow_evaluator.gd")
 const Graph := preload("res://tests/data_asset_test_graph.gd")
 const Handles := preload("res://addons/storyflow/core/storyflow_handles.gd")
 const ImporterScript := preload("res://addons/storyflow/editor/storyflow_importer.gd")
@@ -59,6 +61,14 @@ var _probe_seq: int = 0
 var _wr_probe: StoryFlowComponent = null
 var _wr_out: String = ""
 
+## The localization runtime (§9): ONE import of the package build WITH its sidecar, the project it
+## produced (re-installed after the source-only case imports a second, sidecar-less build), the
+## sidecar's own tables as DATA for the tripwire, and a component that never starts a dialogue -
+## the OUTSIDE-dialogue door.
+var _loc_project = null
+var _loc_outside: StoryFlowComponent = null
+var _pkg_localization: Dictionary = {}
+
 
 func _initialize() -> void:
 	await process_frame
@@ -92,6 +102,8 @@ func _initialize() -> void:
 			_prepare_resolution_runtime(cases)
 		elif file_name == "character-writes.json":
 			_prepare_writes_runtime(cases)
+		elif file_name == "localization-resolution.json":
+			_prepare_localization_runtime()
 
 		var visited := 0
 		for idx in cases.size():
@@ -121,6 +133,12 @@ func _initialize() -> void:
 					_run_save_case(case)
 				"degraded":
 					_run_degraded_case(case, idx)
+				"localized":
+					_run_localized_case(case)
+				"language-table":
+					_run_language_table_case(case)
+				"source-only":
+					_run_source_only_case(case)
 				_:
 					_check("kind '%s' has a handler" % kind, false)
 			_ran_by_kind[kind] = int(_ran_by_kind.get(kind, 0)) + 1
@@ -142,6 +160,14 @@ func _initialize() -> void:
 	if _wr_probe != null:
 		_teardown(_wr_probe)
 		_wr_probe = null
+	if _loc_outside != null:
+		_teardown(_loc_outside)
+		_loc_outside = null
+
+	# The §9 language API, beyond the manifest's cases: the live wiring a game actually calls, run
+	# after the case replay so it cannot disturb it.
+	_run_localization_api()
+
 	_manager.delete_save(SAVE_SLOT)
 	_rm_rf(_temp_root)
 
@@ -165,10 +191,14 @@ func _check(label: String, ok: bool) -> void:
 # Package build + import (the vendor-verbatim rule: bytes copied, never re-encoded)
 # =============================================================================
 
-## Write the package's four inputs VERBATIM into a build dir, plus the minimal
+## Write the package's inputs VERBATIM into a build dir, plus the minimal
 ## project.storyflow envelope and the two media files the assets table names.
 ## [param index_mode]: "verbatim" | "none" | "ghost" (inject [param ghost] as data).
-func _write_package_build(build_dir: String, index_mode: String, ghost: Dictionary = {}) -> void:
+## [param with_localization]: whether localization.json is written beside the artifacts. THE
+## SIDECAR'S PRESENCE IS THE §9 MARKER, so "source-only" is expressed here - by not writing the
+## file into a real build - and never by emptying a table after an import. The §5 arm's builds
+## carry no sidecar, which keeps that arm's conditions byte-unchanged by this task.
+func _write_package_build(build_dir: String, index_mode: String, ghost: Dictionary = {}, with_localization: bool = false) -> void:
 	DirAccess.make_dir_recursive_absolute(build_dir)
 	_write_text(build_dir.path_join("project.storyflow"), JSON.stringify({
 		"version": "1.0",
@@ -183,6 +213,8 @@ func _write_package_build(build_dir: String, index_mode: String, ghost: Dictiona
 		var payload: Dictionary = _load_fixture(FIXTURE_DIR.path_join("character-index.json"))
 		payload["characters"][str(ghost.get("characterId", ""))] = str(ghost.get("recordKey", ""))
 		_write_text(build_dir.path_join("character-index.json"), JSON.stringify(payload, "\t"))
+	if with_localization:
+		_write_text(build_dir.path_join("localization.json"), _read_text(FIXTURE_DIR.path_join("localization.json")))
 	# The media the characters.json assets table points at, so the import resolves the
 	# stored asset ids to real files at the table's paths.
 	for asset_id in _pkg_assets:
@@ -194,10 +226,10 @@ func _write_package_build(build_dir: String, index_mode: String, ghost: Dictiona
 
 
 ## Import one package build and install it on the manager. Returns the OUTPUT dir.
-func _import_package(label: String, index_mode: String, ghost: Dictionary = {}) -> String:
+func _import_package(label: String, index_mode: String, ghost: Dictionary = {}, with_localization: bool = false) -> String:
 	var build := _temp("%s/build" % label)
 	var out := _temp("%s/out" % label)
-	_write_package_build(build, index_mode, ghost)
+	_write_package_build(build, index_mode, ghost, with_localization)
 	var project = ImporterScript.new().import_project(build, out)
 	_check("[setup] %s: import returned a project" % label, project != null)
 	if project != null:
@@ -831,6 +863,267 @@ func _run_wired_node_write(label: String, ref: Dictionary, variable: Dictionary,
 	var runner := _make_component()
 	runner.start_dialogue_with_script(script.script_path)
 	_teardown(runner)
+
+
+# =============================================================================
+# Localization arm (spec §9: localized / language-table / source-only)
+# =============================================================================
+
+## ONE import of the package build WITH its localization.json, plus the sidecar's own tables as
+## DATA (the tripwire asserts the resolve equals the OLD translation the sidecar carries) and the
+## outside-dialogue component every characters.json-keyed case cross-checks through.
+func _prepare_localization_runtime() -> void:
+	_import_package("localization", "verbatim", {}, true)
+	_loc_project = _manager.get_project()
+	_pkg_localization = _load_fixture(FIXTURE_DIR.path_join("localization.json"))
+	_check("[setup] localization: the sidecar build imports as a LOCALIZED project",
+		_loc_project != null and _loc_project.has_localization)
+	_check("[setup] localization: the roster is the source language plus the author's registry (got %d)"
+		% _manager.get_languages().size(), _manager.get_languages().size() == 3)
+	_check("[setup] localization: a fresh import starts in the project's source language (got '%s')"
+		% _manager.get_language(), _manager.get_language() == "en")
+	_loc_outside = _make_component()
+
+
+## THE NODE-LANE DOOR: the evaluator's _resolve_string_key, which is where every string-typed
+## value in this engine - a dialogue field's key, a character variable's stored key, an array
+## element, a map entry value - is turned into text. Built standalone (a context plus an
+## evaluator) rather than driven through a running graph so the id under test is the ONLY input.
+##
+## The language is NOT passed in: it comes from the manager through the context's localization
+## reference, because that is who owns it once the project ships a sidecar. A case selects a
+## language by calling set_language, exactly as a game does. [param fallback_language] is the
+## PRE-LOCALIZATION code, which only matters to the source-only case.
+func _localized_resolve_in(project, script, string_id: String, fallback_language: String) -> String:
+	var ctx := ContextScript.new()
+	ctx.current_script = script
+	ctx.localization = _manager.get_localization()
+	var evaluator := EvaluatorScript.new()
+	evaluator.initialize(ctx, {}, {}, fallback_language, project.global_strings)
+	return evaluator._resolve_string_key(string_id)
+
+
+## The node-lane door against the package's own imported project and its one script.
+func _localized_resolve(string_id: String) -> String:
+	var project = _manager.get_project()
+	return _localized_resolve_in(project, project.get_storyflow_script("script"), string_id, "en")
+
+
+## THE REACH RULE. Read the named character's named variable and take THE KEY IT STORES - never
+## rebuild the id from the character being read. The public ById getter answers stored values
+## verbatim for a non-name string variable (the §5 seat map), which is exactly the pre-resolution
+## record the rule asks to be followed: read it, cross-check it against the case's storedKey, then
+## USE WHAT WAS READ.
+##
+## An inherited value's key names the DECLARING ANCESTOR, so an implementation that composes
+## `<characterBeingRead>.<variableId>.value` produces an id nothing carries, passes every
+## non-inherited case, and resolves this one to the raw id.
+func _localized_string_id(case: Dictionary, name: String) -> String:
+	if not case.has("reach"):
+		return str(case.get("stringId", ""))
+	var reach: Dictionary = case["reach"]
+	var stored: StoryFlowVariant = _loc_outside.get_character_variable_by_id(
+		str(reach.get("characterId", "")), str(reach.get("variableName", "")))
+	var followed := stored.get_string("") if stored != null else ""
+	_check("%s: the character record stores the ancestor-owned key '%s' (got '%s')"
+		% [name, str(reach.get("storedKey", "")), followed],
+		followed == str(reach.get("storedKey", "")))
+	return followed
+
+
+## One (language, stringId) expectation, through the node lane - and, for a characters.json-keyed
+## id, through the OUTSIDE-dialogue door as well, which is what proves the two doors run one
+## shared ladder and cannot come apart.
+func _run_localized_case(case: Dictionary) -> void:
+	var name := str(case.get("case", "?"))
+	var language := str(case.get("language", ""))
+	var expected := str(case.get("expected", ""))
+	var string_id := _localized_string_id(case, name)
+
+	_check("%s: the language the case names is settable" % name, _manager.set_language(language))
+	var resolved := _localized_resolve(string_id)
+
+	if bool(case.get("expect_fail", false)):
+		_run_localized_expect_fail(case, name, language, expected, string_id, resolved)
+		return
+
+	_check("%s: %s['%s'] resolves to '%s' (got '%s')" % [name, language, string_id, expected, resolved],
+		resolved == expected)
+	# NEVER null and never an accidental empty string - the shape the whole contract rests on,
+	# asserted per case rather than once.
+	_check("%s: the resolve is never empty" % name, not resolved.is_empty())
+
+	if str(case.get("keyedIn", "")) == "characters.json":
+		var outside := _loc_outside.get_localized_string(string_id)
+		_check("%s: the outside-dialogue door agrees (got '%s')" % [name, outside], outside == expected)
+
+
+## INVERTED: this case's `expected` is the CURRENT SOURCE of an outdated row, which is what an
+## engine that recomputes status produces. Ruling 2 says the OLD translation ships, so reporting
+## this case as passing would prove exactly that defect.
+##
+## THREE assertions, not one: a mismatch alone would also be satisfied by resolving to the raw id
+## or to some third string, and each of those is a different silent defect. The resolve must miss
+## in the ONE direction the ruling names - by shipping the OLD translation the sidecar carries.
+func _run_localized_expect_fail(case: Dictionary, name: String, language: String, expected: String, string_id: String, resolved: String) -> void:
+	_check("%s: EXPECT_FAIL reported failing - the deliberately wrong current source '%s' is not what resolved (got '%s')"
+		% [name, expected, resolved],
+		resolved != expected and _manifest.get("expect_fail_cases", []).has(name))
+	var table = _pkg_localization.get("strings", {}).get(language, {})
+	var sidecar_row := str(table.get(string_id, "<no row>"))
+	_check("%s: it misses by shipping the OLD translation the sidecar carries ('%s', got '%s')"
+		% [name, sidecar_row, resolved], resolved == sidecar_row)
+	_check("%s: and not by falling through to the raw id" % name, resolved != string_id)
+	_expect_fail_inverted += 1
+
+
+## The COMPLETE resolved table for one language: every id the export shipped, so an implementation
+## cannot pass by covering only the named cases.
+func _run_language_table_case(case: Dictionary) -> void:
+	var name := str(case.get("case", "?"))
+	var language := str(case.get("language", ""))
+	var expected: Dictionary = case.get("expected", {})
+	_check("%s: the language the case names is settable" % name, _manager.set_language(language))
+	_check("%s: the table carried rows to compare" % name, not expected.is_empty())
+	for string_id in expected:
+		var resolved := _localized_resolve(str(string_id))
+		_check("%s: %s['%s'] resolves to '%s' (got '%s')" % [name, language, str(string_id), str(expected[string_id]), resolved],
+			resolved == str(expected[string_id]))
+		_check("%s: the resolve is never empty for '%s'" % [name, str(string_id)], not resolved.is_empty())
+
+
+## THE ABSENCE BRANCH, against a SECOND project imported from a build folder that GENUINELY
+## carries no localization.json. Nothing is emptied and nothing is mutated: the marker is the FILE
+## EXISTING, so only a real import of a real pre-localization build proves it.
+func _run_source_only_case(case: Dictionary) -> void:
+	var name := str(case.get("case", "?"))
+	var expected: Dictionary = case.get("expected", {})
+
+	_import_package("srconly", "verbatim", {}, false)
+	var source_only = _manager.get_project()
+	_check("%s: a build with no sidecar is not a localized project" % name,
+		source_only != null and not source_only.has_localization)
+	var loc = _manager.get_localization()
+	_check("%s: it registers no language tables" % name, loc.tables.is_empty())
+	_check("%s: it offers no target languages" % name, loc.languages.is_empty())
+	_check("%s: its source language is the pre-localization default (got '%s')" % [name, loc.source_language],
+		loc.source_language == "en")
+	_check("%s: and it offers no language roster at all" % name, _manager.get_languages().is_empty())
+	_check("%s: the active language fell back to the source language (got '%s')" % [name, _manager.get_language()],
+		_manager.get_language() == "en")
+
+	var script = source_only.get_storyflow_script("script")
+	for string_id in expected:
+		# Every shipped id, resolved as this plugin behaved before localization existed - and
+		# again asked for a language it does not carry, which still answers source text because
+		# there is no table to overlay.
+		var in_source := _localized_resolve_in(source_only, script, str(string_id), "en")
+		_check("%s: source-only['%s'] resolves to '%s' (got '%s')" % [name, str(string_id), str(expected[string_id]), in_source],
+			in_source == str(expected[string_id]))
+		var in_fr := _localized_resolve_in(source_only, script, str(string_id), "fr")
+		_check("%s: source-only['%s'] asked in fr still answers source text (got '%s')" % [name, str(string_id), in_fr],
+			in_fr == str(expected[string_id]))
+
+	# The remaining cases run against the package's own localized project again.
+	_manager.set_project(_loc_project)
+
+
+## The §9 language API as a game drives it, through the RENDERED dialogue lane (the text
+## interpolator) rather than the node lane the cases use - so the language is proved to reach the
+## screen, not only the resolver.
+func _run_localization_api() -> void:
+	_import_package("locapi", "verbatim", {}, true)
+	var api_project = _manager.get_project()
+	var component := _make_component()
+	component.start_dialogue_with_script("script")
+
+	# The case replay above left the player in a target language and this fresh import CARRIED it:
+	# re-installing content a player's language is still shipped by must not undo their choice.
+	# (The opposite case - a project that does NOT ship it - is asserted at the end.)
+	_check("api: a re-import carries a chosen language the new project also ships (got '%s')"
+		% _manager.get_language(), _manager.get_language() == "fr")
+	_check("api: the walk starts from the source language", _manager.set_language("en"))
+
+	var languages: Array = _manager.get_languages()
+	_check("api: the roster is source-first (got %s)" % str(languages),
+		languages.size() == 3 and str(languages[0].get("code")) == "en"
+			and str(languages[0].get("name")) == "en")
+	_check("api: then the author's registry order with their labels",
+		str(languages[1].get("code")) == "fr" and str(languages[1].get("name")) == "French"
+			and str(languages[2].get("code")) == "es" and str(languages[2].get("name")) == "Spanish")
+
+	# Node 1 is RENDERED through the real dialogue builder rather than reached by advancing the
+	# graph: the vendored script.json's edges carry no handles (it is a binding fixture whose nodes
+	# the §5 cases READ rather than run), so the executor parks at its start node. Everything that
+	# matters here still travels verbatim from the vendored data - node 1's title/text ids, its
+	# speaker ref, and the imported script's own strings table, which is the source tier every
+	# untranslated expectation below falls through to.
+	var state = component._build_dialogue_state(api_project.get_storyflow_script("script").get_node("1"))
+	_check("api: the dialogue rendered", state != null)
+	_check("api: the source line's title (got '%s')" % state.title, state.title == "Greeting")
+	_check("api: the source line's text (got '%s')" % state.text, state.text == "Well met.")
+	_check("api: the source speaker name (got '%s')" % state.character.name, state.character.name == "Sir Roland")
+
+	# A registered code in ANY casing, answered in the REGISTERED casing.
+	_check("api: set_language accepts a registered code in any casing", _manager.set_language("FR"))
+	_check("api: and reports the canonical casing back (got '%s')" % _manager.get_language(),
+		_manager.get_language() == "fr")
+
+	# The switch reaches the RENDERED state on the next render, mid-dialogue.
+	state = component._build_dialogue_state(api_project.get_storyflow_script("script").get_node("1"))
+	_check("api: an OUTDATED row ships the old translation, not the new source (got '%s')" % state.title,
+		state.title == "Salutations")
+	_check("api: a translated row ships the translation (got '%s')" % state.text,
+		state.text == "Bien le bonjour.")
+	# UNLIKE THE UNITY PORT, which bakes display names at import and lags a mid-session switch:
+	# this engine stores the name KEY on the runtime record and resolves it per read, so the
+	# speaker label flips immediately (the Unreal posture).
+	_check("api: the speaker label flips too - names resolve at READ time here (got '%s')" % state.character.name,
+		state.character.name == "Sire Roland")
+
+	# An unknown or empty code is a NO-OP: a typo must never move the player out of the language
+	# they picked.
+	_check("api: set_language refuses a code this project does not carry", not _manager.set_language("de"))
+	_check("api: and leaves the player where they were", _manager.get_language() == "fr")
+	_check("api: set_language refuses an empty code", not _manager.set_language(""))
+	_check("api: and still leaves the player where they were", _manager.get_language() == "fr")
+	state = component._build_dialogue_state(api_project.get_storyflow_script("script").get_node("1"))
+	_check("api: the refused switch changed nothing on screen", state.title == "Salutations")
+
+	# Per-language tables are independent: the id French serves OUTDATED is Done in Spanish.
+	_check("api: set_language switches to the second language", _manager.set_language("es"))
+	state = component._build_dialogue_state(api_project.get_storyflow_script("script").get_node("1"))
+	_check("api: per-language tables are independent (title, got '%s')" % state.title, state.title == "Saludo")
+	_check("api: per-language tables are independent (text, got '%s')" % state.text, state.text == "Well met.")
+
+	# A reset keeps the choice: a language is a player SETTING, not session state.
+	_manager.reset_all_state()
+	_check("api: the active language survives a full state reset", _manager.get_language() == "es")
+
+	# Back to the source language: a legitimate choice, with no table of its own.
+	_check("api: the source language is settable", _manager.set_language("en"))
+	state = component._build_dialogue_state(api_project.get_storyflow_script("script").get_node("1"))
+	_check("api: the source text comes back (got '%s')" % state.title, state.title == "Greeting")
+
+	# NEVER-NULL SHAPE at the public door: a value that keyed no table anywhere is its own text,
+	# in the source language and in a target language alike.
+	_check("api: an unkeyed value resolves to itself in the source language",
+		component.get_localized_string("nothing keyed this") == "nothing keyed this")
+	_manager.set_language("fr")
+	_check("api: and in a target language too",
+		component.get_localized_string("nothing keyed this") == "nothing keyed this")
+
+	# The choice survives a re-set of a project that still carries it (re-installing content
+	# mid-game must not undo a choice), and a project that does NOT carry it snaps to that
+	# project's source language rather than leaving the game reading a language nothing ships.
+	_manager.set_project(api_project)
+	_check("api: the choice survives a re-set of a project that carries it", _manager.get_language() == "fr")
+	_import_package("locapi_none", "verbatim", {}, false)
+	_check("api: a project without the code snaps to its source language", _manager.get_language() == "en")
+	_check("api: and a re-import replaces the tables rather than appending to them",
+		_manager.get_localization().tables.is_empty() and _manager.get_localization().languages.is_empty())
+
+	_teardown(component)
 
 
 # =============================================================================

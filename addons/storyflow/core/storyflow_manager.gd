@@ -5,6 +5,7 @@ extends Node
 const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
 const StoryFlowDataAssetStore = preload("res://addons/storyflow/core/storyflow_data_asset_store.gd")
 const StoryFlowImporter = preload("res://addons/storyflow/editor/storyflow_importer.gd")
+const StoryFlowLocalization = preload("res://addons/storyflow/core/storyflow_localization.gd")
 const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
 const StoryFlowSaveData = preload("res://addons/storyflow/core/storyflow_save_data.gd")
 const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
@@ -33,6 +34,17 @@ var _runtime_characters: Dictionary = {}
 ## _initialize_from_project delegates to) and NEVER by a save load - the bridge is import
 ## state, not player state, so load_from_slot must not touch it.
 var _character_id_bridge: Dictionary = {}
+
+## The translations sidecar plus the player's chosen language (localization spec §9).
+##
+## Assigned ONCE here and MUTATED IN PLACE forever - never rebound - for the same reason the id
+## bridge above and the .sfd pair below are: a running dialogue's execution context holds this by
+## reference from dialogue start, so rebinding on a project change or a reset would strand it on
+## the pre-change object and split the game into two languages mid-sentence.
+##
+## Refreshed exactly where the project is installed (_initialize_from_project) and NEVER by a save
+## load or a state reset - see set_language for why the player's choice outlives both.
+var _localization: StoryFlowLocalization = StoryFlowLocalization.new()
 
 var _used_once_only_options: Dictionary = {}
 var _active_dialogue_count: int = 0
@@ -293,6 +305,77 @@ func reset_character_id_access_warnings() -> void:
 
 
 # =============================================================================
+# Localization (spec §9) - the player's language, game-wide
+# =============================================================================
+#
+# ONE SURFACE, not the mirrored pair the .sfd and character sections above carry. The language is
+# a single game-wide value rather than per-record state, so a second door on StoryFlowComponent
+# would be two names for one field - the component keeps only its pre-localization language_code
+# export, which a localized project ignores.
+
+
+## The localization state, handed to a starting dialogue by reference. Never rebind it; write to
+## it only through set_language.
+func get_localization() -> StoryFlowLocalization:
+	return _localization
+
+
+## Switch the language every StoryFlow string is read in. True when the game is now reading
+## [param language_code].
+##
+## AN UNKNOWN OR EMPTY CODE IS A NO-OP: it warns, changes nothing and returns false. Falling back
+## to the default instead would let a typo silently move the player out of the language they
+## picked, and a caller that wants to know can read [method get_language]. The codes accepted are
+## exactly the rows [method get_languages] returns, matched case-insensitively with the REGISTERED
+## casing winning (StoryFlowLocalization.resolve_code, the one resolve point this shares with the
+## project install). A project with no localization sidecar accepts only its source language, so
+## this is a no-op there by construction rather than by a special case.
+##
+## WHAT MOVES, AND WHEN. Everything this plugin resolves AT READ TIME follows immediately -
+## dialogue titles, text, text blocks, option labels, string and enum variable values, character
+## string variables, map and array elements, AND character display names, which this engine stores
+## as string-table keys on the runtime record and resolves per read. THE SEED-TIME POSTURE (ruled
+## at LD2): a value a running script has already WRITTEN into live state - a Set String node, a
+## SetCharacterVar - was resolved in the language current at the moment of the write and stays
+## that text; a mid-session switch reaches those only at the next reset or dialogue start, which
+## re-seeds them from the project. Exact mid-session re-seeding would need write-tracking to avoid
+## clobbering the player's own progress, and is deliberately not built.
+##
+## PERSISTENCE IS THE GAME'S. This plugin keeps the choice for the SESSION only, and deliberately:
+## the unified v1 save envelope carries the story state a slot owns (globals, characters,
+## once-only options, the .sfd overlay) and is byte-shape-shared with the Unreal and Unity
+## plugins - a language is not that kind of thing. It must survive with no save file at all, apply
+## before any save is loaded, and not differ per slot. The HTML runtime reaches the same
+## conclusion and keeps it beside its volume settings rather than in the envelope. In Godot the
+## settings lane already exists and belongs to the game: persist the code yourself (a ConfigFile
+## in user://, your own options screen) and call this once at boot, before the first dialogue.
+func set_language(language_code: String) -> bool:
+	var next := _localization.resolve_code(language_code)
+	if next.is_empty():
+		push_warning("[StoryFlow] set_language: unknown language '%s' - staying on '%s'" % [language_code, _localization.active_language])
+		return false
+
+	if next != _localization.active_language:
+		_localization.active_language = next
+		print("[StoryFlow] Language set to '%s'" % next)
+	return true
+
+
+## The language code every StoryFlow string is currently read in. The loaded project's source
+## language until set.
+func get_language() -> String:
+	return _localization.active_language
+
+
+## Every language the player can be switched to as `[{ "code", "name" }]`: the SOURCE language
+## first, then the author's registry order - the list a game's own picker draws. EMPTY for a
+## project with no localization sidecar, which is how a game asks "is this project localized at
+## all" without reading a key count.
+func get_languages() -> Array:
+	return _localization.get_roster()
+
+
+# =============================================================================
 # Once-Only Options
 # =============================================================================
 
@@ -458,6 +541,8 @@ func reset_all_state() -> void:
 	reset_data_asset_access_warnings()
 	reset_character_id_access_warnings()
 	_used_once_only_options.clear()
+	# The active language is deliberately NOT reset (localization spec §9): it is a player SETTING
+	# rather than story state, so it outlives a new game exactly as it outlives a save load.
 
 
 # =============================================================================
@@ -473,6 +558,11 @@ func reset_all_state() -> void:
 ## the one path nobody had walked - the .sfd seed and overlay beside it were already in-place, so
 ## a project swap left globals split in two while data assets stayed whole.
 func _initialize_from_project() -> void:
+	# THE LANGUAGE FIRST, because everything seeded below is read in it. The install replaces the
+	# tables wholesale (never appends) and carries the player's choice forward when the new project
+	# still ships it - see StoryFlowLocalization.install_from_project.
+	_localization.install_from_project(_project)
+
 	var fresh: Dictionary = StoryFlowVariant.deep_copy_variables(_project.global_variables)
 	_global_variables.clear()
 	for var_id in fresh:
