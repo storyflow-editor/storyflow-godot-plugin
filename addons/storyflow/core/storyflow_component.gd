@@ -225,6 +225,9 @@ func start_dialogue_with_script(path: String) -> void:
 	_context.data_asset_seed = mgr.get_data_asset_seed()
 	_context.data_asset_overlay = mgr.get_data_asset_overlay()
 
+	# P4 character id bridge: the same non-owning handover (characters engine contract §3).
+	_context.character_id_bridge = mgr.get_character_id_bridge()
+
 	# Create evaluator
 	_evaluator = StoryFlowEvaluator.new()
 	_evaluator.initialize(_context, mgr.get_global_variables(), mgr.get_runtime_characters(), language_code, project.global_strings)

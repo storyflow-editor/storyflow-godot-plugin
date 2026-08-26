@@ -19,6 +19,21 @@ const DEFAULT_IMPORT_META_PATH := "res://storyflow/storyflow_import_meta.json"
 var _project: StoryFlowProject = null
 var _global_variables: Dictionary = {}
 var _runtime_characters: Dictionary = {}
+
+## P4 character id bridge: character FILE id (da_<32 hex>) → _runtime_characters key, copied
+## verbatim from the project's character_id_index (characters engine contract §3).
+##
+## Assigned ONCE here and MUTATED IN PLACE forever - never rebound - for the same reason the
+## .sfd seed and overlay below are: a running dialogue's execution context holds this by
+## reference from dialogue start, and rebinding on a project change or reset would strand it
+## on the pre-reset object, splitting reads into two divergent stores. That is exactly the
+## bug rebinding _global_variables caused before v1.2.3.
+##
+## Refreshed exactly where _runtime_characters refills (reset_runtime_characters and
+## _initialize_from_project) and NEVER by a save load - the bridge is import state, not
+## player state, so load_from_slot must not touch it.
+var _character_id_bridge: Dictionary = {}
+
 var _used_once_only_options: Dictionary = {}
 var _active_dialogue_count: int = 0
 
@@ -227,6 +242,53 @@ func reset_runtime_characters() -> void:
 		for path in _project.characters:
 			var original: StoryFlowCharacter = _project.characters[path]
 			_runtime_characters[path] = original.duplicate_character()
+		# The id bridge rides with the characters it points into: refreshed here and in
+		# _initialize_from_project, in place (see its declaration), values verbatim.
+		_character_id_bridge.clear()
+		for id in _project.character_id_index:
+			_character_id_bridge[id] = _project.character_id_index[id]
+
+
+## The P4 character id bridge, handed to a starting dialogue by reference. Never write into it.
+func get_character_id_bridge() -> Dictionary:
+	return _character_id_bridge
+
+
+## Claimed "id|reason" keys for the character-id HOST-LANE warnings (characters engine
+## contract §3). Same design as warned_data_asset_access above, and on the manager for the
+## same two reasons: a host that rebuilds or reparents a component must not re-arm warnings
+## it already emitted, and every host-side character-id surface joins this one latch. The
+## reason vocabulary: "dangling" (an id with no bridge entry) and "unloaded" (a bridge hit
+## whose record is missing from _runtime_characters).
+##
+## RE-ARMED ON set_project AND reset_all_state, and nowhere else - the two points where the
+## answer to "is this id wrong?" can genuinely have changed. Inspectable on purpose, like
+## the .sfd pair: Godot's push_warning cannot be captured from a SceneTree test, so the
+## latch proves WHICH ids warned and the counter proves HOW MANY TIMES.
+var warned_character_id_access: Dictionary = {}
+
+## How many host-lane character-id warnings have actually been emitted since the last re-arm.
+var character_id_access_warnings_emitted: int = 0
+
+
+## Claim the warn latch for one degraded host-lane id resolution, reporting whether the
+## CALLER should warn. The caller formats and pushes the message inside the `if`, which
+## keeps the suppressed path allocation free - the same shape as
+## should_warn_data_asset_access above.
+func should_warn_character_id_access(id: String, reason: String) -> bool:
+	var key := "%s|%s" % [id, reason]
+	if warned_character_id_access.has(key):
+		return false
+	warned_character_id_access[key] = true
+	character_id_access_warnings_emitted += 1
+	return true
+
+
+## Re-arm every host-lane character-id warning. Called exactly where the .sfd access pair
+## re-arms: set_project (via _initialize_from_project) and reset_all_state.
+func reset_character_id_access_warnings() -> void:
+	warned_character_id_access.clear()
+	character_id_access_warnings_emitted = 0
 
 
 # =============================================================================
@@ -393,6 +455,7 @@ func reset_all_state() -> void:
 	reset_runtime_characters()
 	reset_data_assets()
 	reset_data_asset_access_warnings()
+	reset_character_id_access_warnings()
 	_used_once_only_options.clear()
 
 
@@ -419,10 +482,17 @@ func _initialize_from_project() -> void:
 		var original: StoryFlowCharacter = _project.characters[path]
 		_runtime_characters[path] = original.duplicate_character()
 
+	# The id bridge rides with the characters it points into: refreshed here and in
+	# reset_runtime_characters, in place (see its declaration), values verbatim.
+	_character_id_bridge.clear()
+	for id in _project.character_id_index:
+		_character_id_bridge[id] = _project.character_id_index[id]
+
 	reset_data_assets()
 	# A re-import is exactly when a name that was wrong may have become right, so the host
 	# accessor warnings re-arm with the project rather than surviving it.
 	reset_data_asset_access_warnings()
+	reset_character_id_access_warnings()
 
 	_used_once_only_options.clear()
 	# _active_dialogue_count is deliberately NOT zeroed here. A registration belongs to the

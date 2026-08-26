@@ -21,6 +21,14 @@ var global_variables: Dictionary = {}
 ## normalized_path → StoryFlowCharacter
 var characters: Dictionary = {}
 
+## Character FILE id (da_<32 hex>) → characters key, from character-index.json (characters
+## engine contract §3). Values are stored VERBATIM: the wire ships the exporter's
+## lowercase-backslash record keys, which are byte-identical to what
+## StoryFlowCharacter.normalize_path produces - so normalize_path applied to a value would be
+## a no-op by construction, and no normalization pass exists at import or lookup. Empty for a
+## pre-P4 export (no index file): everything resolves by path.
+var character_id_index: Dictionary = {}
+
 ## asset_id → raw .sfd definition, as parsed from data-assets.json (engine contract 2.1):
 ## { "id", "name", "parent", "variables": Array[declaration], "raw_overrides": { varId → raw JSON } }
 ##
