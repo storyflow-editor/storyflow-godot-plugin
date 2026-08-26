@@ -74,6 +74,12 @@ var global_variable_name_index: Dictionary = {}
 var data_asset_seed: Dictionary = {}
 var data_asset_overlay: Dictionary = {}
 
+## NON-OWNING reference to StoryFlowManager's P4 character id bridge (characters engine
+## contract §3), handed over at dialogue start the same way the two above are. Same rule:
+## REBIND on reset, never clear() - the dictionary belongs to the manager, and an empty
+## fresh binding is the "no bridge" state every id lane falls through to the path on.
+var character_id_bridge: Dictionary = {}
+
 # =============================================================================
 # Current Display State
 # =============================================================================
@@ -135,6 +141,22 @@ var warned_data_asset_nodes: Dictionary = {}
 var data_asset_warnings_emitted: int = 0
 
 # =============================================================================
+# Character Id Warning Latch
+# =============================================================================
+
+## Claimed "id|reason" keys for the NODE-LANE character-id resolution warnings (characters
+## engine contract §3). The reason vocabulary: "dangling" (an id with no bridge entry) and
+## "unloaded" (a bridge hit whose record is missing from the runtime characters). Re-armed
+## in reset() beside the data-asset pair above, and split into a dict and a counter for the
+## same reason that pair is: Godot's push_warning cannot be captured from a SceneTree test,
+## so the latch dict proves WHICH ids warned and the counter proves HOW MANY TIMES — which
+## is what separates a working once-latch from one that re-warns on every read.
+var warned_character_ids: Dictionary = {}
+
+## Total character-id warnings actually emitted this run. See above.
+var character_id_warnings_emitted: int = 0
+
+# =============================================================================
 # Methods
 # =============================================================================
 
@@ -155,6 +177,19 @@ func should_warn_data_asset(node_id: String, reason: String) -> bool:
 	warned_data_asset_nodes[key] = true
 	data_asset_warnings_emitted += 1
 	return true
+
+
+## Claim the warn latch for one (character id, reason) pair. Returns true exactly once per
+## pair per run; the CALLER formats the message and calls push_warning INSIDE the if, the
+## same shape as should_warn_data_asset above and for the same allocation reason.
+func should_warn_character_id(id: String, reason: String) -> bool:
+	var key := "%s|%s" % [id, reason]
+	if warned_character_ids.has(key):
+		return false
+	warned_character_ids[key] = true
+	character_id_warnings_emitted += 1
+	return true
+
 
 func get_node_state(node_id: String) -> StoryFlowNodeRuntimeState:
 	if not node_runtime_states.has(node_id):
@@ -265,6 +300,7 @@ func reset() -> void:
 	# REBOUND, not cleared - these point at manager-owned dictionaries (see above).
 	data_asset_seed = {}
 	data_asset_overlay = {}
+	character_id_bridge = {}
 	current_dialogue_state = null
 	persistent_background_image = ""
 	persistent_image = ""
@@ -277,3 +313,6 @@ func reset() -> void:
 	# RE-ARM the degraded-accessor warnings for the new run (engine contract 6).
 	warned_data_asset_nodes.clear()
 	data_asset_warnings_emitted = 0
+	# RE-ARM the node-lane character-id warnings the same way (characters contract §3).
+	warned_character_ids.clear()
+	character_id_warnings_emitted = 0

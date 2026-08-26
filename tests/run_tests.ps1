@@ -45,6 +45,14 @@ if ($LASTEXITCODE -ne 0) { $failed = 1 }
 if ($LASTEXITCODE -ne 0) { $failed = 1 }
 & $GodotExe --headless --path $repoRoot --script res://tests/test_data_asset_host_api.gd
 if ($LASTEXITCODE -ne 0) { $failed = 1 }
+& $GodotExe --headless --path $repoRoot --script res://tests/test_character_index.gd
+if ($LASTEXITCODE -ne 0) { $failed = 1 }
+& $GodotExe --headless --path $repoRoot --script res://tests/test_character_resolution.gd
+if ($LASTEXITCODE -ne 0) { $failed = 1 }
+& $GodotExe --headless --path $repoRoot --script res://tests/test_character_host_surface.gd
+if ($LASTEXITCODE -ne 0) { $failed = 1 }
+& $GodotExe --headless --path $repoRoot --script res://tests/test_character_by_id_saves.gd
+if ($LASTEXITCODE -ne 0) { $failed = 1 }
 & $GodotExe --headless --path $repoRoot --script res://tests/test_save_legacy_shape.gd
 if ($LASTEXITCODE -ne 0) { $failed = 1 }
 & $GodotExe --headless --path $repoRoot --script res://tests/test_save_unified.gd

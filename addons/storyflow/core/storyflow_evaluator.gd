@@ -1428,10 +1428,23 @@ func resolve_map_input_by_handle(node: Dictionary, handle_suffix: String) -> Dic
 				return unresolved
 			var character_path: String = source_data.get("characterPath", "")
 			var char_edge := _context.current_script.find_input_edge(source_node.get("id", ""), StoryFlowHandles.IN_CHARACTER_INPUT)
+			var char_wired := false
 			if not char_edge.is_empty():
 				var char_source := _context.current_script.get_node(char_edge.get("source", ""))
 				if not char_source.is_empty():
 					character_path = evaluate_string_from_node(char_source.get("id", ""), char_edge.get("source_handle", ""))
+					char_wired = true
+			# Id-first, same shape as _evaluate_character_variable: NODE lane -> the
+			# context latch pair; the wired override wins outright; every fall-back keeps
+			# the pre-P4 path lane byte-identical (this arm stays silently unresolved on a
+			# path miss — only the id lanes warn, once, inside the resolver).
+			if char_wired:
+				character_path = StoryFlowCharacter.resolve_character_key(
+					_context.character_id_bridge, _characters, character_path, _context)
+			else:
+				character_path = StoryFlowCharacter.resolve_character_ref(
+					_context.character_id_bridge, _characters,
+					str(source_data.get("characterId", "")), character_path, _context)
 			if character_path.is_empty():
 				return unresolved
 			var normalized_path := StoryFlowCharacter.normalize_path(character_path)
@@ -1848,12 +1861,28 @@ func _evaluate_character_variable(data: Dictionary, node_id: String = "") -> Sto
 	var character_path: String = data.get("characterPath", "")
 
 	# Check for connected character input (override dropdown)
+	var wired := false
 	if not node_id.is_empty() and _context and _context.current_script:
 		var char_edge: Dictionary = _context.current_script.find_input_edge(node_id, StoryFlowHandles.IN_CHARACTER_INPUT)
 		if not char_edge.is_empty():
 			var source_node: Dictionary = _context.current_script.get_node(char_edge.get("source", ""))
 			if not source_node.is_empty():
 				character_path = evaluate_string_from_node(source_node.get("id", ""), char_edge.get("source_handle", ""))
+				wired = true
+
+	# Id-first resolution (characters engine contract §4), NODE lane -> the context's
+	# latch pair. The wired override WINS OUTRIGHT: neither inline field is consulted, so
+	# a dangling inline id under a healthy wire never warns. The wired value may itself be
+	# an id; anything non-id comes back verbatim for the pre-P4 lines below (their
+	# normalize + per-call not-found warn stay byte-identical, spellings included).
+	if _context:
+		if wired:
+			character_path = StoryFlowCharacter.resolve_character_key(
+				_context.character_id_bridge, _characters, character_path, _context)
+		else:
+			character_path = StoryFlowCharacter.resolve_character_ref(
+				_context.character_id_bridge, _characters,
+				str(data.get("characterId", "")), character_path, _context)
 
 	if character_path.is_empty():
 		return StoryFlowVariant.new()
@@ -1869,12 +1898,16 @@ func _evaluate_character_variable(data: Dictionary, node_id: String = "") -> Sto
 	if variable_name.is_empty():
 		return StoryFlowVariant.new()
 
-	# Handle built-in "Name" field
-	if variable_name.to_lower() == "name":
+	# Handle built-in "Name" field. FIRST TIER of the A2(a) aliases: this arm was already
+	# case-insensitive, so the shared predicate folds cf_name in (the second, cf_-only
+	# tier lives on public set_character_variable — see StoryFlowCharacter.CF_NAME_ID).
+	# A5: this arm answers the RAW stored key, never the localized string — pre-P4
+	# posture, kept.
+	if StoryFlowCharacter.is_name_token(variable_name):
 		return StoryFlowVariant.from_string(character.character_name)
 
-	# Handle built-in "Image" field
-	if variable_name.to_lower() == "image":
+	# Handle built-in "Image" field (first tier, same as Name above)
+	if StoryFlowCharacter.is_image_token(variable_name):
 		return StoryFlowVariant.from_string(character.image_key)
 
 	# Find custom variable

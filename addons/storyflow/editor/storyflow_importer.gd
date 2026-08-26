@@ -172,6 +172,17 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 				print("StoryFlow: Imported character '%s'" % char_path)
 
 	# ------------------------------------------------------------------
+	# Character index (character-index.json, P4)
+	# ------------------------------------------------------------------
+	# Source of the character id bridge (characters engine contract §3): character FILE id
+	# -> characters.json record key. An ABSENT file is a pre-P4 export and stays silent -
+	# everything resolves by path, exactly as before this file existed. Everything else is
+	# _parse_character_index's degraded ladder, shared with the inline arm below.
+	var character_index_file := build_dir.path_join("character-index.json")
+	if FileAccess.file_exists(character_index_file):
+		project.character_id_index = _parse_character_index(_load_json_file(character_index_file))
+
+	# ------------------------------------------------------------------
 	# Data Assets (.sfd)
 	# ------------------------------------------------------------------
 	# Written beside characters.json, always (an empty object when the project references
@@ -210,7 +221,7 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 		# Skip non-script files. EVERY sidecar the export writes must be listed here:
 		# load_project_local re-runs this sweep on every launch, so an unlisted sidecar is
 		# imported as a phantom script named after its filename, silently, in shipped games.
-		if filename in ["project.json", "project.storyflow", "global-variables.json", "characters.json", "data-assets.json", IMPORT_META_FILENAME]:
+		if filename in ["project.json", "project.storyflow", "global-variables.json", "characters.json", "data-assets.json", "character-index.json", IMPORT_META_FILENAME]:
 			continue
 
 		var relative := _make_relative(script_file, build_dir)
@@ -349,6 +360,21 @@ func import_project_from_json(project_json: Dictionary) -> StoryFlowProject:
 			if char_data.has("variables"):
 				character.variables = _parse_character_variables(char_data["variables"])
 			project.characters[normalized_path] = character
+
+	# Character index (inline). Accepts both the character-index.json document shape and a
+	# wrapper nesting, the same way the characters block above and the dataAssets block below
+	# accept either. The two cannot be confused: the document's own keys are
+	# schemaVersion/characters, so an inner "characterIndex" key is always the wrapper. A
+	# bare id -> key map is deliberately refused: it carries no schemaVersion, and accepting
+	# one would make this the only lane that skips the version rung. The parse (degraded
+	# ladder, verbatim values) is shared with the disk arm - the two arms must never diverge
+	# (the divergence lesson test_import_hardening.gd exists for).
+	if project_json.has("characterIndex"):
+		var index_data = project_json["characterIndex"]
+		if index_data is Dictionary and index_data.has("characterIndex"):
+			index_data = index_data["characterIndex"]
+		project.character_id_index = _parse_character_index(
+			index_data if index_data is Dictionary else {})
 
 	# Data assets (inline). Accepts both the flat asset table and the data-assets.json
 	# wrapper shape, the same way the characters block above accepts either nesting. The two
@@ -557,6 +583,11 @@ func _parse_node_data(type_string: String, node_obj: Dictionary) -> Dictionary:
 		data["audioAllowSkip"] = data_src["audioAllowSkip"]
 	if data_src.has("character"):
 		data["character"] = data_src["character"]
+	# P4 id sibling of "character" (characters engine contract §1.3): additive on the wire,
+	# carried when shipped and absent otherwise. Resolution prefers the id; the path stays
+	# the fall-back.
+	if data_src.has("characterRefId"):
+		data["characterRefId"] = data_src["characterRefId"]
 
 	# Dialogue tags (presentation cues fired when the node is entered).
 	# Optional and additive: older files lack the key entirely. Guard that the
@@ -723,6 +754,11 @@ func _parse_node_data(type_string: String, node_obj: Dictionary) -> Dictionary:
 	if data_src.has("characterPath"):
 		data["characterPath"] = data_src["characterPath"]
 		data["variableName"] = data_src.get("variable", "")
+	# P4 id sibling of "characterPath" (characters engine contract §1.3): additive on the
+	# wire, carried when shipped and absent otherwise. Resolution prefers the id; the path
+	# stays the fall-back - the same rule as the dialogue block's characterRefId above.
+	if data_src.has("characterId"):
+		data["characterId"] = data_src["characterId"]
 	if data_src.has("variableName"):
 		data["variableName"] = data_src["variableName"]
 	if data_src.has("variableType"):
@@ -892,11 +928,72 @@ func _parse_character_variables(raw: Dictionary) -> Dictionary:
 			"name": var_name,
 			"type": var_type,
 			"value": value,
+			# The wire's array marker, carried for the DA-surface character branch's
+			# scalar gate (P4): an array-valued row stores its ELEMENT type in "type", so
+			# without this flag a bool-array row would satisfy a scalar boolean read.
+			"is_array": bool(var_obj.get("isArray", false)),
 			"key_type": StoryFlowTypes.parse_variable_type(key_type_string),
 			"value_type": StoryFlowTypes.parse_variable_type(value_type_string),
 			"key_enum_values": key_enum_values,
 			"value_enum_values": value_enum_values,
 		}
+	return result
+
+
+## Parse a PRESENT character-index.json document into the id -> record-key table
+## (characters engine contract §3), or {} when a degraded rung refuses it. Both import
+## arms funnel through here, so the ladder and the verbatim rule cannot diverge.
+##
+## The degraded ladder - each refusing rung warns naming the consequence, once per import
+## since an import parses the document once:
+##   absent file          silent (a pre-P4 export; never reaches this function)
+##   empty characters map fine (a P4 project with no characters)
+##   unreadable document  warn + skip
+##   unknown/missing schemaVersion (a plain string compare against "1" - no schema-token
+##                        machinery exists in this plugin)  warn + skip
+##   no characters object warn + skip
+## A skipped index leaves the table empty, so characters keep resolving by path.
+##
+## Values are stored VERBATIM. The wire ships the exporter's lowercase-backslash record
+## keys, which are byte-identical to StoryFlowCharacter.normalize_path's output (to_lower +
+## forward->backslash) - normalize_path applied to a value would be a no-op by construction.
+## That byte-identity is why no normalization pass exists here or at lookup time; never add
+## one (a second normalization regime is exactly the two-regime drift this comment guards).
+##
+## No re-validation either: the editor never ships unmigrated character ids in the index
+## (they simply have no entry, contract §2), so the seed is trusted as-is - the same
+## posture as the data-assets block.
+func _parse_character_index(index_json: Dictionary) -> Dictionary:
+	if index_json.is_empty():
+		# {} is both _load_json_file's parse-failure answer (the error it pushed carries
+		# the details) and what a literal empty object parses to - the two cannot be told
+		# apart here, so the warn names both. An inline payload that is no object lands
+		# here too.
+		push_warning("StoryFlow: character-index.json is unreadable or empty - the character id bridge was skipped; characters keep resolving by path")
+		return {}
+
+	if not index_json.has("schemaVersion") or str(index_json["schemaVersion"]) != "1":
+		# Absent and present-but-empty read differently in the warn - <missing> vs '' -
+		# the same distinction both sibling plugins print (the Unreal spelling). str()
+		# first, so a numeric 1 is accepted as "1" - the Unity reader's tolerance
+		# (Unreal's typed field getter refuses it).
+		var shown: String = str(index_json["schemaVersion"]) if index_json.has("schemaVersion") else "<missing>"
+		push_warning("StoryFlow: character-index.json has an unknown schemaVersion ('%s'; this plugin reads '1') - the character id bridge was skipped; characters keep resolving by path" % shown)
+		return {}
+
+	var chars = index_json.get("characters")
+	if not (chars is Dictionary):
+		push_warning("StoryFlow: character-index.json carries no characters object - the character id bridge was skipped; characters keep resolving by path")
+		return {}
+
+	var result: Dictionary = {}
+	for id in chars:
+		# Trusted-seed posture for malformed VALUES too: a non-String entry is skipped
+		# silently, precedent-exact with Unity's index reader - distinct from the
+		# unmigrated-id trust above, which is about entries the editor never ships.
+		if not (chars[id] is String):
+			continue
+		result[str(id)] = chars[id]
 	return result
 
 
