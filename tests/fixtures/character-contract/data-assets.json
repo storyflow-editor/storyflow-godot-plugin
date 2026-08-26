@@ -1,0 +1,25 @@
+{
+  "_comment": "The V2 data-asset seed — character-free (seed disjointness, contract §3). The character-typed value on the .sfd ships the RAW authored path (forward slashes, beside characters.json's backslashed record keys) by per-site design; no case depends on it. This _comment is injected by the generator; everything else is the exporter's own output.",
+  "dataAssets": {
+    "da_trinket00000000000000000000000": {
+      "id": "da_trinket00000000000000000000000",
+      "name": "trinket",
+      "parent": null,
+      "variables": [
+        {
+          "id": "v-power",
+          "name": "Power",
+          "type": "integer",
+          "value": 3
+        },
+        {
+          "id": "v-keeper",
+          "name": "Keeper",
+          "type": "character",
+          "value": "characters/hero.sfc"
+        }
+      ],
+      "overrides": {}
+    }
+  }
+}

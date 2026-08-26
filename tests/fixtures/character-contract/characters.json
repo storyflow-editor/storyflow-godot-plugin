@@ -1,0 +1,178 @@
+{
+  "characters": {
+    "characters\\villain.sfc": {
+      "name": "char_1_name",
+      "image": "asset_image_1",
+      "variables": {
+        "var_bd9f7c5d": {
+          "id": "var_bd9f7c5d",
+          "name": "Alive",
+          "type": "boolean",
+          "value": false
+        },
+        "var_a2aa6b4b": {
+          "id": "var_a2aa6b4b",
+          "name": "Coins",
+          "type": "integer",
+          "value": 66
+        },
+        "var_8c7fd568": {
+          "id": "var_8c7fd568",
+          "name": "Stride",
+          "type": "float",
+          "value": 3.5
+        },
+        "var_b78a3223": {
+          "id": "var_b78a3223",
+          "name": "Title",
+          "type": "string",
+          "value": "charvar_2_value"
+        },
+        "var_42dff6d9": {
+          "id": "var_42dff6d9",
+          "name": "Traits",
+          "type": "string",
+          "value": [
+            "charvar_3_value",
+            "charvar_4_value"
+          ],
+          "isArray": true
+        },
+        "var_d0889988": {
+          "id": "var_d0889988",
+          "name": "Loadout",
+          "type": "map",
+          "value": [
+            {
+              "key": "weapon",
+              "value": "charvar_5_value"
+            },
+            {
+              "key": "armor",
+              "value": "charvar_6_value"
+            }
+          ],
+          "keyType": "string",
+          "valueType": "string"
+        }
+      }
+    },
+    "characters\\hero.sfc": {
+      "name": "char_7_name",
+      "image": "asset_image_2",
+      "variables": {
+        "var_a2aa6b4b": {
+          "id": "var_a2aa6b4b",
+          "name": "Coins",
+          "type": "integer",
+          "value": 250
+        },
+        "var_5d48f5a3": {
+          "id": "var_5d48f5a3",
+          "name": "Honor",
+          "type": "string",
+          "value": "charvar_8_value"
+        },
+        "var_8c7fd568": {
+          "id": "var_8c7fd568",
+          "name": "Stride",
+          "type": "float",
+          "value": 1.25
+        },
+        "var_bd9f7c5d": {
+          "id": "var_bd9f7c5d",
+          "name": "Alive",
+          "type": "boolean",
+          "value": true
+        },
+        "var_b78a3223": {
+          "id": "var_b78a3223",
+          "name": "Title",
+          "type": "string",
+          "value": "charvar_9_value"
+        },
+        "var_42dff6d9": {
+          "id": "var_42dff6d9",
+          "name": "Traits",
+          "type": "string",
+          "value": [
+            "charvar_10_value",
+            "charvar_11_value"
+          ],
+          "isArray": true
+        },
+        "var_d0889988": {
+          "id": "var_d0889988",
+          "name": "Loadout",
+          "type": "map",
+          "value": [
+            {
+              "key": "weapon",
+              "value": "charvar_12_value"
+            },
+            {
+              "key": "armor",
+              "value": "charvar_13_value"
+            }
+          ],
+          "keyType": "string",
+          "valueType": "string"
+        }
+      }
+    },
+    "characters\\archetype.sfc": {
+      "name": "char_14_name",
+      "variables": {
+        "var_a2aa6b4b": {
+          "id": "var_a2aa6b4b",
+          "name": "Coins",
+          "type": "integer",
+          "value": 10
+        },
+        "var_5d48f5a3": {
+          "id": "var_5d48f5a3",
+          "name": "Honor",
+          "type": "string",
+          "value": "charvar_15_value"
+        },
+        "var_8c7fd568": {
+          "id": "var_8c7fd568",
+          "name": "Stride",
+          "type": "float",
+          "value": 1.25
+        }
+      }
+    }
+  },
+  "strings": {
+    "en": {
+      "char_1_name": "Morgrave",
+      "charvar_2_value": "Usurper of the Vale",
+      "charvar_3_value": "Cruel",
+      "charvar_4_value": "Patient",
+      "charvar_5_value": "Dagger",
+      "charvar_6_value": "Cloak",
+      "char_7_name": "Sir Roland",
+      "charvar_8_value": "Neutral",
+      "charvar_9_value": "Knight of the Vale",
+      "charvar_10_value": "Brave",
+      "charvar_11_value": "Loyal",
+      "charvar_12_value": "Longsword",
+      "charvar_13_value": "Plate",
+      "char_14_name": "Wanderer",
+      "charvar_15_value": "Neutral"
+    }
+  },
+  "assets": {
+    "asset_image_1": {
+      "id": "asset_image_1",
+      "type": "image",
+      "path": "images/villain.png"
+    },
+    "asset_image_2": {
+      "id": "asset_image_2",
+      "type": "image",
+      "path": "images/hero.png"
+    }
+  }
+}

@@ -1,0 +1,118 @@
+{
+  "startNode": "0",
+  "nodes": {
+    "0": {
+      "type": "start",
+      "id": "0"
+    },
+    "1": {
+      "type": "dialogue",
+      "id": "1",
+      "title": "dlg_1_title",
+      "text": "dlg_2",
+      "character": "characters\\hero.sfc",
+      "characterRefId": "da_hero0000000000000000000000000a"
+    },
+    "2": {
+      "type": "getCharacterVar",
+      "id": "2",
+      "characterPath": "characters\\hero.sfc",
+      "variable": "Alive",
+      "variableType": "boolean",
+      "characterId": "da_hero0000000000000000000000000a"
+    },
+    "3": {
+      "type": "getCharacterVar",
+      "id": "3",
+      "characterPath": "characters\\hero.sfc",
+      "variable": "Coins",
+      "variableType": "integer",
+      "characterId": "da_hero0000000000000000000000000a"
+    },
+    "4": {
+      "type": "setCharacterVar",
+      "id": "4",
+      "characterPath": "characters\\hero.sfc",
+      "variable": "Title",
+      "variableType": "string",
+      "value": "setcharvar_3",
+      "characterId": "da_hero0000000000000000000000000a"
+    },
+    "5": {
+      "type": "getCharacterVar",
+      "id": "5",
+      "characterPath": "characters\\villain.sfc",
+      "variable": "Traits",
+      "variableType": "string",
+      "characterId": "da_villain00000000000000000000000"
+    },
+    "6": {
+      "type": "getCharacterVar",
+      "id": "6",
+      "characterPath": "characters\\hero.sfc",
+      "variable": "Loadout",
+      "variableType": "map",
+      "characterId": "da_hero0000000000000000000000000a"
+    },
+    "7": {
+      "type": "getCharacterVar",
+      "id": "7",
+      "characterPath": "characters\\hero.sfc",
+      "variable": "Name",
+      "variableType": "string",
+      "characterId": "da_hero0000000000000000000000000a"
+    },
+    "8": {
+      "type": "dialogue",
+      "id": "8",
+      "title": "dlg_4_title",
+      "text": "dlg_5",
+      "character": "characters\\villain.sfc",
+      "characterRefId": "da_villain00000000000000000000000"
+    },
+    "9": {
+      "type": "end",
+      "id": "9"
+    }
+  },
+  "connections": [
+    {
+      "id": "e0-1",
+      "source": "0",
+      "target": "1"
+    },
+    {
+      "id": "e1-4",
+      "source": "1",
+      "target": "4"
+    },
+    {
+      "id": "e4-8",
+      "source": "4",
+      "target": "8"
+    },
+    {
+      "id": "e8-9",
+      "source": "8",
+      "target": "9"
+    }
+  ],
+  "variables": {
+    "var_a745d95c": {
+      "id": "var_a745d95c",
+      "name": "Lead",
+      "type": "character",
+      "value": "characters/hero.sfc"
+    }
+  },
+  "strings": {
+    "en": {
+      "dlg_1_title": "Greeting",
+      "dlg_2": "Well met.",
+      "setcharvar_3": "Champion",
+      "dlg_4_title": "Retort",
+      "dlg_5": "You again."
+    }
+  },
+  "assets": {}
+}
