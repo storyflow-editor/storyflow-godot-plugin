@@ -533,6 +533,19 @@ func _test_pre_p4_full_run_sweep() -> void:
 	_check("the host-lane counter stayed 0 (got %d)" % _manager.character_id_access_warnings_emitted,
 		_manager.character_id_access_warnings_emitted == 0)
 
+	# GP3 extension: the ById lanes on this same EMPTY bridge. The pure lookup answers its
+	# "" sentinel WITHOUT warning (A3(a) - an existence query is not a degraded resolution)
+	# and enumeration still answers the loaded set - neither lane needs the index to exist.
+	_check("path-by-id on an empty bridge answers '' (got '%s')" % component.get_character_path_by_id(FX.ALICE_ID),
+		component.get_character_path_by_id(FX.ALICE_ID) == "")
+	var paths := component.get_character_paths()
+	_check("enumeration still answers the loaded records (got %s)" % str(paths),
+		paths == [FX.ALICE_KEY, FX.BOB_KEY])
+	_check("and the ById lanes left the node-lane counter at 0 (got %d)" % component._context.character_id_warnings_emitted,
+		component._context.character_id_warnings_emitted == 0)
+	_check("and the host-lane counter at 0 (got %d)" % _manager.character_id_access_warnings_emitted,
+		_manager.character_id_access_warnings_emitted == 0)
+
 	# THE BYTE-IDENTITY PIN: path-bound writes emit the AUTHORED spellings - mixed case,
 	# forward slashes - exactly as the wire shipped them. This is the assertion behind the
 	# resolver's verbatim non-id arm and resolve_character_ref's verbatim fall-back: a

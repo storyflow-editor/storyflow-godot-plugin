@@ -629,23 +629,34 @@ func set_character_variable(character_path: String, variable_name: String, value
 	var mgr := get_manager()
 	if not mgr:
 		return
-	var character: StoryFlowCharacter = mgr.get_runtime_character(character_path)
+	# The landed/refused answer is deliberately DISCARDED: this lane's pre-P4 posture is a
+	# SILENT VOID no-op on a character or variable miss (A3(b) — never a create), pinned
+	# first-class in tests/test_character_by_id_saves.gd. Only the ById setter below reports.
+	_apply_character_variable(mgr.get_runtime_character(character_path), variable_name, value)
+
+
+## The ONE write core behind the void path setter above and the bool ById setter below,
+## reporting whether the write landed — so the new surface can be honest without the pre-P4
+## lane changing shape.
+##
+## SECOND TIER of the A2(a) aliases: this lane has NO builtin arms and a
+## case-sensitive dict, so ONLY the exact reserved cf_ ids divert to the builtin
+## fields — the native spellings stay byte-untouched (a custom variable named "Name"
+## or "Image" still writes exactly as pre-P4, and a name that matches nothing is still
+## the same silent no-op, never a create).
+func _apply_character_variable(character: StoryFlowCharacter, variable_name: String, value: StoryFlowVariant) -> bool:
 	if not character:
-		return
-	# SECOND TIER of the A2(a) aliases: this lane has NO builtin arms and a
-	# case-sensitive dict, so ONLY the exact reserved cf_ ids divert to the builtin
-	# fields — the native spellings stay byte-untouched (a custom variable named "Name"
-	# or "Image" still writes exactly as pre-P4, and a name that matches nothing is still
-	# the same silent no-op, never a create).
+		return false
 	if variable_name == StoryFlowCharacter.CF_NAME_ID:
 		character.character_name = value.get_string("")
-		return
+		return true
 	if variable_name == StoryFlowCharacter.CF_IMAGE_ID:
 		character.image_key = value.get_string("")
-		return
+		return true
 	if not character.variables.has(variable_name):
-		return
+		return false
 	character.variables[variable_name]["value"] = value
+	return true
 
 
 ## Return the live runtime character object for a path.
@@ -692,6 +703,136 @@ func get_character_portrait(character_path: String, asset_key: String = "") -> T
 	if key.is_empty():
 		return null
 	return _resolve_image_asset(key, mgr.get_project(), character)
+
+
+# =============================================================================
+# P4 Character Access by FILE id (characters engine contract §4 + A3/A4/A5)
+# =============================================================================
+#
+# The id-taking doors beside the path APIs above. ON THE COMPONENT ONLY — Godot's mirror
+# weight: this engine's V2 host surface lives on the component with its latch on the manager
+# (the .sfd accessors below), and the manager carries NO per-variable surface of any kind to
+# mirror onto — growing one for characters would be a new manager posture, not a mirror.
+# (Cross-engine, for the record: Unreal is component-only for the same reason; Unity mirrors
+# onto both because its V2 surface already lived on both.)
+#
+# NEW SURFACE, NEW IDIOM — the same divergence note as the .sfd host API below
+# (_warn_data_asset_once: only the new surface changes shape): default params and bool
+# returns rather than the pre-P4 sentinel-and-void shapes, and degraded resolutions warn
+# LATCHED on the manager's character pair (should_warn_character_id_access), because these
+# are host lanes a rebuilt or reparented component must not re-arm.
+#
+# THE VOCABULARY RULING (GP3): a dangling id on these lanes warns in the CHARACTER
+# vocabulary — the resolver's own "dangling" rung, on the manager pair. These are new
+# character surfaces with NO pre-P4 wording to protect. The DA-surface character branch
+# below is the deliberate opposite: its dangling ids fall through to the DA ladder's
+# pre-P4 "noasset" wording, byte-identical, because that surface predates characters.
+#
+# A2(b): none of these emit character_variable_changed — the signal is node-lane only,
+# a contract property.
+
+
+## HOST-LANE resolution of one character FILE id: the loaded record key, or "" with the
+## dangling/unloaded warn already emitted at most once on the MANAGER pair. Each ById door
+## calls this exactly ONCE and then delegates — never a second resolution (the drift the
+## id-and-path-reach-one-record pin exists to catch).
+##
+## A non-id-shaped value passes the resolver's verbatim non-id rung untouched and lands in
+## the path delegate behind each door, so a record key from [method get_character_paths] is
+## valid input to every ById door — the sibling ports' pure-delegate parity.
+func _resolve_character_id_host(character_id: String) -> String:
+	var mgr := get_manager()
+	if not mgr:
+		return ""
+	return StoryFlowCharacter.resolve_character_key(
+		mgr.get_character_id_bridge(), mgr.get_runtime_characters(), character_id, mgr)
+
+
+## The live runtime character a character FILE id resolves to, or null for a not-found of
+## either kind: a DANGLING id (no bridge entry) and an UNLOADED one (a bridge hit whose
+## record is missing from the loaded set) — each warned once on the manager pair, in the
+## character vocabulary (the ruling above). [method get_character_path_by_id] can still
+## answer in the unloaded case, because the bridge itself is import state — the A3(a) split.
+##
+## A5: the record's character_name field is the STORED string-table key;
+## [method get_character_variable_by_id] is this surface's resolving door.
+func get_character_by_id(character_id: String) -> StoryFlowCharacter:
+	var record_key := _resolve_character_id_host(character_id)
+	if record_key.is_empty():
+		return null
+	return get_character(record_key)
+
+
+## The record key (the runtime table's key) a character FILE id is indexed to, or "" for an
+## id this build's character index never carried — "" is unambiguous, since record keys are
+## never empty. A PURE bridge lookup, deliberately NOT routed through resolve_character_key,
+## for the two recorded reasons (A3(a)): an existence query is not a degraded resolution, so
+## it answers for an indexed id whether or not its record is loaded and NEVER warns — the
+## resolver warns every miss; and the resolver's verbatim non-id rung would hand any non-id
+## input straight back as a fake hit.
+##
+## The key comes back VERBATIM (the bridge's byte-identity guarantee: lowercase,
+## backslashes) and is valid input to every path-taking character API above.
+func get_character_path_by_id(character_id: String) -> String:
+	var mgr := get_manager()
+	if not mgr:
+		return ""
+	return str(mgr.get_character_id_bridge().get(character_id, ""))
+
+
+## Record keys of every LOADED character, in the runtime table's insertion order — the A4
+## enumeration surface, and the whole of it: by-id enumeration is deliberately not provided
+## (ids serve stable BINDING; record keys serve enumeration and the path APIs). NO SORT
+## PROMISE, kept weak on purpose for cross-engine uniformity — every engine answers its own
+## map order.
+##
+## Engine-true doc (A5's merge-vs-wholesale inheritance note): the list reflects what the
+## RUNTIME holds, and in this engine that always equals the project's character set —
+## load_from_slot MERGES values onto the records the project declares and never adds or
+## removes one (the four-sections doctrine on the manager), and reset refills from the
+## project. The unloaded rung above is reachable only via ghost index entries, which have
+## no record to enumerate either way.
+func get_character_paths() -> Array[String]:
+	var out: Array[String] = []
+	var mgr := get_manager()
+	if not mgr:
+		return out
+	for record_key in mgr.get_runtime_characters():
+		out.append(str(record_key))
+	return out
+
+
+## Id twin of [method get_character_variable]: resolve the id ONCE through the host lane,
+## then delegate. [param default] answers ONLY the RESOLUTION misses (dangling, unloaded,
+## no manager) — the rungs the delegate never sees; once the id resolves, the variable
+## access is the path API verbatim, including its own pre-P4 miss posture (an undeclared
+## variable answers an EMPTY variant, never the default), so the two surfaces cannot drift.
+##
+## The FIRST-TIER aliases ride the delegate's builtin arms (cf_name/cf_image,
+## case-insensitive), and so does A5's scope: this door RESOLVES the Name key to display
+## text via _resolve_string, like the path getter it extends — the DA-surface branch below
+## is the stored-key door, and saves write the STORED key regardless.
+func get_character_variable_by_id(character_id: String, variable_name: String, default: StoryFlowVariant = null) -> StoryFlowVariant:
+	var record_key := _resolve_character_id_host(character_id)
+	if record_key.is_empty():
+		return default
+	return get_character_variable(record_key, variable_name)
+
+
+## Id twin of [method set_character_variable], reporting whether the write landed — false
+## for a resolution miss (warned once on the manager pair) AND for the A3(b) refusal: a
+## write naming a variable the record does not declare NEVER creates it. The refusal itself
+## stays as silent as the void path lane this extends (the shared _apply_character_variable
+## core) — the bool is the new idiom's reporting channel, not a new warning.
+##
+## The SECOND-TIER aliases ride the shared core: only the exact cf_ spellings divert to the
+## builtins; native spellings keep the case-sensitive dict byte-identical. A2(b): emits
+## nothing.
+func set_character_variable_by_id(character_id: String, variable_name: String, value: StoryFlowVariant) -> bool:
+	var record_key := _resolve_character_id_host(character_id)
+	if record_key.is_empty():
+		return false
+	return _apply_character_variable(get_manager().get_runtime_character(record_key), variable_name, value)
 
 
 # =============================================================================
@@ -934,7 +1075,9 @@ func _write_data_asset_scalar(asset: String, variable_name: String, expected: Ar
 # id|reason key shape ("novariable:<name>", "wrongtype:<name>", "isarray:<name>"); the
 # resolver's own "unloaded" rung joins the same pair. A DANGLING id — seed-missing AND
 # bridge-missing — never reaches this branch at all: it falls through to the DA ladder and
-# gets the pre-P4 noasset treatment, byte-identical.
+# gets the pre-P4 noasset treatment, byte-identical. The ById surface above is the
+# deliberate opposite (the GP3 vocabulary ruling): a NEW character surface with no pre-P4
+# wording to protect, so its dangling rung warns in the CHARACTER vocabulary instead.
 
 
 ## Whether [param asset] routes to the character branch rather than the DA ladder.
