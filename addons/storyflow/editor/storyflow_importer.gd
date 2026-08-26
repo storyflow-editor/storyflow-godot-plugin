@@ -364,9 +364,11 @@ func import_project_from_json(project_json: Dictionary) -> StoryFlowProject:
 	# Character index (inline). Accepts both the character-index.json document shape and a
 	# wrapper nesting, the same way the characters block above and the dataAssets block below
 	# accept either. The two cannot be confused: the document's own keys are
-	# schemaVersion/characters, so an inner "characterIndex" key is always the wrapper. The
-	# parse (degraded ladder, verbatim values) is shared with the disk arm - the two arms
-	# must never diverge (the divergence lesson test_import_hardening.gd exists for).
+	# schemaVersion/characters, so an inner "characterIndex" key is always the wrapper. A
+	# bare id -> key map is deliberately refused: it carries no schemaVersion, and accepting
+	# one would make this the only lane that skips the version rung. The parse (degraded
+	# ladder, verbatim values) is shared with the disk arm - the two arms must never diverge
+	# (the divergence lesson test_import_hardening.gd exists for).
 	if project_json.has("characterIndex"):
 		var index_data = project_json["characterIndex"]
 		if index_data is Dictionary and index_data.has("characterIndex"):
@@ -958,14 +960,18 @@ func _parse_character_variables(raw: Dictionary) -> Dictionary:
 ## posture as the data-assets block.
 func _parse_character_index(index_json: Dictionary) -> Dictionary:
 	if index_json.is_empty():
-		# A present-but-unreadable file ({} is _load_json_file's parse-failure answer, and
-		# the error it pushed carries the details), or an inline payload that is no object.
-		push_warning("StoryFlow: character-index.json is unreadable - the character id bridge was skipped; characters keep resolving by path")
+		# {} is both _load_json_file's parse-failure answer (the error it pushed carries
+		# the details) and what a literal empty object parses to - the two cannot be told
+		# apart here, so the warn names both. An inline payload that is no object lands
+		# here too.
+		push_warning("StoryFlow: character-index.json is unreadable or empty - the character id bridge was skipped; characters keep resolving by path")
 		return {}
 
-	var schema_version := str(index_json.get("schemaVersion", ""))
-	if schema_version != "1":
-		push_warning("StoryFlow: character-index.json has an unknown schemaVersion ('%s'; this plugin reads '1') - the character id bridge was skipped; characters keep resolving by path" % schema_version)
+	if not index_json.has("schemaVersion") or str(index_json["schemaVersion"]) != "1":
+		# Absent and present-but-empty read differently in the warn - <missing> vs '' -
+		# the same distinction both sibling plugins print (the Unreal spelling).
+		var shown: String = str(index_json["schemaVersion"]) if index_json.has("schemaVersion") else "<missing>"
+		push_warning("StoryFlow: character-index.json has an unknown schemaVersion ('%s'; this plugin reads '1') - the character id bridge was skipped; characters keep resolving by path" % shown)
 		return {}
 
 	var chars = index_json.get("characters")
@@ -975,6 +981,9 @@ func _parse_character_index(index_json: Dictionary) -> Dictionary:
 
 	var result: Dictionary = {}
 	for id in chars:
+		# Trusted-seed posture for malformed VALUES too: a non-String entry is skipped
+		# silently, precedent-exact with Unity's index reader - distinct from the
+		# unmigrated-id trust above, which is about entries the editor never ships.
 		if not chars[id] is String:
 			continue
 		result[str(id)] = chars[id]

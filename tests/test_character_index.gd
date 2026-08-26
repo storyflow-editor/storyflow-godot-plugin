@@ -150,11 +150,14 @@ func _test_ladder_rungs() -> void:
 			"text": JSON.stringify({"schemaVersion": "2", "characters": {FX.ALICE_ID: FX.ALICE_KEY}})},
 		{"label": "missing schemaVersion is refused",
 			"text": JSON.stringify({"characters": {FX.ALICE_ID: FX.ALICE_KEY}})},
+		{"label": "empty-string schemaVersion is refused",
+			"text": JSON.stringify({"schemaVersion": "", "characters": {FX.ALICE_ID: FX.ALICE_KEY}})},
 		{"label": "unreadable JSON is refused", "text": "not json {{{"},
+		{"label": "a literal empty object is refused", "text": "{}"},
 		{"label": "no characters object is refused",
 			"text": JSON.stringify({"schemaVersion": "1"})},
 	]
-	_check("ladder fixture drives 6 rungs", rungs.size() == 6)
+	_check("ladder fixture drives 8 rungs", rungs.size() == 8)
 	for i in rungs.size():
 		var rung: Dictionary = rungs[i]
 		var project = _import_decoy_build("ladder_%d" % i, rung["text"])
