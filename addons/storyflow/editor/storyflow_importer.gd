@@ -1074,15 +1074,26 @@ func _apply_localization(project: StoryFlowProject, localization_json: Dictionar
 		push_warning("StoryFlow: localization.json declares no schemaVersion (this plugin reads '1') - the language tables were skipped; strings keep resolving to their source text")
 		return
 
-	# A plain string compare through str(), like the character index's reader - no schema-token
-	# machinery exists in this plugin. Godot's JSON parses every number as a float, so an
-	# UNQUOTED 1 stringifies to "1.0" and lands on this rung rather than being accepted; the
-	# exporter always writes the quoted "1", so that only ever reaches a hand-edited sidecar, and
-	# refusing it degrades to source text with a warning that names the value it saw. A
-	# present-but-empty version prints as '' here, which is what keeps it readable apart from the
-	# missing-field rung above.
-	if str(localization_json["schemaVersion"]) != "1":
-		push_warning("StoryFlow: localization.json declares schemaVersion '%s', which this plugin does not support (it reads '1') - the language tables were skipped; strings keep resolving to their source text" % str(localization_json["schemaVersion"]))
+	# A TYPE-CHECKED compare, never str() on the parsed value - no schema-token machinery exists in
+	# this plugin, but the gate still has to be version-independent.
+	#
+	# WHY THE VALUE IS NEVER STRINGIFIED: Godot's JSON parses every number as a FLOAT, and the way
+	# a whole-valued float PRINTS is version-dependent - Godot 4.3 renders 1.0 as "1" while 4.6
+	# renders it as "1.0". A `str(value) != "1"` gate would therefore ACCEPT an unquoted numeric 1
+	# on one engine build and REFUSE it on another, which is a degraded ladder that answers
+	# differently depending on which Godot a game happens to ship on. Requiring a genuine String
+	# removes the engine from the decision entirely: the schema version is a STRING in the format
+	# (the exporter always writes the quoted "1"), so anything else - float, int, bool, array - is
+	# an unsupported version and lands here. The str() in the MESSAGE is display-only and may well
+	# print version-dependently; nothing branches on it.
+	#
+	# The message is DISTINCT from the missing-field rung above on purpose: a sidecar that declares
+	# no version and one that declares a version this plugin cannot read are two different
+	# authoring situations, and a `.get()` with a default would collapse them into one. A
+	# present-but-empty version prints as '' here, which is what keeps that case readable too.
+	var declared_version = localization_json["schemaVersion"]
+	if not (declared_version is String) or declared_version != "1":
+		push_warning("StoryFlow: localization.json declares schemaVersion '%s', which this plugin does not support (it reads the string '1') - the language tables were skipped; strings keep resolving to their source text" % str(declared_version))
 		return
 
 	var strings = localization_json.get("strings")
@@ -1094,8 +1105,14 @@ func _apply_localization(project: StoryFlowProject, localization_json: Dictionar
 	# present-but-empty sidecar is still a localized project.
 	project.has_localization = true
 
-	var declared_source := str(localization_json.get("sourceLanguage", ""))
-	if not declared_source.is_empty():
+	# EVERY VALUE BELOW IS TYPE-CHECKED RATHER THAN STRINGIFIED, for the reason spelled out at the
+	# version gate above: a parsed number is a float whose printed form is Godot-version-dependent,
+	# so str() on anything read out of this document would make the import answer differently on
+	# different engine builds. Codes, labels and rows are STRINGS in the format; a non-string is
+	# malformed and is ignored rather than coerced. (Table and row KEYS are exempt - JSON object
+	# keys are always strings.)
+	var declared_source = localization_json.get("sourceLanguage", "")
+	if declared_source is String and not declared_source.is_empty():
 		project.source_language = declared_source
 
 	# Registry ORDER is the author's and is preserved: it is the order a picker draws.
@@ -1104,11 +1121,12 @@ func _apply_localization(project: StoryFlowProject, localization_json: Dictionar
 		for entry in declared_languages:
 			if not (entry is Dictionary):
 				continue
-			var code := str(entry.get("code", ""))
-			if code.is_empty():
+			var code = entry.get("code", "")
+			if not (code is String) or code.is_empty():
 				continue
-			var label := str(entry.get("name", ""))
-			project.languages.append({"code": code, "name": code if label.is_empty() else label})
+			var label = entry.get("name", "")
+			var has_label: bool = label is String and not label.is_empty()
+			project.languages.append({"code": code, "name": label if has_label else code})
 
 	for language_code in strings:
 		var table = strings[language_code]

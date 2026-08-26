@@ -85,6 +85,10 @@ func install_from_project(project) -> void:
 	languages.clear()
 	tables.clear()
 	if project != null:
+		# The str() calls below are IDENTITY, not stringification of parsed data: the importer's
+		# reader type-checks every code, label and row and drops anything that is not a String
+		# (see StoryFlowImporter._apply_localization), so nothing version-dependent can arrive
+		# here to be printed.
 		for entry in project.languages:
 			languages.append({"code": str(entry.get("code", "")), "name": str(entry.get("name", ""))})
 		# The per-language tables are SHARED with the project rather than copied: nothing anywhere

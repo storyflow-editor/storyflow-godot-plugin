@@ -633,13 +633,38 @@ func _test_localization_degraded_ladder() -> void:
 	no_strings.erase("strings")
 	_assert_localization_refused("no strings object", no_strings)
 
-	# An UNQUOTED 1 lands on the unsupported rung: Godot's JSON parses every number as a float, so
-	# it reads as "1.0". The exporter always writes the quoted "1", so this only ever reaches a
-	# hand-edited sidecar - and refusing it degrades to source text rather than mis-reading a
+	# AN UNQUOTED 1 IS REFUSED, AND THIS IS A VERSION-INDEPENDENCE PIN, not a formatting one.
+	# Godot's JSON parses every number as a float, and the PRINTED form of a whole-valued float
+	# differs across engine builds (4.3 renders 1.0 as "1", 4.6 as "1.0"). A gate that compared
+	# str(value) would therefore accept this document on one Godot and refuse it on another - the
+	# degraded ladder answering differently depending on which engine a game shipped on. The
+	# reader requires a genuine String instead, so this case must fail identically everywhere.
+	# The exporter always writes the quoted "1", so an unquoted one only ever reaches a
+	# hand-edited sidecar, and refusing it degrades to source text rather than mis-reading a
 	# version.
 	var numeric_version := _localization_payload()
 	numeric_version["schemaVersion"] = 1
 	_assert_localization_refused("an UNQUOTED numeric schemaVersion", numeric_version)
+
+	# The same rule one step further out: a schemaVersion that is not a scalar at all.
+	var array_version := _localization_payload()
+	array_version["schemaVersion"] = ["1"]
+	_assert_localization_refused("a NON-SCALAR schemaVersion", array_version)
+
+	# And the type rule on the fields the reader keeps: a non-string code is dropped from the
+	# registry, a non-string label falls back to its code, and a non-string sourceLanguage leaves
+	# the default in place - none of them coerced through str(), for the version reason above.
+	var typed := _localization_payload()
+	typed["sourceLanguage"] = 7
+	typed["languages"] = [{"code": 1, "name": "Numeric"}, {"code": "fr", "name": 2}]
+	var mistyped := _import_with_localization("loc_mistyped", typed)
+	_check("a non-string sourceLanguage leaves the default in place",
+		mistyped != null and mistyped.source_language == "en")
+	_check("a non-string language code is dropped from the registry",
+		mistyped != null and mistyped.languages.size() == 1
+			and mistyped.languages[0].get("code") == "fr")
+	_check("a non-string label falls back to its own code",
+		mistyped != null and mistyped.languages[0].get("name") == "fr")
 
 	# THE ABSENT-VS-EMPTY CONVERGENCE, and why the marker is a bool: a sidecar carrying NO tables
 	# at all is still a LOCALIZED project. An author who registered nothing yet has not shipped a
