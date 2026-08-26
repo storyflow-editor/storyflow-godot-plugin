@@ -838,7 +838,7 @@ func _read_data_asset_scalar(asset: String, variable_name: String, expected: Arr
 		return null
 	# P4 character branch: a seed-missing character id routes to the character system's
 	# state (seed-first — see the character-branch block below).
-	if not _character_routed_id(asset).is_empty():
+	if _routes_to_character(asset):
 		return _read_character_scalar(asset, variable_name, expected)
 	var asset_id := _resolve_data_asset_id(asset)
 	if asset_id.is_empty():
@@ -862,7 +862,7 @@ func _write_data_asset_scalar(asset: String, variable_name: String, expected: Ar
 	if not mgr:
 		return false
 	# P4 character branch, same seed-first routing as the read above.
-	if not _character_routed_id(asset).is_empty():
+	if _routes_to_character(asset):
 		return _write_character_scalar(asset, variable_name, expected, raw)
 	var asset_id := _resolve_data_asset_id(asset)
 	if asset_id.is_empty():
@@ -937,18 +937,16 @@ func _write_data_asset_scalar(asset: String, variable_name: String, expected: Ar
 # gets the pre-P4 noasset treatment, byte-identical.
 
 
-## The character id [param asset] routes to, or "" when the DA ladder should keep it.
-func _character_routed_id(asset: String) -> String:
+## Whether [param asset] routes to the character branch rather than the DA ladder.
+func _routes_to_character(asset: String) -> bool:
 	var mgr := get_manager()
 	if not mgr:
-		return ""
-	if not asset.begins_with("da_"):
-		return ""
+		return false
+	if not StoryFlowCharacter.is_character_id(asset):
+		return false
 	if mgr.get_data_asset_seed().has(asset):
-		return ""
-	if not mgr.get_character_id_bridge().has(asset):
-		return ""
-	return asset
+		return false
+	return mgr.get_character_id_bridge().has(asset)
 
 
 ## Emit one character-branch refusal warning AT MOST ONCE per (id, reason), on the manager's
@@ -960,9 +958,12 @@ func _warn_character_access_once(id: String, reason: String, message: String) ->
 		push_warning(message)
 
 
-## The character record and variable row behind one branch access, shared by the read and the
-## write so the two degrade on exactly the same rungs. Returns {} with the warning already
-## emitted on any refusal; a builtin token returns {"builtin": "name"/"image"} instead of a row.
+## The character record and variable row behind one branch access, shared by ALL THREE doors
+## (typed read, typed write, variant) so they degrade on exactly the same rungs. Returns {}
+## with the warning already emitted on any refusal; a builtin token returns
+## {"builtin": "name"/"image"} instead of a row. An EMPTY [param expected] means any-type:
+## the variant door skips the type and array rungs (arrays and maps are exactly what it is
+## for) while keeping the resolution and novariable rungs shared.
 func _resolve_character_branch(id: String, variable_name: String, expected: Array) -> Dictionary:
 	var mgr := get_manager()
 	var record_key := StoryFlowCharacter.resolve_character_key(
@@ -975,13 +976,13 @@ func _resolve_character_branch(id: String, variable_name: String, expected: Arra
 	# Name behaves as a string declaration and Image as an image declaration, so the string
 	# door answers both and a mistyped read refuses like any other wrong type.
 	if StoryFlowCharacter.is_name_token(variable_name):
-		if not expected.has(StoryFlowTypes.VariableType.STRING):
+		if not expected.is_empty() and not expected.has(StoryFlowTypes.VariableType.STRING):
 			_warn_character_access_once(id, "wrongtype:%s" % variable_name,
 				"StoryFlow: Character variable '%s.%s' is not of the requested type" % [id, variable_name])
 			return {}
 		return {"character": character, "builtin": "name"}
 	if StoryFlowCharacter.is_image_token(variable_name):
-		if not expected.has(StoryFlowTypes.VariableType.IMAGE):
+		if not expected.is_empty() and not expected.has(StoryFlowTypes.VariableType.IMAGE):
 			_warn_character_access_once(id, "wrongtype:%s" % variable_name,
 				"StoryFlow: Character variable '%s.%s' is not of the requested type" % [id, variable_name])
 			return {}
@@ -992,11 +993,11 @@ func _resolve_character_branch(id: String, variable_name: String, expected: Arra
 			"StoryFlow: Character '%s' declares no variable named '%s'" % [id, variable_name])
 		return {}
 	var row: Dictionary = character.variables[variable_name]
-	if not expected.has(row.get("type", StoryFlowTypes.VariableType.NONE)):
+	if not expected.is_empty() and not expected.has(row.get("type", StoryFlowTypes.VariableType.NONE)):
 		_warn_character_access_once(id, "wrongtype:%s" % variable_name,
 			"StoryFlow: Character variable '%s.%s' is not of the requested type" % [id, variable_name])
 		return {}
-	if bool(row.get("is_array", false)):
+	if not expected.is_empty() and bool(row.get("is_array", false)):
 		_warn_character_access_once(id, "isarray:%s" % variable_name,
 			"StoryFlow: Character variable '%s.%s' is an array - use get_data_asset_variant" % [id, variable_name])
 		return {}
@@ -1056,22 +1057,18 @@ func _write_character_scalar(id: String, variable_name: String, expected: Array,
 
 ## The character branch of the untyped door: the value as a DETACHED copy (matching
 ## get_data_asset_variant's promise — character variables are live runtime state), or null.
+## Resolves through the shared ladder with the any-type convention (empty expected).
 func _character_variant(id: String, variable_name: String) -> StoryFlowVariant:
-	var mgr := get_manager()
-	var record_key := StoryFlowCharacter.resolve_character_key(
-		mgr.get_character_id_bridge(), mgr.get_runtime_characters(), id, mgr)
-	if record_key.is_empty():
+	var resolved := _resolve_character_branch(id, variable_name, [])
+	if resolved.is_empty():
 		return null
-	var character: StoryFlowCharacter = mgr.get_runtime_characters()[record_key]
-	if StoryFlowCharacter.is_name_token(variable_name):
-		return StoryFlowVariant.from_string(character.character_name)
-	if StoryFlowCharacter.is_image_token(variable_name):
-		return StoryFlowVariant.from_string(character.image_key)
-	if not character.variables.has(variable_name):
-		_warn_character_access_once(id, "novariable:%s" % variable_name,
-			"StoryFlow: Character '%s' declares no variable named '%s'" % [id, variable_name])
-		return null
-	var value = character.variables[variable_name].get("value")
+	var character: StoryFlowCharacter = resolved["character"]
+	match resolved.get("builtin", ""):
+		"name":
+			return StoryFlowVariant.from_string(character.character_name)
+		"image":
+			return StoryFlowVariant.from_string(character.image_key)
+	var value = resolved["row"].get("value")
 	if not value is StoryFlowVariant:
 		return null
 	return value.duplicate_variant()
@@ -1144,7 +1141,7 @@ func get_data_asset_variant(asset: String, variable_name: String) -> StoryFlowVa
 		return null
 	# P4 character branch, same seed-first routing as the typed accessors; this is how a
 	# host reads a character's array or map variable by id.
-	if not _character_routed_id(asset).is_empty():
+	if _routes_to_character(asset):
 		return _character_variant(asset, variable_name)
 	var asset_id := _resolve_data_asset_id(asset)
 	if asset_id.is_empty():

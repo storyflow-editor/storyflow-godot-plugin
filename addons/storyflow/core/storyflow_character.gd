@@ -38,7 +38,10 @@ static func normalize_path(path: String) -> String:
 # THE CASE CONTRAST (the Unreal F3 lesson): character FILE ids are CASE-SENSITIVE — the
 # da_ shape test and the bridge lookup below match exactly — while the builtin variable
 # ALIASES are case-insensitive on the lanes whose builtin arms were already
-# case-insensitive pre-P4. Ids identify, aliases address; only the second forgives case.
+# case-insensitive pre-P4. Ids identify, aliases address; only the FIRST-TIER aliases
+# forgive case — the second tier is exact by design. (Cross-engine divergence, recorded
+# for the close-out register: Unity's cf_ rewrite is case-insensitive, Godot's second tier
+# is exact to maximize native-spellings-byte-untouched — deliberate, both defensible.)
 
 ## The reserved builtin variable ids (contract-reserved per V2 §8; the editor's locked
 ## cf_ rows). FIRST TIER of the A2(a) two-tier design: [method is_name_token] /
@@ -64,6 +67,13 @@ static func is_image_token(variable_name: String) -> bool:
 	return lower == "image" or lower == CF_IMAGE_ID
 
 
+## The character FILE id shape test: the exporter's da_-prefixed ids, matched
+## CASE-SENSITIVELY — ids identify, and identity preserves case (the case-contrast note
+## above). The whole of what separates the id lanes from the path lanes, everywhere.
+static func is_character_id(value: String) -> bool:
+	return value.begins_with("da_")
+
+
 ## THE ONE RESOLUTION POINT for a single character reference value, id or path.
 ##
 ## The ladder (characters engine contract §3):
@@ -86,7 +96,7 @@ static func is_image_token(variable_name: String) -> bool:
 ## captured state — GDScript lambdas capture by value, so a closed-over Dictionary would
 ## silently fork the latch.
 static func resolve_character_key(bridge: Dictionary, characters: Dictionary, id_or_path: String, warn_owner: Object) -> String:
-	if not id_or_path.begins_with("da_"):
+	if not is_character_id(id_or_path):
 		return id_or_path
 	if not bridge.has(id_or_path):
 		if _claim_id_warn(warn_owner, id_or_path, "dangling"):
@@ -106,7 +116,7 @@ static func resolve_character_key(bridge: Dictionary, characters: Dictionary, id
 ## VERBATIM, so the pre-P4 path lane behaves byte-identically, warn spellings included.
 ## Only id-shaped inputs ever enter the latched lanes.
 static func resolve_character_ref(bridge: Dictionary, characters: Dictionary, id: String, path: String, warn_owner: Object) -> String:
-	if id.begins_with("da_"):
+	if is_character_id(id):
 		var record_key := resolve_character_key(bridge, characters, id, warn_owner)
 		if not record_key.is_empty():
 			return record_key
