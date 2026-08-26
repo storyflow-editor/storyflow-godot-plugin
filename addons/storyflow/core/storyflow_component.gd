@@ -3592,10 +3592,19 @@ func _handle_set_character_var(node: Dictionary) -> void:
 			elif StoryFlowCharacter.is_image_token(variable_name):
 				character.image_key = new_value.get_string("")
 				mutated = true
-			# Custom variable
+			# Custom variable. Write only when the declared row matches the node's own type
+			# snapshot (HTML's setCharacterVariableValue type-mismatch -> no write, the same
+			# gate the map path above already keeps): a mismatched write is REFUSED - nothing
+			# lands, no signal fires, exec still continues. Contract SS5's
+			# type-mismatch-write-refused pin, tests/test_character_contract.gd.
 			elif character.variables.has(variable_name):
-				character.variables[variable_name]["value"] = new_value
-				mutated = true
+				var char_var: Dictionary = character.variables[variable_name]
+				if char_var.get("type", -1) == StoryFlowTypes.parse_variable_type(variable_type) \
+						and bool(char_var.get("is_array", false)) == is_array:
+					char_var["value"] = new_value
+					mutated = true
+				else:
+					print_verbose("StoryFlow: SetCharacterVar write skipped - variable '%s' on '%s' does not match the node's declared type" % [variable_name, character_path])
 
 	if mutated:
 		character_variable_changed.emit(character_path, variable_name, new_value)
