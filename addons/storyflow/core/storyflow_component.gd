@@ -1770,6 +1770,19 @@ func reset_variables() -> void:
 
 
 ## Get a localized string by key from the current script or global strings.
+##
+## THIS IS THE PUBLIC LOCALIZED DOOR, and it does resolve localized: it delegates to
+## [method _resolve_string], which runs the one shared ladder (StoryFlowLocalization.look_up) -
+## the translation overlay for the language StoryFlowManager.set_language selected, then the
+## keying artifact's own table, then the raw key. Unlike its same-named siblings
+## StoryFlowProject.get_localized_string and StoryFlowScript.get_localized_string, which are RAW
+## exact-key probes that build `language.key` and run no language tier at all, this one is the
+## method to call - a game that resolves a string by hand through those two silently bypasses
+## every translation.
+##
+## Inside an active dialogue the current script's table joins the probe; outside one there is no
+## script and the project globals (which characters.json merges into) are the only source tier.
+## THE LOOKUP RUNS ON THE AUTHORED TEMPLATE (spec §9): interpolate the RESULT, never the input.
 func get_localized_string(key: String) -> String:
 	return _resolve_string(key)
 

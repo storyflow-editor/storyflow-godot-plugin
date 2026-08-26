@@ -1138,6 +1138,71 @@ func _run_localization_api() -> void:
 	_check("api: and the LOAD left the language alone (got '%s')" % _manager.get_language(),
 		_manager.get_language() == "fr")
 
+	_run_localization_in_place_pin()
+
+
+## THE IN-PLACE MUTATION DOCTRINE on the localization state, pinned exactly the way the character
+## id bridge's is (tests/test_character_index.gd): the manager's StoryFlowLocalization is assigned
+## ONCE and MUTATED IN PLACE forever, never rebound.
+##
+## Documented is not enforced, and this is the v1.2.3 stranding lesson's own shape: a running
+## dialogue takes a NON-OWNING reference to this object at dialogue start, so an install or a
+## reset that REASSIGNED it would leave the live context reading the pre-change object - the game
+## split into two languages mid-sentence, silently, with both halves internally consistent.
+##
+## IDENTITY IS ASSERTED WITH is_same, never ==: the point is the OBJECT, not its contents.
+func _run_localization_in_place_pin() -> void:
+	_import_package("locpin", "verbatim", {}, true)
+	var loc_view = _manager.get_localization()
+	var component := _make_component()
+	component.start_dialogue_with_script("script")
+
+	# THE HANDOVER: what the running dialogue holds is the manager's own object, not a copy.
+	_check("pin: the running dialogue holds the MANAGER's localization object",
+		is_same(component._context.localization, loc_view))
+
+	# A mid-dialogue switch reaches that live reference, and the screen with it.
+	_check("pin: the switch is accepted", _manager.set_language("es"))
+	_check("pin: the running context's non-owning reference observes the new language (got '%s')"
+		% component._context.localization.active_language,
+		component._context.localization.active_language == "es")
+	var node: Dictionary = _manager.get_project().get_storyflow_script("script").get_node("1")
+	_check("pin: and the next render reads it (got '%s')" % component._build_dialogue_state(node).title,
+		component._build_dialogue_state(node).title == "Saludo")
+
+	# A REFILL through the pre-install reference: a table erased through the view must come back
+	# through the SAME object when the project is re-installed, and the player's choice with it.
+	loc_view.tables.erase("es")
+	_check("pin: the view really lost the table", not loc_view.tables.has("es"))
+	_manager.set_project(_manager.get_project())
+	_check("pin: set_project refills through the pre-install reference (got %d tables)"
+		% loc_view.tables.size(), loc_view.tables.size() == 2 and loc_view.tables.has("es"))
+	_check("pin: and never rebound the object", is_same(_manager.get_localization(), loc_view))
+	_check("pin: the player's choice rode through the re-install (got '%s')" % loc_view.active_language,
+		loc_view.active_language == "es")
+	_check("pin: the running dialogue is still on the same object", is_same(component._context.localization, loc_view))
+
+	# EMPTYING is in-place too: installing a project with NO sidecar clears the tables through the
+	# same object rather than swapping in a fresh one, and snaps the language to what ships.
+	_import_package("locpin_none", "verbatim", {}, false)
+	_check("pin: a sidecar-less install empties the tables in place", loc_view.tables.is_empty())
+	_check("pin: still the same object after the emptying", is_same(_manager.get_localization(), loc_view))
+	_check("pin: and the language snapped to the source language (got '%s')" % loc_view.active_language,
+		loc_view.active_language == "en")
+
+	# A state reset touches neither the object nor the choice.
+	_manager.set_project(_loc_project)
+	_check("pin: the localized project re-installs through the same object",
+		is_same(_manager.get_localization(), loc_view) and loc_view.tables.size() == 2)
+	_check("pin: a chosen language before the reset", _manager.set_language("fr"))
+	_manager.reset_all_state()
+	_check("pin: reset_all_state leaves the object untouched", is_same(_manager.get_localization(), loc_view))
+	_check("pin: and leaves the tables filled (got %d)" % loc_view.tables.size(), loc_view.tables.size() == 2)
+	_check("pin: and leaves the player's choice alone (got '%s')" % loc_view.active_language,
+		loc_view.active_language == "fr")
+
+	_teardown(component)
+
 
 # =============================================================================
 # Surface helpers
