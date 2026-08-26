@@ -17,6 +17,7 @@ extends SceneTree
 
 const CharacterScript := preload("res://addons/storyflow/core/storyflow_character.gd")
 const ComponentScript := preload("res://addons/storyflow/core/storyflow_component.gd")
+const ContextScript := preload("res://addons/storyflow/core/storyflow_execution_context.gd")
 const FX := preload("res://tests/character_test_fixtures.gd")
 const Graph := preload("res://tests/data_asset_test_graph.gd")
 const Handles := preload("res://addons/storyflow/core/storyflow_handles.gd")
@@ -46,6 +47,7 @@ func _initialize() -> void:
 	_test_dangling_warns_once_and_rearms()
 	_test_unloaded_producer_falls_back_to_path()
 	_test_id_and_path_reach_one_record()
+	_test_claim_warn_owner_dispatch()
 	_test_pre_p4_full_run_sweep()
 
 	_rm_rf(_temp_root)
@@ -237,42 +239,61 @@ func _test_per_arm_writes_id_bound_and_signal() -> void:
 # =============================================================================
 
 ## The wired character input is evaluated FIRST and wins outright: a DANGLING inline id
-## under a healthy wire resolves the wire and warns NOTHING. And a wired value that is
-## itself an id enters the same latched lane and resolves through the bridge.
+## under a healthy wire resolves the wire and warns NOTHING. A wired value that is itself
+## an id enters the same latched lane and resolves through the bridge. And a wired AUTHORED
+## mixed-case path travels the resolver's non-id arm VERBATIM: the write's signal must
+## carry the authored spelling, not a normalized one - the byte-identity property, pinned.
 func _test_wired_override_wins() -> void:
 	print("-- wired override wins --")
 	_import_and_install("wired", FX.index_text_valid())
 
+	var authored_path := "Cast/Alice.sfc"
 	var script := Graph.build("scripts/Wired.sfe", {
 		"0": Graph.start(),
 		"GP": Graph.node("GP", Types.NodeType.GET_STRING, "getString", {"variable": "who_path", "isGlobal": false}),
 		"GID": Graph.node("GID", Types.NodeType.GET_STRING, "getString", {"variable": "who_id", "isGlobal": false}),
-		# Dangling inline id + bob decoy path, but the WIRE names alice by path.
+		"GP2": Graph.node("GP2", Types.NodeType.GET_STRING, "getString", {"variable": "who_path", "isGlobal": false}),
+		# Dangling inline id + bob decoy path, but the WIRE names alice by authored path.
 		"G1": _gcv("G1", {"characterPath": FX.BOB_KEY, "characterId": FX.DANGLING_ID,
 			"variableName": "Trust", "variableType": "integer"}),
 		# No inline fields at all; the WIRE hands over alice's ID.
 		"G2": _gcv("G2", {"characterPath": "", "variableName": "Trust", "variableType": "integer"}),
+		# A wired path-bound WRITE: its signal pins the authored spelling.
+		"W": _scv("W", {"characterPath": "", "variableName": "Trust", "variableType": "integer",
+			"value": VariantScript.from_int(33)}),
 		"S1": Graph.node("S1", Types.NodeType.SET_INT, "setInt", {"variable": "via_path", "isGlobal": false}),
 		"S2": Graph.node("S2", Types.NodeType.SET_INT, "setInt", {"variable": "via_id", "isGlobal": false}),
 		"D": Graph.dialogue("D"),
 	}, [
-		Graph.exec("0", "S1"), Graph.exec_flow("S1", "S2"), Graph.exec_flow("S2", "D"),
+		Graph.exec("0", "S1"), Graph.exec_flow("S1", "S2"), Graph.exec_flow("S2", "W"),
+		Graph.exec_flow("W", "D"),
 		Graph.data_wire("GP", "string", "G1", Handles.IN_CHARACTER_INPUT),
 		Graph.data_wire("GID", "string", "G2", Handles.IN_CHARACTER_INPUT),
+		Graph.data_wire("GP2", "string", "W", Handles.IN_CHARACTER_INPUT),
 		Graph.data_wire("G1", "integer", "S1", Handles.IN_INTEGER),
 		Graph.data_wire("G2", "integer", "S2", Handles.IN_INTEGER),
 	], {
-		"who_path": Graph.scalar_var("who_path", "who_path", Types.VariableType.STRING, VariantScript.from_string(FX.ALICE_KEY)),
+		# The AUTHORED spelling - mixed case, forward slash - never the pre-normalized key,
+		# so the wired lane's verbatim pass through the non-id arm is what resolves it.
+		"who_path": Graph.scalar_var("who_path", "who_path", Types.VariableType.STRING, VariantScript.from_string(authored_path)),
 		"who_id": Graph.scalar_var("who_id", "who_id", Types.VariableType.STRING, VariantScript.from_string(FX.ALICE_ID)),
 		"via_path": Graph.scalar_var("via_path", "via_path", Types.VariableType.INTEGER, VariantScript.from_int(-1)),
 		"via_id": Graph.scalar_var("via_id", "via_id", Types.VariableType.INTEGER, VariantScript.from_int(-1)),
 	})
 
-	var component := _run(script)
-	_check("a wired PATH beats a dangling inline id (alice 3, got %d)" % component.get_int_variable("via_path"),
+	var emissions: Array = []
+	var component := _make_component()
+	component.character_variable_changed.connect(func(path, _vname, _value): emissions.append(path))
+	_manager.get_project().scripts[script.script_path] = script
+	component.start_dialogue_with_script(script.script_path)
+	_check("a wired AUTHORED path beats a dangling inline id (alice 3, got %d)" % component.get_int_variable("via_path"),
 		component.get_int_variable("via_path") == 3)
 	_check("a wired ID resolves through the bridge (alice 3, got %d)" % component.get_int_variable("via_id"),
 		component.get_int_variable("via_id") == 3)
+	_check("the wired write landed on alice (got %d)" % _var_of(_manager.get_runtime_characters()[FX.ALICE_KEY], "Trust").get_int(-1),
+		_var_of(_manager.get_runtime_characters()[FX.ALICE_KEY], "Trust").get_int(-1) == 33)
+	_check("its signal carries the AUTHORED spelling verbatim (got %s)" % str(emissions),
+		emissions == [authored_path])
 	_check("wired-over-dangling never warns (got %d)" % component._context.character_id_warnings_emitted,
 		component._context.character_id_warnings_emitted == 0)
 	_teardown(component)
@@ -407,7 +428,43 @@ func _test_id_and_path_reach_one_record() -> void:
 
 
 # =============================================================================
-# 8. THE PRE-P4 FULL-RUN SWEEP
+# 8. The warn-owner dispatch: right pair per owner, FAIL-OPEN on a bad owner
+# =============================================================================
+
+## _claim_id_warn routes by the OBJECT handed over - the context's node-lane pair or the
+## manager's host-lane pair - and FAILS OPEN like _warn_data_asset_once: an owner carrying
+## no latch pair (or none at all) claims TRUE on every call, so a GP3 lane wired to the
+## wrong object floods visibly instead of losing its warnings silently.
+func _test_claim_warn_owner_dispatch() -> void:
+	print("-- warn-owner dispatch --")
+	# Fail-open: no owner, and an owner with neither latch method, claim EVERY call.
+	_check("a null owner claims (fail-open)", CharacterScript._claim_id_warn(null, FX.DANGLING_ID, "dangling"))
+	_check("and claims again - unlatched", CharacterScript._claim_id_warn(null, FX.DANGLING_ID, "dangling"))
+	var stranger := RefCounted.new()
+	_check("an owner with no latch pair claims (fail-open)",
+		CharacterScript._claim_id_warn(stranger, FX.DANGLING_ID, "dangling"))
+	_check("and claims again - unlatched",
+		CharacterScript._claim_id_warn(stranger, FX.DANGLING_ID, "dangling"))
+
+	# A context owner joins the NODE-lane pair, once per id|reason.
+	var ctx = ContextScript.new()
+	_check("a context owner claims its pair once", CharacterScript._claim_id_warn(ctx, FX.DANGLING_ID, "dangling")
+		and not CharacterScript._claim_id_warn(ctx, FX.DANGLING_ID, "dangling"))
+	_check("on the context's own latch (got %d emitted)" % ctx.character_id_warnings_emitted,
+		ctx.character_id_warnings_emitted == 1 and ctx.warned_character_ids.has("%s|dangling" % FX.DANGLING_ID))
+
+	# A manager owner joins the HOST-lane pair, independently.
+	var mgr := ManagerScript.new()
+	_check("a manager owner claims its pair once", CharacterScript._claim_id_warn(mgr, FX.DANGLING_ID, "dangling")
+		and not CharacterScript._claim_id_warn(mgr, FX.DANGLING_ID, "dangling"))
+	_check("on the manager's own latch (got %d emitted)" % mgr.character_id_access_warnings_emitted,
+		mgr.character_id_access_warnings_emitted == 1
+			and mgr.warned_character_id_access.has("%s|dangling" % FX.DANGLING_ID))
+	mgr.free()
+
+
+# =============================================================================
+# 9. THE PRE-P4 FULL-RUN SWEEP
 # =============================================================================
 
 ## A complete scripted run over a NO-INDEX build - speaker, advance, inline write, wired
@@ -444,7 +501,10 @@ func _test_pre_p4_full_run_sweep() -> void:
 	])
 	_check("a no-index build leaves the bridge empty", _manager.get_character_id_bridge().is_empty())
 
-	var component := _start("Main")
+	var emissions: Array = []
+	var component := _make_component()
+	component.character_variable_changed.connect(func(path, _vname, _value): emissions.append(path))
+	component.start_dialogue_with_script("Main")
 	var state = component._context.current_dialogue_state
 	_check("the speaker resolves by authored path spelling", state != null and state.character != null
 		and state.character.name == "char.alice.name")
@@ -472,6 +532,13 @@ func _test_pre_p4_full_run_sweep() -> void:
 		component._context.character_id_warnings_emitted == 0)
 	_check("the host-lane counter stayed 0 (got %d)" % _manager.character_id_access_warnings_emitted,
 		_manager.character_id_access_warnings_emitted == 0)
+
+	# THE BYTE-IDENTITY PIN: path-bound writes emit the AUTHORED spellings - mixed case,
+	# forward slashes - exactly as the wire shipped them. This is the assertion behind the
+	# resolver's verbatim non-id arm and resolve_character_ref's verbatim fall-back: a
+	# normalize_path slipped into either one lands here as a lowercased backslashed path.
+	_check("the signals carry the AUTHORED path spellings verbatim (got %s)" % str(emissions),
+		emissions == ["Cast/Alice.sfc", "Cast/Bob.sfc", "cast/alice.sfc"])
 	_teardown(component)
 
 

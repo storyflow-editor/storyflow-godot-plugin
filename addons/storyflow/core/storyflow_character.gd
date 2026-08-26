@@ -117,14 +117,18 @@ static func resolve_character_ref(bridge: Dictionary, characters: Dictionary, id
 ## to whichever latch pair the owner carries: the context's node-lane pair or the
 ## manager's host-lane pair. A node-lane warn never consumes the host-lane latch (and vice
 ## versa) — the two owners hold independent state on purpose.
+##
+## FAIL-OPEN, like _warn_data_asset_once's no-manager arm: an owner carrying no latch pair
+## (or no owner at all) claims TRUE on every call, so the caller still warns — unlatched.
+## A lane wired to the wrong object floods rather than losing its warnings invisibly, and
+## a flood is diagnosable where silence is not.
 static func _claim_id_warn(warn_owner: Object, id: String, reason: String) -> bool:
-	if warn_owner == null:
-		return false
-	if warn_owner.has_method("should_warn_character_id"):
-		return warn_owner.should_warn_character_id(id, reason)
-	if warn_owner.has_method("should_warn_character_id_access"):
-		return warn_owner.should_warn_character_id_access(id, reason)
-	return false
+	if warn_owner != null:
+		if warn_owner.has_method("should_warn_character_id"):
+			return warn_owner.should_warn_character_id(id, reason)
+		if warn_owner.has_method("should_warn_character_id_access"):
+			return warn_owner.should_warn_character_id_access(id, reason)
+	return true
 
 
 func duplicate_character() -> StoryFlowCharacter:
