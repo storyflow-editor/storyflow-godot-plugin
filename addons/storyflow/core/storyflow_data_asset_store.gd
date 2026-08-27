@@ -116,6 +116,29 @@ enum Origin {
 }
 
 
+## THE RESOLUTION BUNDLE'S KEYS, and the ONLY sanctioned way to address it - here, at any door,
+## and at the fifth door that does not exist yet.
+##
+## GDScript has no typed record, so [method _walk_for_value]'s answer travels as a Dictionary, and
+## a misspelled Dictionary key FAILS SILENTLY IN THE ONE DIRECTION THAT MATTERS: `found["orgin"]`
+## evaluates to null, `null == Origin.DECLARATION` is false, and the gate quietly declines to
+## localize - the invisible failure class this whole feature exists to prevent, arriving through
+## its own front door. An undefined IDENTIFIER fails the PARSER, so addressing the bundle through
+## these constants turns that typo into "the plugin does not load" instead of "nobody notices for
+## months".
+const KEY_HAS_NEAREST := "has_nearest"
+const KEY_NEAREST := "nearest"
+const KEY_FOUND := "found"
+const KEY_DECLARATION := "declaration"
+const KEY_ORIGIN := "origin"
+
+## The BOUND wrapper's key holding a whole resolution ([method _bind]'s answer). It spells the
+## same word as [constant KEY_FOUND] and means something different - that one is the bundle's own
+## "did any level declare this id" FLAG - so the two are named apart even though a literal could
+## not tell them apart.
+const KEY_BOUND_RESOLUTION := "found"
+
+
 # =============================================================================
 # Seed construction
 # =============================================================================
@@ -501,7 +524,7 @@ static func is_declared_on_chain(seed: Dictionary, asset_id: String, variable_id
 ## and a golden fixture pins the store's own answer, not the current language's.
 static func try_resolve(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String) -> StoryFlowVariant:
 	var found := _walk_for_value(seed, overlay, asset_id, variable_id)
-	if not found["found"]:
+	if not found[KEY_FOUND]:
 		return null
 	return _copy_out(found)
 
@@ -546,7 +569,7 @@ static func try_resolve(seed: Dictionary, overlay: Dictionary, asset_id: String,
 ## (StoryFlowManager.set_language's "what moves, and when").
 static func try_read(seed: Dictionary, overlay: Dictionary, locale: Dictionary, asset_id: String, variable_id: String) -> StoryFlowVariant:
 	var found := _walk_for_value(seed, overlay, asset_id, variable_id)
-	if not found["found"]:
+	if not found[KEY_FOUND]:
 		return null
 	return _read_out(found, locale)
 
@@ -583,7 +606,7 @@ static func read_bound(seed: Dictionary, overlay: Dictionary, locale: Dictionary
 	var bound := _bind(seed, overlay, asset_id, variable_id, wire_type, is_array, key_type, value_type)
 	if bound["status"] != Binding.OK:
 		return {"status": bound["status"], "value": null}
-	return {"status": Binding.OK, "value": _read_out(bound["found"], locale)}
+	return {"status": Binding.OK, "value": _read_out(bound[KEY_BOUND_RESOLUTION], locale)}
 
 
 ## [method read_bound] taking the accessor's four spawn-snapshot pins as ONE Dictionary
@@ -614,17 +637,18 @@ static func check_bound(seed: Dictionary, overlay: Dictionary, asset_id: String,
 
 
 ## THE rung decision behind [method read_bound] and [method check_bound]: one chain walk, then
-## the section 6.1 snapshot match. Answers { "status": Binding, "found": the walk accumulator }.
+## the section 6.1 snapshot match. Answers { "status": Binding, [constant KEY_BOUND_RESOLUTION]:
+## the whole resolution }.
 static func _bind(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String, wire_type: String, is_array: bool, key_type: String, value_type: String) -> Dictionary:
 	var found := _walk_for_value(seed, overlay, asset_id, variable_id)
-	if not found["found"]:
-		return {"status": Binding.MISSING, "found": found}
+	if not found[KEY_FOUND]:
+		return {"status": Binding.MISSING, KEY_BOUND_RESOLUTION: found}
 	# Section 6.1: the declaration moved under a live node. Treated as MISSING by every caller,
 	# never coerced — within the string family a value carries no evidence of its declared
 	# type, which is exactly why the check is on the DECLARATION.
-	if not decl_matches(found["declaration"], wire_type, is_array, key_type, value_type):
-		return {"status": Binding.CHANGED, "found": found}
-	return {"status": Binding.OK, "found": found}
+	if not decl_matches(found[KEY_DECLARATION], wire_type, is_array, key_type, value_type):
+		return {"status": Binding.CHANGED, KEY_BOUND_RESOLUTION: found}
+	return {"status": Binding.OK, KEY_BOUND_RESOLUTION: found}
 
 
 ## The value a completed walk hands OUT: the nearest overlay-or-override hit, else the
@@ -635,10 +659,10 @@ static func _bind(seed: Dictionary, overlay: Dictionary, asset_id: String, varia
 ## — but the seed is a plain Dictionary any caller can assemble, and this walk should not
 ## depend on a repair that happens somewhere else.
 static func _copy_out(found: Dictionary) -> StoryFlowVariant:
-	if found["has_nearest"]:
-		var nearest: StoryFlowVariant = found["nearest"]
+	if found[KEY_HAS_NEAREST]:
+		var nearest: StoryFlowVariant = found[KEY_NEAREST]
 		return nearest.duplicate_variant()
-	var declaration: Dictionary = found["declaration"]
+	var declaration: Dictionary = found[KEY_DECLARATION]
 	var declared_value = declaration.get("value", null)
 	if declared_value is StoryFlowVariant:
 		return declared_value.duplicate_variant()
@@ -660,8 +684,8 @@ static func _copy_out(found: Dictionary) -> StoryFlowVariant:
 ## to look anything up in" - a hand-built store in a test - and passes everything through.
 static func _read_out(found: Dictionary, locale: Dictionary) -> StoryFlowVariant:
 	var value := _copy_out(found)
-	if found["origin"] == Origin.DECLARATION and not locale.is_empty():
-		_localize_declared(found["declaration"], locale, value)
+	if found[KEY_ORIGIN] == Origin.DECLARATION and not locale.is_empty():
+		_localize_declared(found[KEY_DECLARATION], locale, value)
 	return value
 
 
@@ -753,34 +777,40 @@ static func _localize_string(locale: Dictionary, value) -> void:
 ## ([method _copy_out] and [method _read_out] both do), rather than as values a later door could
 ## re-assemble from a different walk: an [enum Origin] paired with somebody else's declaration is
 ## exactly the mis-gate the enum exists to prevent, and GDScript has no type that would catch it.
-##  - "has_nearest" / "nearest": the FIRST overlay-or-override hit leaf -> root.
-##  - "found" / "declaration": whether any level declared the id, and the ROOT-MOST declaration.
-##  - "origin": WHICH tier "nearest" came from, recorded at the branch that already knows.
-##    DECLARATION when there is no nearest hit at all, which is the one tier the localization
-##    gate treats as content.
+##  - [constant KEY_HAS_NEAREST] / [constant KEY_NEAREST]: the FIRST overlay-or-override hit,
+##    leaf -> root.
+##  - [constant KEY_FOUND] / [constant KEY_DECLARATION]: whether any level declared the id, and
+##    the ROOT-MOST declaration.
+##  - [constant KEY_ORIGIN]: WHICH tier the nearest hit came from, recorded at the branch that
+##    already knows. DECLARATION when there is no nearest hit at all, which is the one tier the
+##    localization gate treats as content.
+##
+## ADDRESS IT THROUGH THOSE CONSTANTS AND NEVER THROUGH A STRING LITERAL - at every door here and
+## at the fifth door that does not exist yet, which is where the typo lands. The constants' own
+## doc says what a misspelled literal costs, and it is not a crash.
 static func _walk_for_value(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String) -> Dictionary:
-	var acc := {"has_nearest": false, "nearest": null, "found": false, "declaration": {}, "origin": Origin.DECLARATION}
+	var acc := {KEY_HAS_NEAREST: false, KEY_NEAREST: null, KEY_FOUND: false, KEY_DECLARATION: {}, KEY_ORIGIN: Origin.DECLARATION}
 	if variable_id.is_empty():
 		return acc
 
 	var visit := func(level: Dictionary) -> bool:
-		if not acc["has_nearest"]:
+		if not acc[KEY_HAS_NEAREST]:
 			var level_id: String = str(level.get("id", ""))
 			var level_overlay = overlay.get(level_id, null)
 			if level_overlay is Dictionary and level_overlay.has(variable_id):
-				acc["nearest"] = level_overlay[variable_id]
-				acc["has_nearest"] = true
-				acc["origin"] = Origin.SESSION_WRITE
+				acc[KEY_NEAREST] = level_overlay[variable_id]
+				acc[KEY_HAS_NEAREST] = true
+				acc[KEY_ORIGIN] = Origin.SESSION_WRITE
 			else:
 				var overrides = level.get("overrides", {})
 				if overrides is Dictionary and overrides.has(variable_id):
-					acc["nearest"] = overrides[variable_id]
-					acc["has_nearest"] = true
-					acc["origin"] = Origin.OVERRIDE
+					acc[KEY_NEAREST] = overrides[variable_id]
+					acc[KEY_HAS_NEAREST] = true
+					acc[KEY_ORIGIN] = Origin.OVERRIDE
 		var declaration := _find_declared_on_level(level, variable_id)
 		if not declaration.is_empty():
-			acc["declaration"] = declaration
-			acc["found"] = true
+			acc[KEY_DECLARATION] = declaration
+			acc[KEY_FOUND] = true
 		return true
 	_walk_chain(seed, asset_id, visit)
 	return acc
