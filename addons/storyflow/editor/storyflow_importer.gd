@@ -206,8 +206,26 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 	# overrides and collapsed duplicate map keys, so nothing here re-validates or
 	# re-sanitizes — a plugin that "fixes" the seed diverges from the other three runtimes
 	# (engine contract 2.1).
+	#
+	# IT IS A KEYING ARTIFACT NOW. Localization spec §2's amendment of 2026-08-27 SUPERSEDES
+	# engine-contract 2.1's literal-value posture: a Data Asset's DECLARED string values are
+	# player-facing prose and ship as stable table keys in data-assets.json's own "strings"
+	# block. What is stored in the seed is still the verbatim bytes the exporter wrote — the
+	# lookup happens at the READ DOOR, and only for values whose PROVENANCE says they are
+	# content (StoryFlowDataAssetStore.try_read).
 	var data_assets_json: Dictionary = _load_json_file(build_dir.path_join("data-assets.json"))
 	if not data_assets_json.is_empty():
+		# data-assets.json's OWN strings table, merged into the project's global table exactly
+		# as characters.json's is above — same helper, same `<code>.<key>` shape, same collision
+		# warning. It is the SOURCE TIER the .sfd read door falls through to when the language
+		# being read carries no row for an id. ABSENT for a pre-amendment export, and then every
+		# .sfd value is its own text again, with no branch for it.
+		if data_assets_json.has("strings"):
+			var data_asset_strings := _flatten_strings(data_assets_json["strings"])
+			for key in data_asset_strings:
+				if project.global_strings.has(key):
+					push_warning("StoryFlow: Data Asset string key '%s' overwrites existing global string" % key)
+				project.global_strings[key] = data_asset_strings[key]
 		project.data_assets = _parse_data_assets(data_assets_json.get("dataAssets", {}))
 
 	# ------------------------------------------------------------------
@@ -413,6 +431,15 @@ func import_project_from_json(project_json: Dictionary) -> StoryFlowProject:
 	if project_json.has("dataAssets"):
 		var data_assets_data = project_json["dataAssets"]
 		if data_assets_data is Dictionary and data_assets_data.has("dataAssets"):
+			# The WRAPPER shape carries the strings table too, and this arm must merge it for
+			# the same reason the disk arm does (localization spec §2's amendment): a .sfd
+			# declared string is a key into it. Reached only through the wrapper, because a
+			# flat asset table has no table to merge - the same asymmetry the characters block
+			# above lives with.
+			if data_assets_data.has("strings"):
+				var inline_data_asset_strings := _flatten_strings(data_assets_data["strings"])
+				for key in inline_data_asset_strings:
+					project.global_strings[key] = inline_data_asset_strings[key]
 			data_assets_data = data_assets_data["dataAssets"]
 		project.data_assets = _parse_data_assets(data_assets_data)
 
