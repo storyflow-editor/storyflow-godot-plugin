@@ -31,7 +31,14 @@
       "da_hero0000000000000000000000000a.v-hero-traits.value.1": "Loyal",
       "da_hero0000000000000000000000000a.v-hero-loadout.value.weapon": "Longsword",
       "da_hero0000000000000000000000000a.v-hero-loadout.value.armor": "Plate",
-      "da_archetype000000000000000000000.cf_name": "Wanderer"
+      "da_archetype000000000000000000000.cf_name": "Wanderer",
+      "v-relic-oath.value": "Sworn at the ford.",
+      "v-item-name.value": "Epee de fer",
+      "v-item-desc.value": "Une lame simple, faite avec soin.",
+      "v-item-tags.value.0": "Arme",
+      "v-item-tags.value.1": "Common",
+      "v-item-slots.value.hand": "Main directrice",
+      "v-item-slots.value.back": "Sheathed at the Back"
     },
     "es": {
       "1.title": "Saludo",
@@ -52,7 +59,14 @@
       "da_hero0000000000000000000000000a.v-hero-traits.value.1": "Loyal",
       "da_hero0000000000000000000000000a.v-hero-loadout.value.weapon": "Longsword",
       "da_hero0000000000000000000000000a.v-hero-loadout.value.armor": "Plate",
-      "da_archetype000000000000000000000.cf_name": "Wanderer"
+      "da_archetype000000000000000000000.cf_name": "Wanderer",
+      "v-relic-oath.value": "Sworn at the ford.",
+      "v-item-name.value": "Iron Sword",
+      "v-item-desc.value": "Una hoja sencilla, bien forjada.",
+      "v-item-tags.value.0": "Weapon",
+      "v-item-tags.value.1": "Common",
+      "v-item-slots.value.hand": "Main Hand",
+      "v-item-slots.value.back": "En la vaina"
     }
   }
 }

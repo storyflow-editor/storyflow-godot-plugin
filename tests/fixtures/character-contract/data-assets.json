@@ -1,5 +1,5 @@
 {
-  "_comment": "The V2 data-asset seed — character-free (seed disjointness, contract §3). The character-typed value on the .sfd ships the RAW authored path (forward slashes, beside characters.json's backslashed record keys) by per-site design; no case depends on it. This _comment is injected by the generator; everything else is the exporter's own output.",
+  "_comment": "The V2 data-asset seed — character-free (seed disjointness, contract §3). The character-typed value on the .sfd ships the RAW authored path (forward slashes, beside characters.json's backslashed record keys) by per-site design; no case depends on it. Since spec §2's amendment this is ALSO a keying artifact, and the item-base / item-relic pair shows the whole .sfd rule in one place: the base's declared string values are `strings.en` KEYS, item-relic's `overrides` entry for the same variable is a LITERAL, and the enum declaration beside them is literal too. See manifest.localization.dataAssets. This _comment is injected by the generator; everything else is the exporter's own output.",
   "dataAssets": {
     "da_trinket00000000000000000000000": {
       "id": "da_trinket00000000000000000000000",
@@ -20,6 +20,96 @@
         }
       ],
       "overrides": {}
+    },
+    "da_itemrelic000000000000000000000": {
+      "id": "da_itemrelic000000000000000000000",
+      "name": "item-relic",
+      "parent": "da_itembase0000000000000000000000",
+      "variables": [
+        {
+          "id": "v-relic-oath",
+          "name": "Oath",
+          "type": "string",
+          "value": "v-relic-oath.value"
+        }
+      ],
+      "overrides": {
+        "v-item-desc": "A blade that hums with old grief."
+      }
+    },
+    "da_itembase0000000000000000000000": {
+      "id": "da_itembase0000000000000000000000",
+      "name": "item-base",
+      "parent": null,
+      "variables": [
+        {
+          "id": "v-item-name",
+          "name": "Item Name",
+          "type": "string",
+          "value": "v-item-name.value"
+        },
+        {
+          "id": "v-item-desc",
+          "name": "Description",
+          "type": "string",
+          "value": "v-item-desc.value"
+        },
+        {
+          "id": "v-item-tags",
+          "name": "Tags",
+          "type": "string",
+          "isArray": true,
+          "value": [
+            "v-item-tags.value.0",
+            "v-item-tags.value.1"
+          ]
+        },
+        {
+          "id": "v-item-slots",
+          "name": "Slots",
+          "type": "map",
+          "keyType": "string",
+          "valueType": "string",
+          "value": [
+            {
+              "key": "hand",
+              "value": "v-item-slots.value.hand"
+            },
+            {
+              "key": "back",
+              "value": "v-item-slots.value.back"
+            }
+          ]
+        },
+        {
+          "id": "v-item-rarity",
+          "name": "Rarity",
+          "type": "enum",
+          "enumValues": [
+            "Common",
+            "Rare"
+          ],
+          "value": "Common"
+        },
+        {
+          "id": "v-item-weight",
+          "name": "Weight",
+          "type": "float",
+          "value": 2.5
+        }
+      ],
+      "overrides": {}
+    }
+  },
+  "strings": {
+    "en": {
+      "v-relic-oath.value": "Sworn at the ford.",
+      "v-item-name.value": "Iron Sword",
+      "v-item-desc.value": "A plain blade, honestly made.",
+      "v-item-tags.value.0": "Weapon",
+      "v-item-tags.value.1": "Common",
+      "v-item-slots.value.hand": "Main Hand",
+      "v-item-slots.value.back": "Sheathed at the Back"
     }
   }
 }
