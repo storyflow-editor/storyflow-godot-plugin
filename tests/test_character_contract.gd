@@ -24,6 +24,7 @@ extends SceneTree
 const CharacterScript := preload("res://addons/storyflow/core/storyflow_character.gd")
 const ComponentScript := preload("res://addons/storyflow/core/storyflow_component.gd")
 const ContextScript := preload("res://addons/storyflow/core/storyflow_execution_context.gd")
+const Doors := preload("res://tests/data_asset_read_doors.gd")
 const EvaluatorScript := preload("res://addons/storyflow/core/storyflow_evaluator.gd")
 const Graph := preload("res://tests/data_asset_test_graph.gd")
 const Handles := preload("res://addons/storyflow/core/storyflow_handles.gd")
@@ -69,6 +70,12 @@ var _loc_project = null
 var _loc_outside: StoryFlowComponent = null
 var _pkg_localization: Dictionary = {}
 
+## The `.sfd` lane (spec SS2's amendment): the vendored seed as DATA, the two-door driver, and the
+## component whose parked dialogue keeps the node lane's accessors live.
+var _pkg_data_assets: Dictionary = {}
+var _loc_doors = null
+var _loc_probe: StoryFlowComponent = null
+
 
 func _initialize() -> void:
 	await process_frame
@@ -103,7 +110,7 @@ func _initialize() -> void:
 		elif file_name == "character-writes.json":
 			_prepare_writes_runtime(cases)
 		elif file_name == "localization-resolution.json":
-			_prepare_localization_runtime()
+			_prepare_localization_runtime(cases)
 
 		var visited := 0
 		for idx in cases.size():
@@ -135,6 +142,8 @@ func _initialize() -> void:
 					_run_degraded_case(case, idx)
 				"localized":
 					_run_localized_case(case)
+				"unkeyed":
+					_run_unkeyed_case(case)
 				"language-table":
 					_run_language_table_case(case)
 				"source-only":
@@ -163,6 +172,9 @@ func _initialize() -> void:
 	if _loc_outside != null:
 		_teardown(_loc_outside)
 		_loc_outside = null
+	if _loc_probe != null:
+		_teardown(_loc_probe)
+		_loc_probe = null
 
 	# The §9 language API, beyond the manifest's cases: the live wiring a game actually calls, run
 	# after the case replay so it cannot disturb it.
@@ -872,7 +884,7 @@ func _run_wired_node_write(label: String, ref: Dictionary, variable: Dictionary,
 ## ONE import of the package build WITH its localization.json, plus the sidecar's own tables as
 ## DATA (the tripwire asserts the resolve equals the OLD translation the sidecar carries) and the
 ## outside-dialogue component every characters.json-keyed case cross-checks through.
-func _prepare_localization_runtime() -> void:
+func _prepare_localization_runtime(cases: Array) -> void:
 	_import_package("localization", "verbatim", {}, true)
 	_loc_project = _manager.get_project()
 	_pkg_localization = _load_fixture(FIXTURE_DIR.path_join("localization.json"))
@@ -883,6 +895,26 @@ func _prepare_localization_runtime() -> void:
 	_check("[setup] localization: a fresh import starts in the project's source language (got '%s')"
 		% _manager.get_language(), _manager.get_language() == "en")
 	_loc_outside = _make_component()
+
+	# THE `.sfd` DOORS, prepared from the cases themselves: one probe accessor per (asset,
+	# variable) an `unkeyed` case names, so the node lane can be asked the same question the host
+	# accessors are. The manifest is explicit that a harness which byte-copies a value out of
+	# data-assets.json proves nothing about the door where the mistake is made.
+	_pkg_data_assets = _load_fixture(FIXTURE_DIR.path_join("data-assets.json"))
+	_loc_doors = Doors.new()
+	_loc_doors.doc = _pkg_data_assets
+	var targets: Array = []
+	for case in cases:
+		if str(case.get("kind", "")) == "unkeyed":
+			targets.append({"assetId": str(case.get("dataAssetId", "")), "variableId": str(case.get("variableId", ""))})
+	if targets.is_empty():
+		return
+	var probe = _loc_doors.probe_script("probe/Unkeyed.sfe", targets)
+	_loc_project.scripts[probe.script_path] = probe
+	_loc_probe = _make_component()
+	_loc_probe.start_dialogue_with_script(probe.script_path)
+	_check("[setup] localization: the .sfd probe graph is running", _loc_probe._evaluator != null)
+	_loc_doors.component = _loc_probe
 
 
 ## THE NODE-LANE DOOR: the evaluator's _resolve_string_key, which is where every string-typed
@@ -975,6 +1007,73 @@ func _run_localized_expect_fail(case: Dictionary, name: String, language: String
 		% [name, sidecar_row, resolved], resolved == sidecar_row)
 	_check("%s: and not by falling through to the raw id" % name, resolved != string_id)
 	_expect_fail_inverted += 1
+
+
+## THE `unkeyed` KIND (spec §2's amendment of 2026-08-27): a `.sfd` value that ships LITERAL,
+## driven through THIS ENGINE'S OWN data-asset accessors once per language.
+##
+## The manifest is explicit that a harness which only byte-copies the value out of data-assets.json
+## proves nothing, and it is right: every `.sfd` rule is about THE ID A READ DOOR REACHES A TABLE
+## WITH, and a byte comparison never gets near that door. So this reads the bytes (a drifted
+## literal is a stale case, not a passing one), then asks the REAL doors — both of them, required
+## to agree — then checks the absence, then, where the case carries a `collidesWith`, resolves the
+## id a WRONG implementation would have built and confirms the doors did not answer with it.
+##
+## THAT LAST STEP IS WHAT MAKES THE OVERRIDE CASE TEETH RATHER THAN DECORATION in principle. In
+## THIS engine it still cannot fail, and the reason is written out in full at
+## tests/test_data_asset_localization.gd's _test_key_shaped_override: this plugin never BUILDS an
+## id, it resolves the bytes the exporter wrote, and the package's override stores ordinary prose,
+## which keys nothing. The engine-owned test carries the bytes that do bite.
+func _run_unkeyed_case(case: Dictionary) -> void:
+	var name := str(case.get("case", "?"))
+	var asset_id := str(case.get("dataAssetId", ""))
+	var variable_id := str(case.get("variableId", ""))
+	var literal := str(case.get("literal", ""))
+	var expected: Dictionary = case.get("expected", {})
+
+	# 1. THE BYTES, where `from` says an engine reads them.
+	var stored: String = _loc_doors.stored_bytes(asset_id, variable_id, str(case.get("from", "")))
+	_check("%s: the artifact still carries this literal ('%s', got '%s')" % [name, literal, stored],
+		stored == literal)
+
+	# 2. THE DOORS, once per language the case names. The language is the manager's and a `.sfd`
+	#    value resolves at READ time, which is exactly what makes driving the doors per language
+	#    mean something.
+	for language in expected:
+		var text := str(expected[language])
+		_check("%s: the case expects the literal in %s" % [name, language], text == literal)
+		_check("%s: the language %s is settable" % [name, language], _manager.set_language(str(language)))
+
+		var result: Dictionary = _loc_doors.read(asset_id, variable_id)
+		_check("%s: %s.%s answers on both .sfd doors, which agree" % [name, asset_id, variable_id],
+			result["host"] != null and result["node"] != null and result["agree"])
+		_check("%s: the accessor answers the literal in %s (got '%s')" % [name, language, result["text"]],
+			result["text"] == text)
+
+		# 4. THE TEETH. The id a walker of overrides would have built resolves to somebody ELSE's
+		#    prose in this language, and the door did not hand that back.
+		if case.has("collidesWith"):
+			var collides: Dictionary = case["collidesWith"]
+			var colliding_id := str(collides.get("stringId", ""))
+			var colliding_text := str(collides.get("resolved", {}).get(language, ""))
+			_check("%s: %s resolves the colliding id '%s' to '%s'" % [name, language, colliding_id, colliding_text],
+				_localized_resolve(colliding_id) == colliding_text)
+			_check("%s: the collision is real in %s, so the case has teeth" % [name, language],
+				colliding_text != literal)
+			_check("%s: the accessor did NOT serve the colliding text in %s" % [name, language],
+				result["text"] != colliding_text)
+
+	# 3. THE ABSENCE, which IS the contract: no table anywhere keys an id an implementation might
+	#    have minted for this value. The raw-fallback tier answers an unkeyed id with ITSELF, so
+	#    "resolves to itself" is how a total lookup says "nothing keys this".
+	for absent_id in case.get("absentIds", []):
+		for language in _pkg_localization.get("strings", {}):
+			var table: Dictionary = _pkg_localization["strings"][language]
+			_check("%s: the %s table carries no row for '%s'" % [name, language, str(absent_id)],
+				not table.has(str(absent_id)))
+		_manager.set_language("fr")
+		_check("%s: '%s' keys no artifact either" % [name, str(absent_id)],
+			_localized_resolve(str(absent_id)) == str(absent_id))
 
 
 ## The COMPLETE resolved table for one language: every id the export shipped, so an implementation

@@ -14,8 +14,8 @@ extends SceneTree
 ##   3. OPTION GATING through the REAL evaluate_option_visibility, asserting the VISIBLE
 ##      direction (contract 6.2 — a missing boolean arm fails CLOSED and silently, so only the
 ##      true direction catches it) plus the PULL-WRITE-PULL cache triple.
-##   4. THE STRING-TABLE EXEMPTION — a .sfd string equal to a live strings-table key reads back
-##      as the LITERAL, while an ordinary script string with the same value still localizes.
+##   4. THE SCRIPT-TABLE EXEMPTION — a .sfd string equal to a live SCRIPT strings-table key reads
+##      back as its own bytes, while an ordinary script string with the same value localizes.
 ##   5. ARRAY-OP ROUTING with a same-named local decoy, and the not-an-array refusal.
 ##
 ## Everything is driven through the component's real _process_node dispatch and the real
@@ -314,13 +314,19 @@ func _test_option_gating_and_cache() -> void:
 # 4. The string-table exemption
 # =============================================================================
 
-## data-assets.json carries no strings table (contract 2.1) — .sfd string values are LITERALS.
-## The base declares title = "Grunt"; this script's strings table also has an "en.Grunt" key.
-## The .sfd read must answer "Grunt" while an ordinary script string holding the same value
-## still localizes, which is what proves the table is live and the exemption is real rather
-## than the table simply missing.
+## THE SAME ASSERTIONS, for a REASON THAT CHANGED at localization spec §2's amendment of
+## 2026-08-27. It used to be that data-assets.json carried no strings table (engine contract 2.1)
+## and every .sfd value was a literal. Declared .sfd strings ARE keys now — into data-assets.json's
+## OWN table, merged by the importer into the project globals — and the node lane's .sfd door
+## withholds the running script (StoryFlowEvaluator._data_asset_locale), so a script table can
+## never shadow one. This seed carries no strings table at all, so the read answers its own bytes.
+##
+## The base declares title = "Grunt"; this script's strings table also has an "en.Grunt" key. The
+## .sfd read must answer "Grunt" while an ordinary script string holding the same value still
+## localizes, which is what proves the table is live and the exemption is real rather than the
+## table simply missing.
 func _test_string_literal_exemption() -> void:
-	print("-- .sfd strings are literals --")
+	print("-- a script's strings table never reaches a .sfd value --")
 	var script := Graph.build("scripts/Literal.sfe", {
 		"0": Graph.start(),
 		"PB": Graph.pill("PB", BASE),

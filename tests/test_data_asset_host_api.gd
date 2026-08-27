@@ -11,8 +11,9 @@ extends SceneTree
 ##   3. WRITES — the cascade, the nearest-wins block at an overriding child, refusals, and the
 ##      CACHE CLEAR every .sfd writer owes (a memoized boolean parent above an accessor keeps
 ##      answering the pre-write value otherwise).
-##   4. LITERALS — .sfd strings are not routed through the strings table, unlike
-##      get_string_variable.
+##   4. THE SCRIPT-TABLE EXEMPTION — a .sfd read never consults the running script's strings
+##      table, unlike get_string_variable. (What a DECLARED .sfd string does resolve through
+##      since spec §2's amendment lives in tests/test_data_asset_localization.gd.)
 ##
 ## Reads work OUTSIDE a dialogue: everything goes through the manager's seed and overlay, which
 ## the execution context only borrows. Most of the file therefore runs with no component script
@@ -379,15 +380,22 @@ func _on_variable_changed_write_data_asset(_info) -> void:
 
 
 # =============================================================================
-# 8. .sfd strings are literals
+# 8. A SCRIPT's strings table never reaches a .sfd value
 # =============================================================================
 
-## data-assets.json carries no strings table (contract 2.1), so a .sfd string value is a LITERAL.
-## The base declares title = "Grunt" and this script's strings table also has an "en.Grunt" key,
-## so the ordinary accessor localizing while the .sfd one does not is what proves the table is
-## live rather than simply missing.
+## THE SAME ASSERTIONS THIS TEST ALWAYS MADE, for a REASON THAT CHANGED at localization spec §2's
+## amendment of 2026-08-27. It used to be that data-assets.json carried no strings table at all
+## (engine contract 2.1) and every .sfd string was a literal. Declared .sfd strings ARE keys now —
+## but into data-assets.json's own table, which the importer merges into the PROJECT globals, and
+## the .sfd read door withholds the running script (StoryFlowComponent._data_asset_locale). So
+## this seed, which carries no strings table, still answers its own bytes while the script's
+## "en.Grunt" row is right there and live.
+##
+## That live row is the whole point: an ordinary accessor localizing through it, on the same
+## component in the same call, is what proves the .sfd door refused a table it could see rather
+## than missing one that was not there.
 func _test_string_literals() -> void:
-	print("-- .sfd strings are literals on the host surface --")
+	print("-- a script's strings table never reaches a .sfd value --")
 	_manager.reset_data_assets()
 	var script := Graph.build("scripts/HostLiteral.sfe", {
 		"0": Graph.start(),
@@ -399,7 +407,7 @@ func _test_string_literals() -> void:
 	var component := _run(script)
 	_check("an ordinary script string resolves through the strings table",
 		component.get_string_variable("OrdinaryString") == "LOCALIZED-GRUNT")
-	_check("while a .sfd string with the same value reads back as the LITERAL",
+	_check("while a .sfd string with the same value reads back as its own bytes",
 		component.get_data_asset_string(BASE, "title") == "Grunt")
 	_teardown(component)
 
