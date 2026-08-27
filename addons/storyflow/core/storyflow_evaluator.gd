@@ -991,13 +991,21 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 
 		# The .sfd accessors, and the ONE arm in this function that RETURNS EARLY.
 		#
-		# data-assets.json carries NO strings table — the exporter writes .sfd values verbatim
-		# (engine contract 2.1), so a .sfd string is a LITERAL and must never go through the
-		# tail's _resolve_string_key below. Falling through would mean any .sfd string that
-		# happens to equal a live strings-table key reads back as that key's localized TEXT
-		# instead of itself, and the collision is silent: an author writing "hello" into a .sfd
-		# would get whatever the script's "hello" key resolves to. Pinned by the
-		# string-literal-vs-strings-table test in tests/test_data_asset_nodes.gd.
+		# THE .sfd ACCESSORS ANSWER FINISHED TEXT and must not re-enter this ladder. Every other
+		# arm here hands back a value whose string IS a table key, which is why the tail's
+		# _resolve_string_key exists at all; a .sfd read has already been through the store's own
+		# door, which resolved it or deliberately did not, GATED ON PROVENANCE
+		# (StoryFlowDataAssetStore.try_read — declarations localize, overrides and session writes
+		# never do). Running this ladder over the answer would be a SECOND door gated on SHAPE,
+		# and it would undo exactly the case the gate exists for: a session write whose value
+		# happens to be a real key would come back as somebody else's prose, invisibly in the
+		# source language.
+		#
+		# The early return predates spec §2's amendment of 2026-08-27, when the reason was
+		# engine-contract 2.1's "data-assets.json carries no strings table, so a .sfd value is a
+		# literal" — over a literal this wrap was a harmless no-op. The amendment superseded the
+		# reason and made the exemption load-bearing. Pinned by the string-literal-vs-strings-table
+		# test in tests/test_data_asset_nodes.gd.
 		#
 		# The whole string FAMILY lands here — enum / image / character / audio scalars all
 		# read through this evaluator (evaluate_enum_input delegates to evaluate_string_input),
@@ -1013,9 +1021,17 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 		_:
 			result = ""
 
-	# NOT EVERY ARM REACHES THIS TAIL: the .sfd accessor arm above returns early, because
-	# data-assets.json carries no strings table and its values are literals (contract 2.1).
+	# NOT EVERY ARM REACHES THIS TAIL: the .sfd accessor arm above returns early, because a .sfd
+	# read already passed the store's own provenance-gated door and this one is shape-gated.
 	# Anything added here must be added there too, or the two paths silently diverge.
+	#
+	# THE CONTAINER RESIDUE, recorded rather than fixed (the divergence register): a value read
+	# OUT of a .sfd array or map by a downstream node — a getStringArrayElement, a getMapValue —
+	# re-enters this ladder as THAT node's result, so an element the store already localized is
+	# looked up a second time. It is harmless for declared prose (a translated line keys nothing,
+	# so the lookup misses and the raw-fallback tier hands the same text back) and the same limit
+	# exists in the Unity port, which recorded it in the same words. Closing it would mean
+	# tainting values with their origin all the way through the evaluator, which no engine does.
 	#
 	# THE REACH DISCIPLINE (localization spec §9) lives here, and GDScript has no type that can
 	# enforce it: what gets looked up is THE KEY THE RECORD STORES, taken straight off the value
@@ -1089,9 +1105,10 @@ func evaluate_enum_from_node(node_id: String, source_handle: String = "") -> Str
 				result = char_result.get_string()
 
 		# The .sfd accessors. No _resolve_string_key tail in THIS evaluator, so no early
-		# return is needed here — but the literal rule is the same one (contract 2.1), and
-		# enum reads that arrive over a wire land in the STRING evaluator anyway, since
-		# evaluate_enum_input delegates to evaluate_string_input.
+		# return is needed here — and no gate either: an ENUM declaration never localizes
+		# (the type gate in StoryFlowDataAssetStore._localize_declared), so what arrives is
+		# already the value to answer. Enum reads that come over a wire land in the STRING
+		# evaluator anyway, since evaluate_enum_input delegates to evaluate_string_input.
 		StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, \
 		StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
 			var da_result := _evaluate_data_asset_variable(data, node_id)
@@ -1958,6 +1975,19 @@ func _evaluate_character_variable(data: Dictionary, node_id: String = "") -> Sto
 # once: [method _resolve_data_asset_id] owns the three graph-side rungs, the store's shared
 # _bind owns the two chain-side ones.
 
+## The lookup context the node lane hands the store's .sfd read door, from the SAME three fields
+## [method _resolve_string_key] runs the shared ladder on - minus the current script.
+##
+## THE SCRIPT IS WITHHELD DELIBERATELY (localization spec §2's amendment): a .sfd id is keyed by
+## data-assets.json, which the importer merges into the project globals, so passing the running
+## script could only let its own strings table SHADOW a .sfd id - and which script happened to be
+## executing would then decide what an item is called. Every other string in this lane wants the
+## script tier; a .sfd value is the one that must not have it.
+func _data_asset_locale() -> Dictionary:
+	return StoryFlowLocalization.reading_locale(
+		_context.localization if _context else null, _global_strings, _language_code)
+
+
 ## The accessor's spawn-time snapshot as ONE Dictionary, pulled off node data in one place so
 ## no call site has to remember which of the four wire keys goes where (the store's
 ## read_bound_with_pins / check_bound take it verbatim).
@@ -2003,7 +2033,7 @@ func _evaluate_data_asset_variable(data: Dictionary, node_id: String) -> StoryFl
 		return null
 	var variable_id := str(data.get("variableId", ""))
 	var bound := StoryFlowDataAssetStore.read_bound_with_pins(
-		_context.data_asset_seed, _context.data_asset_overlay,
+		_context.data_asset_seed, _context.data_asset_overlay, _data_asset_locale(),
 		asset_id, variable_id, data_asset_pins(data))
 	var status: StoryFlowDataAssetStore.Binding = bound["status"]
 	if status != StoryFlowDataAssetStore.Binding.OK:

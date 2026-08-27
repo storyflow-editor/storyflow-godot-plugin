@@ -259,6 +259,26 @@ static func look_up(localization, script: StoryFlowScript, global_strings: Dicti
 	return null
 
 
+## THE THREE THINGS [method look_up] needs that are not the key, bundled so a caller can carry a
+## lookup's CONTEXT around without carrying the lookup.
+##
+## It exists for the .sfd read door (StoryFlowDataAssetStore.try_read), which resolves values deep
+## inside a chain walk and would otherwise take three more positional arguments - two of them
+## Dictionaries, next to the two Dictionaries (seed and overlay) every store function already
+## starts with. That is the transposition this repo has already paid for once, which is why the
+## accessor pins travel as one Dictionary too (StoryFlowEvaluator.data_asset_pins).
+##
+## PURE DATA and NO POLICY: it neither knows nor decides anything about `.sfd` values. Which of
+## these fields a lookup uses, and whether a script may shadow, is the caller's - see the gate in
+## storyflow_data_asset_store.gd.
+static func reading_locale(localization, global_strings: Dictionary, fallback_language: String) -> Dictionary:
+	return {
+		"localization": localization,
+		"global_strings": global_strings,
+		"fallback_language": fallback_language,
+	}
+
+
 ## One exact table key, the current script before the project globals. Membership is tested rather
 ## than compared against the key, so a row whose text happens to equal its own id still counts as
 ## a hit instead of falling silently through to the next table.

@@ -897,9 +897,13 @@ func set_character_variable_by_id(character_id: String, variable_name: String, v
 # named the fix. The REFUSAL ITSELF is never latched - every call still answers its default or
 # false. See _warn_data_asset_once.
 #
-# .sfd STRINGS ARE LITERALS and are NOT routed through the strings table, unlike
-# get_string_variable above: data-assets.json ships no strings table (engine contract 2.1), so a
-# lookup here would replace every literal with a failed one.
+# .sfd STRINGS RESOLVE AT THIS DOOR, and only where their PROVENANCE says they are content: a
+# DECLARED string value localizes, an override and a session write are handed back verbatim. That
+# is localization spec §2's amendment of 2026-08-27, which SUPERSEDES engine-contract 2.1's
+# literal-value posture; the rule itself lives once, in StoryFlowDataAssetStore.try_read, and
+# these accessors reach it by calling that door instead of try_resolve. Unlike
+# get_string_variable above, the running script's strings table is NOT consulted - see
+# _data_asset_locale.
 
 const _DATA_ASSET_STRING_TYPES := [
 	StoryFlowTypes.VariableType.STRING, StoryFlowTypes.VariableType.IMAGE,
@@ -1000,8 +1004,8 @@ func _read_data_asset_scalar(asset: String, variable_name: String, expected: Arr
 		return null
 	if not _data_asset_scalar_gate(asset, variable_name, declaration, expected):
 		return null
-	return StoryFlowDataAssetStore.try_resolve(mgr.get_data_asset_seed(),
-		mgr.get_data_asset_overlay(), asset_id, str(declaration.get("id", "")))
+	return StoryFlowDataAssetStore.try_read(mgr.get_data_asset_seed(),
+		mgr.get_data_asset_overlay(), _data_asset_locale(), asset_id, str(declaration.get("id", "")))
 
 
 ## One host scalar write into the overlay, reporting whether it landed.
@@ -1072,9 +1076,9 @@ func _write_data_asset_scalar(asset: String, variable_name: String, expected: Ar
 # NAME-ROUTED, per amendment A1: character variable access is name-keyed — the record's
 # variable map has no rename-stable ids to key by — and the reserved cf_name/cf_image ids
 # answer the builtin Name/Image through the shared first-tier predicates (A2(a)).
-# A5: this surface answers the STORED name key, never the localized string — it extends the
-# DA host surface, whose strings are literals (see the block header above); the public
-# get_character_variable is the RESOLVING door.
+# A5: this surface answers the STORED name key, never the localized string — a CHARACTER-lane
+# property, unchanged by spec §2's .sfd amendment (which moved only how .sfd DECLARATIONS
+# resolve, see the block header above); the public get_character_variable is the RESOLVING door.
 # A2(b): no write on this branch raises character_variable_changed — the signal is node-lane
 # only, a contract property.
 # A3(b): a write naming a variable the record does not declare NEVER creates it — refusal
@@ -1303,8 +1307,28 @@ func get_data_asset_variant(asset: String, variable_name: String) -> StoryFlowVa
 	var declaration := _find_data_asset_declaration(asset, asset_id, variable_name)
 	if declaration.is_empty():
 		return null
-	return StoryFlowDataAssetStore.try_resolve(mgr.get_data_asset_seed(),
-		mgr.get_data_asset_overlay(), asset_id, str(declaration.get("id", "")))
+	return StoryFlowDataAssetStore.try_read(mgr.get_data_asset_seed(),
+		mgr.get_data_asset_overlay(), _data_asset_locale(), asset_id, str(declaration.get("id", "")))
+
+
+## The lookup context both host .sfd doors hand the store, built in ONE place so the two cannot
+## drift (the same reason the node lane's four accessor pins travel as one Dictionary).
+##
+## NO SCRIPT, ON EITHER SIDE OF A DIALOGUE - which is the one way this differs from
+## [method _resolve_string], and deliberately: that door adds the running script's own strings
+## table, while a .sfd id is keyed by data-assets.json and merged into the project globals, so a
+## script table could only SHADOW it and which dialogue happened to be open would decide what an
+## item is called. A host .sfd read therefore answers the same text whether or not a dialogue is
+## running. [member language_code] is the PRE-LOCALIZATION fallback here exactly as it is there.
+func _data_asset_locale() -> Dictionary:
+	var mgr := get_manager()
+	if not mgr:
+		return {}
+	var project: StoryFlowProject = mgr.get_project()
+	if not project:
+		return {}
+	return StoryFlowLocalization.reading_locale(
+		mgr.get_localization(), project.global_strings, language_code)
 
 
 # =============================================================================

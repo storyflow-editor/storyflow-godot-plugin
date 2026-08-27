@@ -3,6 +3,7 @@ extends RefCounted
 
 # Preloaded by path so parsing never depends on the global class name cache,
 # which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
+const StoryFlowLocalization = preload("res://addons/storyflow/core/storyflow_localization.gd")
 const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
 const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
 const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.gd")
@@ -37,10 +38,27 @@ const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.
 ## caller writing through a declaration corrupts the imported project too, and a game reset
 ## rebuilds the seed straight back onto the damage. Read declarations, never write to them.
 ##
-## Deliberately does NOT resolve string-table keys the way character and global variables do:
-## data-assets.json carries no strings table (the exporter writes .sfd values verbatim), so a
-## .sfd string value is a LITERAL, and running the lookup over it would replace every literal
-## with a failed lookup.
+## THE SEED STORES VERBATIM BYTES AND THE READ DOOR LOCALIZES, and the REASON changed with
+## localization spec §2's amendment of 2026-08-27, which SUPERSEDES engine-contract 2.1's
+## literal-value posture: data-assets.json now DOES carry a strings table, and a Data Asset's
+## DECLARED string value is a table key like any other artifact's (the importer merges that table
+## into the project globals characters.json already feeds). It is still not resolved on the way
+## IN, because a bake would freeze the text in whatever language happened to be current at import
+## and would destroy the one thing the gate needs - the difference between a value that came from
+## the seed and one a script wrote. Resolution happens at [method try_read] / [method read_bound]
+## instead.
+##
+## FOUR DOORS OUT, one walk behind all of them:
+##  - [method try_read]   the value with the LOCALIZATION GATE applied: the door every surface
+##    that hands a .sfd value to GAME CODE goes through (both host accessors).
+##  - [method try_resolve] the CHAIN RULE ALONE, with no string lookup anywhere in it: saves,
+##    the fixture harnesses, and any caller that wants the bytes the store actually holds.
+##  - [method read_bound]  [method try_read] plus the §6.1 ladder answer: what a bound accessor
+##    NODE reads through, since a node's pins can be stale in a way an id cannot.
+##  - [method check_bound] the ladder answer alone, no overlay and no copy-out: the write path.
+## [method try_read] and [method read_bound] share ONE gate ([method _read_out]) rather than
+## carrying a copy each: a rule that held on the host accessors and not at the node arms would be
+## a bug no single-surface test could see.
 
 ## Chain depth cap, matching the reference implementation's MAX_DEPTH (contract section 4.4).
 ## The walk tests the counter BEFORE incrementing it, exactly like runtime-data-assets.js's
@@ -70,6 +88,31 @@ enum Binding {
 	MISSING,
 	## Declared, but the declaration no longer matches the spawn snapshot (section 6.1).
 	CHANGED,
+}
+
+
+## WHAT ANSWERED a resolve - the PROVENANCE of the value, which the localization gate reads and
+## nothing else does. THE VOCABULARY LIVES HERE AND ONLY HERE: the gate names these constants, and
+## never a string or a bare bool, because "is this a declaration" is a three-way question whose
+## two negative answers have different reasons.
+##
+## THREE VALUES AND NOT TWO. Both an ancestor's DECLARATION and an ancestor's OVERRIDE look simply
+## inherited from a descendant, and the reference implementation learned what folding them costs:
+## its origin token had one `inherited` value, so its accessor door served the ancestor's
+## translation for a text the descendant had deliberately replaced (fixed editor-side at
+## b18c4de0). That failure is not a missing translation - it is a WRONG VALUE, and it is invisible
+## in the source language.
+##
+## Recorded WHERE THE WALK ALREADY KNOWS ([method _walk_for_value]'s own branch) and never
+## re-derived afterwards: once an overlay entry and an override are both just a StoryFlowVariant
+## reference, nothing downstream can tell them apart.
+enum Origin {
+	## The root-most declaration's own authored value (section 4.3). The ONLY tier that localizes.
+	DECLARATION,
+	## An `overrides` entry at some chain level. Authored, but NOT keyed - see [method _read_out].
+	OVERRIDE,
+	## An overlay entry: a write this session made. Live data, never content.
+	SESSION_WRITE,
 }
 
 
@@ -451,11 +494,61 @@ static func is_declared_on_chain(seed: Dictionary, asset_id: String, variable_id
 ##
 ## COPY-ON-READ (contract section 3): the value is duplicated out, so graph code cannot mutate
 ## the seed or the overlay through a read.
+##
+## THIS IS THE CHAIN RULE AND NOTHING MORE: no string-table lookup anywhere in it. Game-facing
+## reads go through [method try_read], which layers the localization gate on top. Saves and the
+## fixture harnesses want THIS one - a persisted overlay entry must be the bytes the game wrote,
+## and a golden fixture pins the store's own answer, not the current language's.
 static func try_resolve(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String) -> StoryFlowVariant:
 	var found := _walk_for_value(seed, overlay, asset_id, variable_id)
 	if not found["found"]:
 		return null
 	return _copy_out(found)
+
+
+## THE READ DOOR: [method try_resolve] plus the localization gate, and the function every surface
+## that hands a .sfd value to GAME CODE calls. The host accessors call it directly; the node arms
+## reach the same gate through [method read_bound], which needs the section 6.1 ladder answer too.
+##
+## [param locale] is StoryFlowLocalization.reading_locale's bundle; an EMPTY Dictionary means
+## "nothing to look anything up in" and every value passes through verbatim, which is what a
+## hand-built store in a test wants.
+##
+## Localization spec §2's amendment of 2026-08-27 - which SUPERSEDES engine-contract 2.1's "a .sfd
+## value is a literal, never look it up" - makes a Data Asset's DECLARED string values
+## player-facing prose, shipped as stable table keys in data-assets.json's own strings block and
+## resolved through the very ladder every other artifact's strings already use.
+##
+## WHAT LOCALIZES, and the three rules re-derivable wrongly (the vendored package's
+## manifest.localization.dataAssets spells all of them out):
+##
+##  - ONLY A DECLARATION. [constant Origin.OVERRIDE] and [constant Origin.SESSION_WRITE] are
+##    handed back verbatim. An override is AUTHORED but UNKEYED: a .sfd id carries no per-asset
+##    segment, so a declaration and a descendant's override of it would collide on one
+##    `<variableId>.value`, and the exporter therefore keys declarations only. Localizing an
+##    override does not MISS - it serves the ANCESTOR's translation for a text the descendant
+##    deliberately replaced.
+##  - A WRITTEN VALUE NEVER LOCALIZES, including after a save/load, because the save carries the
+##    overlay and a restored write was never content. The gate is WHERE THE VALUE CAME FROM and
+##    never whether it LOOKS like a key: a write that happened to equal a key would otherwise be
+##    translated into a string the game has since redefined, and that failure is invisible in the
+##    source language.
+##  - STRING-TYPED PROSE ONLY, decided by the DECLARED type - see [method _localize_declared].
+##
+## THE ID IS BUILT FROM THE VARIABLE ALONE (`<variableId>.value`, `.value.<index>`,
+## `.value.<mapKey>`) and it is THE EXPORTER that built it; nothing here re-derives one, this
+## resolves the bytes the seed carries. That is the deliberate CONTRAST with a character value's
+## `<characterId>.<variableId>.value`, and the reason every level of a chain may carry keyed
+## strings: it is the VARIABLE that is unique, not the asset.
+##
+## RESOLUTION IS AT THIS DOOR, never baked, so a mid-session set_language lands on the very next
+## .sfd read - the same read-time posture this engine already has for every other string it holds
+## (StoryFlowManager.set_language's "what moves, and when").
+static func try_read(seed: Dictionary, overlay: Dictionary, locale: Dictionary, asset_id: String, variable_id: String) -> StoryFlowVariant:
+	var found := _walk_for_value(seed, overlay, asset_id, variable_id)
+	if not found["found"]:
+		return null
+	return _read_out(found, locale)
 
 
 ## ONE WALK for a bound accessor's read: resolve the value AND settle which chain-side rung
@@ -482,11 +575,15 @@ static func try_resolve(seed: Dictionary, overlay: Dictionary, asset_id: String,
 ## The DEAD-REFERENCE rung is the caller's, drawn with [method has_asset] BEFORE calling here —
 ## and an empty store (a reset execution context hands out `{}`) lands on that same rung, so the
 ## ladder's deadref check fires before read_bound is ever reached.
-static func read_bound(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String, wire_type: String, is_array: bool, key_type: String, value_type: String) -> Dictionary:
+##
+## THE LOCALIZATION GATE RUNS HERE TOO, through the same [method _read_out] the host door uses:
+## this is a GAME-FACING read, and a rule that held on one surface and not the other is a bug no
+## single-surface test could see. [param locale] is StoryFlowLocalization.reading_locale's bundle.
+static func read_bound(seed: Dictionary, overlay: Dictionary, locale: Dictionary, asset_id: String, variable_id: String, wire_type: String, is_array: bool, key_type: String, value_type: String) -> Dictionary:
 	var bound := _bind(seed, overlay, asset_id, variable_id, wire_type, is_array, key_type, value_type)
 	if bound["status"] != Binding.OK:
 		return {"status": bound["status"], "value": null}
-	return {"status": Binding.OK, "value": _copy_out(bound["found"])}
+	return {"status": Binding.OK, "value": _read_out(bound["found"], locale)}
 
 
 ## [method read_bound] taking the accessor's four spawn-snapshot pins as ONE Dictionary
@@ -494,8 +591,8 @@ static func read_bound(seed: Dictionary, overlay: Dictionary, asset_id: String, 
 ## arguments in a row, which read as an unlabelled soup at every call site and let a
 ## key/value swap through silently. The node arms build the snapshot once per access with
 ## [method StoryFlowEvaluator.data_asset_pins] and pass it around.
-static func read_bound_with_pins(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String, pins: Dictionary) -> Dictionary:
-	return read_bound(seed, overlay, asset_id, variable_id, \
+static func read_bound_with_pins(seed: Dictionary, overlay: Dictionary, locale: Dictionary, asset_id: String, variable_id: String, pins: Dictionary) -> Dictionary:
+	return read_bound(seed, overlay, locale, asset_id, variable_id, \
 		str(pins.get("wire_type", "")), bool(pins.get("is_array", false)), \
 		str(pins.get("key_type", "")), str(pins.get("value_type", "")))
 
@@ -548,6 +645,93 @@ static func _copy_out(found: Dictionary) -> StoryFlowVariant:
 	return type_default(declaration)
 
 
+## THE ONE LOCALIZATION GATE this plugin has for .sfd values, and the tail of every game-facing
+## read: [method _copy_out] plus the decision of whether the value is CONTENT. [method try_read]
+## (the host accessors) and [method read_bound] (the node arms and the degraded ladder) both end
+## here, so the rule cannot hold at one surface and not the other.
+##
+## IT SITS BESIDE THE SHARED STRING LADDER, NOT INSIDE IT. StoryFlowLocalization.look_up is one
+## ladder with three delegating doors and no .sfd knowledge; folding a value-provenance question
+## into it would put a .sfd-only concern in every dialogue lookup. This is the second shared
+## function, it gates on PROVENANCE, and it calls that ladder for the string tier alone.
+##
+## GATED ON PROVENANCE, NEVER ON THE VALUE'S SHAPE. Every rule behind that sentence is written out
+## on [method try_read]; this is only where it is enforced. An empty [param locale] is "no project
+## to look anything up in" - a hand-built store in a test - and passes everything through.
+static func _read_out(found: Dictionary, locale: Dictionary) -> StoryFlowVariant:
+	var value := _copy_out(found)
+	if found["origin"] == Origin.DECLARATION and not locale.is_empty():
+		_localize_declared(found["declaration"], locale, value)
+	return value
+
+
+## A DECLARED value with its string-table keys resolved, IN PLACE on the copy the read is about
+## to hand out.
+##
+## THE TYPE GATE IS THE EXPORTER'S, transcribed (json-export-strategy.ts's keying pass): a string
+## SCALAR, the ELEMENTS of a string array, and the VALUES of a map whose valueType is string.
+## Everything else - enum, image, audio, character, and every number and boolean - passes through
+## untouched even when its value is a string, and a map's KEYS are identifiers that never resolve
+## whatever their keyType is. A gate that drifted from the exporter's would look up an id nothing
+## keyed, or hand back a key.
+##
+## The IMAGE / AUDIO / CHARACTER types are the reason this reads `declaration["type"]` and not the
+## variant's tag: [method storage_type] flattens all three to STRING storage, so by the time a
+## value exists there is nothing left to tell them apart from prose - which is the same reason the
+## section 6.1 snapshot check is on the declaration.
+##
+## "an absent valueType is a string map" arrives here ALREADY SETTLED: the importer defaults both
+## map sides to "string" (_parse_data_asset_variable), so a missing token never reaches this test
+## as NONE.
+static func _localize_declared(declaration: Dictionary, locale: Dictionary, value: StoryFlowVariant) -> void:
+	var declared_type: StoryFlowTypes.VariableType = declaration.get("type", StoryFlowTypes.VariableType.NONE)
+
+	if declared_type == StoryFlowTypes.VariableType.MAP:
+		if declaration.get("value_type", StoryFlowTypes.VariableType.NONE) != StoryFlowTypes.VariableType.STRING:
+			return
+		var entries: Dictionary = value.get_map()
+		for key in entries:
+			_localize_string(locale, entries[key])
+		return
+
+	if declared_type != StoryFlowTypes.VariableType.STRING:
+		return
+
+	if bool(declaration.get("is_array", false)):
+		for element in value.get_array():
+			_localize_string(locale, element)
+		return
+
+	_localize_string(locale, value)
+
+
+## One string through the shared ladder, left alone when it is not prose.
+##
+## NO CURRENT SCRIPT IS PASSED, deliberately: a .sfd id is keyed by data-assets.json, which the
+## importer merges into the PROJECT globals, so handing the ladder a script could only let a
+## script's own table shadow a .sfd id - and which script happens to be running would then decide
+## what an item is called. Reusing StoryFlowLocalization.look_up rather than reaching into
+## global_strings directly is what keeps the overlay tier and the source-language fall-through
+## identical here to everywhere else; a second, simpler lookup would be the fourth ladder and
+## would drift.
+##
+## PROSE means non-blank AFTER TRIMMING, exactly as the editor's keying pass decides it: a
+## whitespace-only value keys nothing there, so looking one up here would probe an id no
+## translator can reach. A miss answers null and the value is left as it is, which is the raw
+## fallback tier and is why an unkeyed literal survives this untouched.
+static func _localize_string(locale: Dictionary, value) -> void:
+	if not value is StoryFlowVariant:
+		return
+	var key: String = value.get_string("")
+	if key.strip_edges().is_empty():
+		return
+	var resolved = StoryFlowLocalization.look_up(
+		locale.get("localization"), null, locale.get("global_strings", {}),
+		key, str(locale.get("fallback_language", "")))
+	if resolved != null:
+		value.set_string(str(resolved))
+
+
 ## resolveEntry's ONE walk, with its two accumulators kept apart on purpose:
 ##  - "nearest": the FIRST overlay-or-override hit leaf -> root (section 4.1 / 4.2).
 ##  - "declaration": the ROOT-MOST DECLARATION (section 4.3), which is why a declaration must
@@ -564,8 +748,18 @@ static func _copy_out(found: Dictionary) -> StoryFlowVariant:
 ##
 ## An EMPTY overlay skips the session lookups entirely — that is the write path, which needs
 ## the declaration and nothing else.
+##
+## THE THREE ANSWERS TRAVEL AS ONE RESOLUTION Dictionary and every consumer takes it WHOLE
+## ([method _copy_out] and [method _read_out] both do), rather than as values a later door could
+## re-assemble from a different walk: an [enum Origin] paired with somebody else's declaration is
+## exactly the mis-gate the enum exists to prevent, and GDScript has no type that would catch it.
+##  - "has_nearest" / "nearest": the FIRST overlay-or-override hit leaf -> root.
+##  - "found" / "declaration": whether any level declared the id, and the ROOT-MOST declaration.
+##  - "origin": WHICH tier "nearest" came from, recorded at the branch that already knows.
+##    DECLARATION when there is no nearest hit at all, which is the one tier the localization
+##    gate treats as content.
 static func _walk_for_value(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String) -> Dictionary:
-	var acc := {"has_nearest": false, "nearest": null, "found": false, "declaration": {}}
+	var acc := {"has_nearest": false, "nearest": null, "found": false, "declaration": {}, "origin": Origin.DECLARATION}
 	if variable_id.is_empty():
 		return acc
 
@@ -576,11 +770,13 @@ static func _walk_for_value(seed: Dictionary, overlay: Dictionary, asset_id: Str
 			if level_overlay is Dictionary and level_overlay.has(variable_id):
 				acc["nearest"] = level_overlay[variable_id]
 				acc["has_nearest"] = true
+				acc["origin"] = Origin.SESSION_WRITE
 			else:
 				var overrides = level.get("overrides", {})
 				if overrides is Dictionary and overrides.has(variable_id):
 					acc["nearest"] = overrides[variable_id]
 					acc["has_nearest"] = true
+					acc["origin"] = Origin.OVERRIDE
 		var declaration := _find_declared_on_level(level, variable_id)
 		if not declaration.is_empty():
 			acc["declaration"] = declaration

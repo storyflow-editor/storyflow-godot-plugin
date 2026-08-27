@@ -336,46 +336,51 @@ func _test_seed_build_drops_and_typing() -> void:
 ## rungs (nodata / unwired / deadref) are G2's ladder, not this function's — an unknown asset
 ## reaching here answers MISSING, which is asserted below so the caller knows it must draw the
 ## dead-reference line itself with has_asset.
+##
+## THE EMPTY LOCALE ({}) is deliberate and is what this whole file wants: it means "no project to
+## look anything up in", so the store answers the BYTES the chain holds and the localization gate
+## stands aside. Every assertion here is about the chain rule; the gate's own rules are pinned by
+## tests/test_data_asset_localization.gd and the golden package's unkeyed arm.
 func _test_read_bound() -> void:
 	print("-- read_bound (the fused walk) --")
 	var seed := _seed_from_fixture()
 	var overlay: Dictionary = {}
 	var B := StoreScript.Binding
 
-	var ok := StoreScript.read_bound(seed, overlay, BASE, V_HP, "integer", false, "", "")
+	var ok := StoreScript.read_bound(seed, overlay, {}, BASE, V_HP, "integer", false, "", "")
 	_check("read_bound: a matching scalar binding is OK", ok["status"] == B.OK)
 	_check("read_bound: an OK binding carries the resolved value", ok["value"] != null and ok["value"].get_int() == 100)
 
-	var changed := StoreScript.read_bound(seed, overlay, BASE, V_HP, "string", false, "", "")
+	var changed := StoreScript.read_bound(seed, overlay, {}, BASE, V_HP, "string", false, "", "")
 	_check("read_bound: a moved declared type is CHANGED", changed["status"] == B.CHANGED)
 	_check("read_bound: a CHANGED binding hands out no value", changed["value"] == null)
 
-	var shape := StoreScript.read_bound(seed, overlay, BASE, V_TAGS, "string", false, "", "")
+	var shape := StoreScript.read_bound(seed, overlay, {}, BASE, V_TAGS, "string", false, "", "")
 	_check("read_bound: a scalar binding over an array declaration is CHANGED", shape["status"] == B.CHANGED)
 
-	var array_ok := StoreScript.read_bound(seed, overlay, BASE, V_TAGS, "string", true, "", "")
+	var array_ok := StoreScript.read_bound(seed, overlay, {}, BASE, V_TAGS, "string", true, "", "")
 	_check("read_bound: a matching array binding is OK", array_ok["status"] == B.OK)
 	_check("read_bound: an OK array binding carries its elements", array_ok["value"] != null and array_ok["value"].get_array().size() == 2)
 
-	var map_ok := StoreScript.read_bound(seed, overlay, BASE, V_LOOT, "map", false, "string", "integer")
+	var map_ok := StoreScript.read_bound(seed, overlay, {}, BASE, V_LOOT, "map", false, "string", "integer")
 	_check("read_bound: a matching map binding is OK", map_ok["status"] == B.OK)
-	var map_kv := StoreScript.read_bound(seed, overlay, BASE, V_LOOT, "map", false, "string", "string")
+	var map_kv := StoreScript.read_bound(seed, overlay, {}, BASE, V_LOOT, "map", false, "string", "string")
 	_check("read_bound: a moved map valueType is CHANGED", map_kv["status"] == B.CHANGED)
 
-	var missing := StoreScript.read_bound(seed, overlay, BASE, "4c9a1e07b38f42d6a1057e2c93bd48f0", "integer", false, "", "")
+	var missing := StoreScript.read_bound(seed, overlay, {}, BASE, "4c9a1e07b38f42d6a1057e2c93bd48f0", "integer", false, "", "")
 	_check("read_bound: an id no chain level declares is MISSING", missing["status"] == B.MISSING)
-	var category := StoreScript.read_bound(seed, overlay, BASE, "ae41b70c95d84e2fa3608c1b5f2d97e0", "string", false, "", "")
+	var category := StoreScript.read_bound(seed, overlay, {}, BASE, "ae41b70c95d84e2fa3608c1b5f2d97e0", "string", false, "", "")
 	_check("read_bound: a dropped category row is MISSING", category["status"] == B.MISSING)
-	var dead := StoreScript.read_bound(seed, overlay, "da_nope", V_HP, "integer", false, "", "")
+	var dead := StoreScript.read_bound(seed, overlay, {}, "da_nope", V_HP, "integer", false, "", "")
 	_check("read_bound: an unknown asset answers MISSING (deadref is the CALLER's rung)", dead["status"] == B.MISSING)
 
 	# It reads through the overlay, and it copies out, exactly like try_resolve.
 	_check("read_bound: setup write lands", StoreScript.try_set(seed, overlay, BASE, V_HP, VariantScript.from_int(7)))
-	var after_write := StoreScript.read_bound(seed, overlay, BASE, V_HP, "integer", false, "", "")
+	var after_write := StoreScript.read_bound(seed, overlay, {}, BASE, V_HP, "integer", false, "", "")
 	_check("read_bound: a session write is visible", after_write["value"] != null and after_write["value"].get_int() == 7)
-	var copied := StoreScript.read_bound(seed, overlay, BASE, V_TAGS, "string", true, "", "")
+	var copied := StoreScript.read_bound(seed, overlay, {}, BASE, V_TAGS, "string", true, "", "")
 	copied["value"].get_array()[0].set_string("injected")
-	var copied_again := StoreScript.read_bound(seed, overlay, BASE, V_TAGS, "string", true, "", "")
+	var copied_again := StoreScript.read_bound(seed, overlay, {}, BASE, V_TAGS, "string", true, "", "")
 	_check("read_bound: copy-on-read holds for elements too", copied_again["value"].get_array()[0].get_string() == "mob")
 
 

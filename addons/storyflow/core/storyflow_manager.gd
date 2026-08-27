@@ -334,7 +334,13 @@ func get_localization() -> StoryFlowLocalization:
 ## WHAT MOVES, AND WHEN. Everything this plugin resolves AT READ TIME follows immediately -
 ## dialogue titles, text, text blocks, option labels, string and enum variable values, character
 ## string variables, map and array elements, AND character display names, which this engine stores
-## as string-table keys on the runtime record and resolves per read. THE SEED-TIME POSTURE (ruled
+## as string-table keys on the runtime record and resolves per read. SINCE spec §2's amendment of
+## 2026-08-27 that list includes .sfd DATA ASSET values: their read door resolves at read time
+## too, so a switch reaches the very next get_data_asset_string or accessor node. What it never
+## reaches is a .sfd value a script has WRITTEN - that is live data, not content, and the store's
+## gate hands it back verbatim forever (StoryFlowDataAssetStore.try_read), which is the same
+## seed-time posture the paragraph below describes, decided by provenance rather than by a
+## clock. THE SEED-TIME POSTURE (ruled
 ## at LD2): a value a running script has already WRITTEN into live state - a Set String node, a
 ## SetCharacterVar - was resolved in the language current at the moment of the write and stays
 ## that text; a mid-session switch reaches those only at the next reset or dialogue start, which
