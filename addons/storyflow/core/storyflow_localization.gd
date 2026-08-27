@@ -282,6 +282,15 @@ static func _look_up_exact(script: StoryFlowScript, global_strings: Dictionary, 
 ## PURE DATA and NO POLICY: it neither knows nor decides anything about `.sfd` values. Which of
 ## these fields a lookup uses, and whether a script may shadow, is the caller's - see the gate in
 ## storyflow_data_asset_store.gd.
+##
+## IT CAPTURES LIVE STATE BY REFERENCE, and must therefore be BUILT PER LOOKUP AND NEVER HELD.
+## `localization` is the manager's one object, which is mutated in place forever (see this file's
+## header), so a bundle minted at the moment of a read sees the player's CURRENT language - which
+## is the whole of the read-time posture. `global_strings` is the project's own table, so a bundle
+## kept across a set_project would point at the previous project's strings. Both call sites
+## (StoryFlowComponent._data_asset_locale, StoryFlowEvaluator._data_asset_locale) mint one per
+## read for exactly that reason; the allocation is the same per-access cost the accessor pins
+## already pay.
 static func reading_locale(localization, global_strings: Dictionary, fallback_language: String) -> Dictionary:
 	return {
 		"localization": localization,
