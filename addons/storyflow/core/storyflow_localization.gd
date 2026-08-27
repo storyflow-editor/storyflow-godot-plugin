@@ -259,6 +259,17 @@ static func look_up(localization, script: StoryFlowScript, global_strings: Dicti
 	return null
 
 
+## One exact table key, the current script before the project globals. Membership is tested rather
+## than compared against the key, so a row whose text happens to equal its own id still counts as
+## a hit instead of falling silently through to the next table.
+static func _look_up_exact(script: StoryFlowScript, global_strings: Dictionary, exact_key: String) -> Variant:
+	if script != null and script.strings.has(exact_key):
+		return str(script.strings[exact_key])
+	if global_strings.has(exact_key):
+		return str(global_strings[exact_key])
+	return null
+
+
 ## THE THREE THINGS [method look_up] needs that are not the key, bundled so a caller can carry a
 ## lookup's CONTEXT around without carrying the lookup.
 ##
@@ -277,14 +288,3 @@ static func reading_locale(localization, global_strings: Dictionary, fallback_la
 		"global_strings": global_strings,
 		"fallback_language": fallback_language,
 	}
-
-
-## One exact table key, the current script before the project globals. Membership is tested rather
-## than compared against the key, so a row whose text happens to equal its own id still counts as
-## a hit instead of falling silently through to the next table.
-static func _look_up_exact(script: StoryFlowScript, global_strings: Dictionary, exact_key: String) -> Variant:
-	if script != null and script.strings.has(exact_key):
-		return str(script.strings[exact_key])
-	if global_strings.has(exact_key):
-		return str(global_strings[exact_key])
-	return null
