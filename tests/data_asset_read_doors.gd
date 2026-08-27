@@ -91,14 +91,16 @@ func probe_script(path: String, targets: Array) -> StoryFlowScript:
 			nodes[pill_id] = Graph.pill(pill_id, asset_id)
 		var accessor_id := "G%d" % _accessor_ids.size()
 		_accessor_ids["%s|%s" % [asset_id, variable_id]] = accessor_id
-		nodes[accessor_id] = Graph.accessor(accessor_id, _pins_from(declaration, variable_id))
+		nodes[accessor_id] = Graph.accessor(accessor_id, pins_from(declaration, variable_id))
 		connections.append(Graph.pill_wire(pills[asset_id], accessor_id))
 
 	return Graph.build(path, nodes, connections)
 
 
-## The contract 2.2 node payload for one declaration, in the exporter's own wire tokens.
-func _pins_from(declaration: Dictionary, variable_id: String) -> Dictionary:
+## The contract 2.2 node payload for one declaration, in the exporter's own wire tokens. PUBLIC
+## because a caller building a graph this file does not build - a container read wired downstream
+## of an accessor - still needs its accessor's snapshot to come from the exporter's bytes.
+func pins_from(declaration: Dictionary, variable_id: String) -> Dictionary:
 	var data := {
 		"variableId": variable_id,
 		"variable": str(declaration.get("name", "")),

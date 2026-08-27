@@ -32,9 +32,12 @@ extends SceneTree
 
 const ComponentScript := preload("res://addons/storyflow/core/storyflow_component.gd")
 const Doors := preload("res://tests/data_asset_read_doors.gd")
+const Graph := preload("res://tests/data_asset_test_graph.gd")
+const Handles := preload("res://addons/storyflow/core/storyflow_handles.gd")
 const ImporterScript := preload("res://addons/storyflow/editor/storyflow_importer.gd")
 const LocalizationScript := preload("res://addons/storyflow/core/storyflow_localization.gd")
 const ManagerScript := preload("res://addons/storyflow/core/storyflow_manager.gd")
+const Types := preload("res://addons/storyflow/core/storyflow_types.gd")
 
 const FIXTURE_DIR := "res://tests/fixtures/character-contract"
 const SAVE_SLOT := "data_asset_localization"
@@ -58,6 +61,7 @@ func _initialize() -> void:
 	_manager.delete_save(SAVE_SLOT)
 
 	_test_read_door()
+	_test_container_reads()
 	_test_key_shaped_override()
 	_test_seed_versus_written()
 
@@ -170,6 +174,64 @@ func _test_read_door() -> void:
 	_check("a mid-session set_language reaches the very next .sfd read", french != spanish)
 	_check("fr serves the translation (got '%s')" % french, french == "Epee de fer")
 	_check("es has no row for it, so it serves the source (got '%s')" % spanish, spanish == "Iron Sword")
+
+	_teardown(component)
+
+
+# =============================================================================
+# 1b. THE CONTAINER RESIDUE, measured rather than assumed
+# =============================================================================
+
+## A .sfd ARRAY ELEMENT and a .sfd MAP VALUE read by a DOWNSTREAM node — a getStringArrayElement,
+## a getMapValue — which is the one path where a value the store already localized re-enters the
+## evaluator's shape-gated string ladder as that node's own result. (The .sfd accessor arm returns
+## early and is exempt; its downstream consumers are ordinary node types and cannot be.)
+##
+## The evaluator's tail records that residue as a KNOWN LIMIT, harmless for declared prose because
+## a translated line keys nothing and the raw-fallback tier hands it straight back. THIS IS THAT
+## CLAIM MEASURED: the elements come out translated, through the real nodes, in a real target
+## language. The residue is only a hazard for a translation that happens to BE a live table key,
+## which is the same accepted duplicate-source class the amendment names, and closing it would
+## mean tainting values with their origin all the way through the evaluator.
+##
+## WHAT IT DOES NOT PROVE, said plainly: this path has TWO lookups in it now, and a green here
+## does not say which one did the work — before the amendment the shape-gated tail resolved these
+## elements on its own, accidentally and only in the source language. The GATE is pinned by
+## _test_read_door, which reads the same container through the doors directly.
+func _test_container_reads() -> void:
+	print("-- a .sfd container element read by a downstream node --")
+	var project = _import_localized("container")
+	if project == null:
+		return
+
+	var doors := Doors.new()
+	doors.doc = _load_fixture(FIXTURE_DIR.path_join("data-assets.json"))
+	var script = Graph.build("probe/Container.sfe", {
+		"0": Graph.start(),
+		"D": Graph.dialogue("D"),
+		"P": Graph.pill("P", ITEM_BASE),
+		"GA": Graph.accessor("GA", doors.pins_from(doors.declaration_json("v-item-tags"), "v-item-tags")),
+		"GM": Graph.accessor("GM", doors.pins_from(doors.declaration_json("v-item-slots"), "v-item-slots")),
+		"GE": Graph.node("GE", Types.NodeType.GET_STRING_ARRAY_ELEMENT, "getStringArrayElement", {"value": 0}),
+		"GV": Graph.node("GV", Types.NodeType.GET_MAP_VALUE, "getMapValue",
+			{"keyType": "string", "valueType": "string", "key": "hand"}),
+	}, [
+		Graph.exec("0", "D"),
+		Graph.pill_wire("P", "GA"), Graph.pill_wire("P", "GM"),
+		Graph.data_wire("GA", "string-array", "GE", Handles.IN_STRING_ARRAY),
+		Graph.map_wire("GM", "GV", "string", "string", "1"),
+	])
+	_manager.get_project().scripts[script.script_path] = script
+	var component := _make_component()
+	component.start_dialogue_with_script(script.script_path)
+	_check("[setup] the container probe graph is running", component._evaluator != null)
+
+	_check("the engine accepts fr", _manager.set_language("fr"))
+	var element: String = component._evaluator.evaluate_string_from_node("GE", "")
+	_check("an array element read downstream still answers the translation (got '%s')" % element,
+		element == "Arme")
+	var entry: String = component._evaluator.evaluate_string_from_node("GV", "")
+	_check("and so does a map entry value (got '%s')" % entry, entry == "Main directrice")
 
 	_teardown(component)
 
