@@ -517,7 +517,9 @@ static func find_declaration_by_name(seed: Dictionary, asset_id: String, name: S
 ## The reference's categories-claim-their-slot rule has nothing to claim here: the importer
 ## drops `category` rows before the seed exists (see _parse_data_asset_variable's contract
 ## sanction), so this engine's resolver never sees one — and the list agrees with the resolver,
-## which is the point.
+## which is the point. The consequence is real but pre-existing and sanctioned: a descendant
+## re-declaring an ancestor category's id WOULD list (and resolve) here where the editor hides
+## it behind the claimed slot — the same divergence the accessors already carry.
 ##
 ## EVERY degraded path answers an EMPTY list: an empty or unknown asset id walks no levels, and
 ## an empty seed (a context never handed a store) is just the unknown-asset case.
@@ -544,7 +546,10 @@ static func variable_names(seed: Dictionary, asset_id: String) -> Array[String]:
 			claimed_ids[declaration_id] = true
 			# Type-checked, not str()-coerced: the importer stores names as Strings, and
 			# str() on an arbitrary hand-assembled value is exactly the 4.6.1 divergence
-			# class the parity notes warn about.
+			# class the parity notes warn about. DELIBERATELY STRICTER than the reference,
+			# not just safer: its variableNames does String(decl.name) and would list a
+			# coerced "42" where this lists nothing - unreachable through the real pipeline
+			# in both engines (the schema types names as strings), so not a parity bug.
 			var name = declaration.get("name", "")
 			if not name is String or name.is_empty() or claimed_names.has(name):
 				continue
