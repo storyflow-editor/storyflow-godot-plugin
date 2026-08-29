@@ -56,6 +56,7 @@ func _initialize() -> void:
 	_test_overlay_guards()
 	_test_chain_guards()
 	_test_seed_build_drops_and_typing()
+	_test_variable_names()
 	_test_read_bound()
 	_test_decl_matches()
 
@@ -326,6 +327,88 @@ func _test_seed_build_drops_and_typing() -> void:
 	_check("find_declaration_by_name answers nothing for an unknown name", StoreScript.find_declaration_by_name(seed, "child", "nope").is_empty())
 	_check("is_declared_on_chain sees an inherited id", StoreScript.is_declared_on_chain(seed, "child", "kv"))
 	_check("is_declared_on_chain refuses an undeclared id", not StoreScript.is_declared_on_chain(seed, "child", "ghost"))
+
+
+# =============================================================================
+# Variable names (the Get Variable Names list, contract 11.1)
+# =============================================================================
+
+## The declaration-walk list behind getDataAssetVariableNames: chain ROOT-first, each level's
+## variables in file order, first-wins by id (root-most), deduped by NAME at the root-most
+## position, empty names skipped, DECLARATIONS ONLY.
+##
+## THE ORPHAN-OVERRIDE PIN is the load-bearing case here. Every override of a DECLARED id is
+## VACUOUS against a visits-overrides bug — the declaration claims the id first, so the
+## override is skipped either way, and the golden seed's overrides (including the root's own)
+## prove nothing on their own. Only an override whose id NOTHING on the chain declares can tell
+## "never visits overrides" apart from "visits them harmlessly". build_seed drops orphans at
+## import, so the orphan is INJECTED into the built seed directly — the same plain-Dictionary
+## posture as the bare_seed above: the walk must not depend on a repair that happens elsewhere.
+func _test_variable_names() -> void:
+	print("-- variable names (the declaration-walk list) --")
+	var seed := _seed_from_fixture()
+
+	var expected_base: Array = ["alive", "hp", "speed", "title", "rank", "portrait", "owner", "roar", "tags", "loot", "secret"]
+	var base_names := StoreScript.variable_names(seed, BASE)
+	_check("the base lists its 11 declarations in file order (got %s)" % str(base_names),
+		_names_equal(base_names, expected_base))
+	_check("the category row is not among them", not base_names.has("lore"))
+
+	var expected_child := expected_base.duplicate()
+	expected_child.append("armor")
+	_check("a child lists the ROOT's names first, its own additions after",
+		_names_equal(StoreScript.variable_names(seed, CHILD), expected_child))
+	# The grandchild re-declares title under the SAME id the base owns: root-most wins the
+	# slot, so the grandchild's list is the child's, with title still at the base's position.
+	_check("a same-ID re-declaration on a descendant adds nothing (root-most wins)",
+		_names_equal(StoreScript.variable_names(seed, GRANDCHILD), expected_child))
+
+	# Same display NAME under two DIFFERENT ids across levels, plus an empty name. The by-name
+	# rule: stated once, at the root-most position — the only declaration a by-name getter can
+	# reach (find_declaration_by_name's root-most-wins).
+	var named := _seed_from_json({
+		"root": {"id": "root", "parent": null, "variables": [
+			{"id": "r1", "name": "Power", "type": "integer", "value": 1},
+			{"id": "r2", "name": "", "type": "string", "value": "unnamed"},
+			{"id": "r3", "name": "Aura", "type": "string", "value": "x"},
+		], "overrides": {}},
+		"leaf": {"id": "leaf", "parent": "root", "variables": [
+			{"id": "l1", "name": "Power", "type": "boolean", "value": true},
+			{"id": "l2", "name": "Grit", "type": "integer", "value": 2},
+		], "overrides": {}},
+	})
+	var leaf_names := StoreScript.variable_names(named, "leaf")
+	_check("two ids sharing one NAME state it once, at the root-most position (got %s)" % str(leaf_names),
+		_names_equal(leaf_names, ["Power", "Aura", "Grit"]))
+	_check("an empty-string name is skipped, not listed as a blank", not leaf_names.has(""))
+	_check("the root alone lists only its own names",
+		_names_equal(StoreScript.variable_names(named, "root"), ["Power", "Aura"]))
+
+	# THE ORPHAN: overrides whose ids nothing on the chain declares, one per level, injected
+	# straight into the built seed. The list must equal the no-overrides list EXACTLY — not
+	# merely lack some particular ghost string, because what a visits-overrides bug would
+	# append (the id? a looked-up name? the value?) is exactly what this test must not guess.
+	named["leaf"]["overrides"]["gh0st0000000000000000000000000001"] = VariantScript.from_int(9)
+	named["root"]["overrides"]["gh0st0000000000000000000000000002"] = VariantScript.from_string("Boo")
+	var with_orphans := StoreScript.variable_names(named, "leaf")
+	_check("an orphan override adds NO name at any level (got %s)" % str(with_orphans),
+		_names_equal(with_orphans, leaf_names))
+
+	# Every degraded path the node can meet answers an EMPTY list.
+	_check("an unknown asset answers an empty list", StoreScript.variable_names(seed, "da_nope").is_empty())
+	_check("an empty asset id answers an empty list", StoreScript.variable_names(seed, "").is_empty())
+	_check("an empty seed answers an empty list", StoreScript.variable_names({}, BASE).is_empty())
+
+
+## Element-wise, order-sensitive comparison, so a typed-vs-untyped Array equality nuance can
+## never quietly pass a wrong list.
+func _names_equal(names: Array, expected: Array) -> bool:
+	if names.size() != expected.size():
+		return false
+	for i in names.size():
+		if names[i] != expected[i]:
+			return false
+	return true
 
 
 # =============================================================================

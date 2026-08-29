@@ -491,6 +491,68 @@ static func find_declaration_by_name(seed: Dictionary, asset_id: String, name: S
 	return acc["declaration"]
 
 
+## The NAMES of every variable the asset's chain DECLARES — the Get Variable Names node's whole
+## answer (engine contract 11.1), mirroring the reference implementation's `variableNames` over
+## its `eachDeclaration` walk. Derived from THE SAME [method _walk_chain] every resolver door
+## uses — never a second walk that could disagree with what an accessor then resolves.
+##
+## ORDER is the editor's: chain ROOT-first, each level's variables in file order. The walk
+## visits LEAF -> ROOT, so the collected levels are iterated BACKWARDS — that reversal is the
+## only thing making the first-wins rule below mean root-most-wins.
+##
+## FIRST-WINS on the id: a descendant re-declaring an inherited id adds nothing, the same rule
+## [method find_declaration] follows by letting a later (root-er) hit overwrite an earlier one.
+##
+## DEDUPED BY NAME on top of the dedupe by id: two levels can declare the same display NAME
+## under different ids (nothing in the seed forbids it), and a by-name getter can only ever
+## reach one of them — [method find_declaration_by_name]'s root-most one — so the list states
+## it once, at the root-most position. Empty names are skipped, never listed as blanks.
+##
+## DECLARATIONS ONLY. `overrides` are never visited: an override re-states a value for a
+## variable the chain already declares, so it can neither add a name nor duplicate one. The
+## case that PROVES the rule is an ORPHAN override (an id nothing on the chain declares):
+## [method build_seed] drops those at import, but the seed is a plain Dictionary any caller can
+## assemble, and this walk must not depend on a repair that happens somewhere else.
+##
+## The reference's categories-claim-their-slot rule has nothing to claim here: the importer
+## drops `category` rows before the seed exists (see _parse_data_asset_variable's contract
+## sanction), so this engine's resolver never sees one — and the list agrees with the resolver,
+## which is the point.
+##
+## EVERY degraded path answers an EMPTY list: an empty or unknown asset id walks no levels, and
+## an empty seed (a context never handed a store) is just the unknown-asset case.
+static func variable_names(seed: Dictionary, asset_id: String) -> Array[String]:
+	var levels: Array = []
+	var collect := func(level: Dictionary) -> bool:
+		levels.append(level)
+		return true
+	_walk_chain(seed, asset_id, collect)
+
+	var names: Array[String] = []
+	var claimed_ids: Dictionary = {}
+	var claimed_names: Dictionary = {}
+	for i in range(levels.size() - 1, -1, -1):
+		var variables = levels[i].get("variables", [])
+		if not variables is Array:
+			continue
+		for declaration in variables:
+			if not declaration is Dictionary:
+				continue
+			var declaration_id := str(declaration.get("id", ""))
+			if claimed_ids.has(declaration_id):
+				continue
+			claimed_ids[declaration_id] = true
+			# Type-checked, not str()-coerced: the importer stores names as Strings, and
+			# str() on an arbitrary hand-assembled value is exactly the 4.6.1 divergence
+			# class the parity notes warn about.
+			var name = declaration.get("name", "")
+			if not name is String or name.is_empty() or claimed_names.has(name):
+				continue
+			claimed_names[name] = true
+			names.append(name)
+	return names
+
+
 ## True when any level of the asset's chain declares the id (what a write validates against).
 ## Unlike [method find_declaration] this stops at the FIRST hit — any declaration answers the
 ## question, and root-most-ness does not matter to a yes/no.

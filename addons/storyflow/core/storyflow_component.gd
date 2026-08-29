@@ -1968,6 +1968,7 @@ func _build_dispatch_table() -> void:
 	# they route exec straight through like every other Get. The Set is a flow node.
 	_node_handlers[NT.GET_DATA_ASSET] = logic_handler
 	_node_handlers[NT.GET_DATA_ASSET_VARIABLE] = logic_handler
+	_node_handlers[NT.GET_DATA_ASSET_VARIABLE_NAMES] = logic_handler
 	_node_handlers[NT.SET_DATA_ASSET_VARIABLE] = _handle_set_data_asset_var
 
 # =============================================================================

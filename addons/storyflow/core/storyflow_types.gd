@@ -225,6 +225,7 @@ enum NodeType {
 	GET_DATA_ASSET,
 	GET_DATA_ASSET_VARIABLE,
 	SET_DATA_ASSET_VARIABLE,
+	GET_DATA_ASSET_VARIABLE_NAMES,
 
 	UNKNOWN,
 }
@@ -476,6 +477,10 @@ static var _node_type_map: Dictionary = {
 	"getDataAsset": NodeType.GET_DATA_ASSET,
 	"getDataAssetVariable": NodeType.GET_DATA_ASSET_VARIABLE,
 	"setDataAssetVariable": NodeType.SET_DATA_ASSET_VARIABLE,
+	# Get Variable Names carries NO fields of its own at all (engine contract 11.1)
+	# — id, type, position only — so the wire into its dataAsset pin is its whole
+	# binding, and its output is the chain's declared NAMES as a string array.
+	"getDataAssetVariableNames": NodeType.GET_DATA_ASSET_VARIABLE_NAMES,
 }
 
 
@@ -608,6 +613,7 @@ static var _logic_node_types: Array[NodeType] = [
 	# asset and produces nothing at exec time; the accessor wired to it does the
 	# reading. (The .sfd Set is a flow node and lives in _set_node_types.)
 	NodeType.GET_DATA_ASSET, NodeType.GET_DATA_ASSET_VARIABLE,
+	NodeType.GET_DATA_ASSET_VARIABLE_NAMES,
 ]
 
 

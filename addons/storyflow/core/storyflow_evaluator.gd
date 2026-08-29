@@ -1250,6 +1250,21 @@ func _evaluate_array_input_generic(node_id: String, handle_suffix: String, expec
 			return []
 		return da_variant.get_array()
 
+	# Get Variable Names: the names the wired asset's chain DECLARES, as a string array
+	# (engine contract 11.1). The asset arrives over the wire exactly as it does for the two
+	# accessors above (the same single hop), and the list is the STORE's own declaration walk
+	# — never a second walk that could disagree with what an accessor then resolves. Every
+	# degraded path — an unwired pin, a dead ref, an unbound pill, an absent store — answers
+	# an EMPTY array SILENTLY: variable_names walks no levels for an id the seed does not
+	# carry, and the family's warn tokens belong to the bound accessors, not to this node.
+	if source_type == StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE_NAMES:
+		var declared_names := StoryFlowDataAssetStore.variable_names(
+			_context.data_asset_seed, _data_asset_id_from_wire(source_id))
+		var name_variants: Array = []
+		for declared_name in declared_names:
+			name_variants.append(StoryFlowVariant.from_string(declared_name))
+		return name_variants
+
 	# mapKeys / mapValues: pure ops that project a map into an array. Recomputed
 	# fresh on every pull — maps mutate in place, so a cached output would go
 	# stale (the HTML runtime recomputes these inline too). Keys are raw int/
@@ -2058,12 +2073,7 @@ func _resolve_data_asset_id(data: Dictionary, node_id: String) -> String:
 			push_warning("StoryFlow: Data Asset accessor has no variable binding: node %s" % node_id)
 		return ""
 
-	var asset_id := ""
-	var edge := _context.current_script.find_input_edge(node_id, StoryFlowHandles.IN_DATA_ASSET)
-	if not edge.is_empty():
-		var pill := _context.current_script.get_node(edge.get("source", ""))
-		if pill.get("type", StoryFlowTypes.NodeType.UNKNOWN) == StoryFlowTypes.NodeType.GET_DATA_ASSET:
-			asset_id = str(pill.get("data", {}).get("assetId", ""))
+	var asset_id := _data_asset_id_from_wire(node_id)
 	if asset_id.is_empty():
 		if _context.should_warn_data_asset(node_id, "unwired"):
 			push_warning("StoryFlow: Data Asset accessor has no Data Asset connected: node %s" % node_id)
@@ -2080,6 +2090,22 @@ func _resolve_data_asset_id(data: Dictionary, node_id: String) -> String:
 		return ""
 
 	return asset_id
+
+
+## The QUIET single hop up the dataAsset pin: the assetId of the getDataAsset pill wired into
+## [param node_id]'s dataAsset target pin, or "" when there is nothing usable upstream (no
+## edge / not a pill / an unbound pill). NO warnings here — [method _resolve_data_asset_id]
+## layers the accessor family's warn latch on top, while the Get Variable Names arm takes this
+## hop bare because its degraded paths are SILENT (contract 11.1: an empty array, no new
+## warning tokens — the ladder's tokens belong to the bound accessors).
+func _data_asset_id_from_wire(node_id: String) -> String:
+	var edge := _context.current_script.find_input_edge(node_id, StoryFlowHandles.IN_DATA_ASSET)
+	if edge.is_empty():
+		return ""
+	var pill := _context.current_script.get_node(edge.get("source", ""))
+	if pill.get("type", StoryFlowTypes.NodeType.UNKNOWN) != StoryFlowTypes.NodeType.GET_DATA_ASSET:
+		return ""
+	return str(pill.get("data", {}).get("assetId", ""))
 
 
 ## The two CHAIN-side rungs' warnings, latched the same way the graph-side ones are.

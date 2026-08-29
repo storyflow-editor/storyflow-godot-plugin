@@ -80,6 +80,12 @@ static func setter(id: String, data: Dictionary) -> Dictionary:
 	return node(id, Types.NodeType.SET_DATA_ASSET_VARIABLE, "setDataAssetVariable", data.duplicate())
 
 
+## A getDataAssetVariableNames. NO data of its own at all (engine contract 11.1) — the wire
+## into its dataAsset pin is its whole binding.
+static func names_node(id: String) -> Dictionary:
+	return node(id, Types.NodeType.GET_DATA_ASSET_VARIABLE_NAMES, "getDataAssetVariableNames", {})
+
+
 # =============================================================================
 # Variables
 # =============================================================================

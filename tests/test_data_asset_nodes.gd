@@ -33,6 +33,8 @@ extends SceneTree
 ## Or: powershell -File tests/run_tests.ps1 -GodotExe <path-to-godot>
 
 const ComponentScript := preload("res://addons/storyflow/core/storyflow_component.gd")
+const ContextScript := preload("res://addons/storyflow/core/storyflow_execution_context.gd")
+const EvaluatorScript := preload("res://addons/storyflow/core/storyflow_evaluator.gd")
 const Graph := preload("res://tests/data_asset_test_graph.gd")
 const Handles := preload("res://addons/storyflow/core/storyflow_handles.gd")
 const ImporterScript := preload("res://addons/storyflow/editor/storyflow_importer.gd")
@@ -75,6 +77,7 @@ func _initialize() -> void:
 	_test_array_ops()
 	_test_write_inside_a_loop_body()
 	_test_array_op_output_survives_a_later_write()
+	_test_get_variable_names()
 
 	if _failures == 0:
 		print("ALL %d CHECKS PASSED" % _checks)
@@ -625,6 +628,120 @@ func _test_array_op_output_survives_a_later_write() -> void:
 	_check("CONTROL: the same chain with a plain setBool copies both elements",
 		control_component.get_array_variable("echo").size() == 3)
 	_teardown(control_component)
+
+
+# =============================================================================
+# 8. Get Variable Names
+# =============================================================================
+
+## The getDataAssetVariableNames arm (engine contract 11.1): a pure node with NO fields of its
+## own whose dataAsset wire is its whole binding, answering the chain's declared NAMES as a
+## string array. The two bound reads run through the real exec chain (setStringArray
+## consumers); the degraded reads are pulled straight off the evaluator, and every one must
+## answer an EMPTY array with NO warning latched — the ladder's warn tokens belong to the
+## bound accessors, and this node adds none (11.1's no-new-tokens rule).
+##
+## The store-level list rules (root-first order, dedupe by id and by NAME, the orphan-override
+## pin, categories) live in tests/test_data_asset_store.gd's _test_variable_names; what this
+## file adds is the GRAPH: the wire hop, the array-evaluator arm, and the silence.
+func _test_get_variable_names() -> void:
+	print("-- get variable names --")
+	var script := Graph.build("scripts/Names.sfe", {
+		"0": Graph.start(),
+		"PG": Graph.pill("PG", GRANDCHILD),
+		"PB": Graph.pill("PB", BASE),
+		"PD": Graph.pill("PD", "da_nope"),
+		"PE": Graph.pill("PE", ""),
+		"NG": Graph.names_node("NG"),
+		"NB": Graph.names_node("NB"),
+		"NU": Graph.names_node("NU"),
+		"ND": Graph.names_node("ND"),
+		"NE": Graph.names_node("NE"),
+		"SG": Graph.node("SG", Types.NodeType.SET_STRING_ARRAY, "setStringArray", {"variable": "from_grandchild", "isGlobal": false}),
+		"SB": Graph.node("SB", Types.NodeType.SET_STRING_ARRAY, "setStringArray", {"variable": "from_base", "isGlobal": false}),
+		# Off the exec chain on purpose: the degraded pulls go through the evaluator directly,
+		# because a setStringArray of an empty array is indistinguishable from one that never ran.
+		"CU": Graph.node("CU", Types.NodeType.SET_STRING_ARRAY, "setStringArray", {"variable": "unused", "isGlobal": false}),
+		"CD": Graph.node("CD", Types.NodeType.SET_STRING_ARRAY, "setStringArray", {"variable": "unused", "isGlobal": false}),
+		"CE": Graph.node("CE", Types.NodeType.SET_STRING_ARRAY, "setStringArray", {"variable": "unused", "isGlobal": false}),
+		"D": Graph.dialogue("D"),
+	}, [
+		Graph.exec("0", "SG"), Graph.exec_flow("SG", "SB"), Graph.exec_flow("SB", "D"),
+		Graph.pill_wire("PG", "NG"), Graph.pill_wire("PB", "NB"),
+		# NU gets NO pill wire at all; ND's pill names an asset the seed does not carry; NE's
+		# pill is unbound.
+		Graph.pill_wire("PD", "ND"), Graph.pill_wire("PE", "NE"),
+		Graph.data_wire("NG", "string-array", "SG", Handles.IN_STRING_ARRAY),
+		Graph.data_wire("NB", "string-array", "SB", Handles.IN_STRING_ARRAY),
+		Graph.data_wire("NU", "string-array", "CU", Handles.IN_STRING_ARRAY),
+		Graph.data_wire("ND", "string-array", "CD", Handles.IN_STRING_ARRAY),
+		Graph.data_wire("NE", "string-array", "CE", Handles.IN_STRING_ARRAY),
+	], {
+		"from_grandchild": Graph.array_var("from_grandchild", "from_grandchild", Types.VariableType.STRING, []),
+		"from_base": Graph.array_var("from_base", "from_base", Types.VariableType.STRING, []),
+	})
+
+	_manager.reset_data_assets()
+	var component := _run(script)
+
+	# The base's 11 declarations in FILE ORDER — the category row ("lore") is not among them,
+	# and neither the base's own root-level override nor any descendant override adds a name.
+	var expected_base: Array = ["alive", "hp", "speed", "title", "rank", "portrait", "owner", "roar", "tags", "loot", "secret"]
+	var expected_grandchild := expected_base.duplicate()
+	expected_grandchild.append("armor")
+
+	var from_base := _string_values(component.get_array_variable("from_base"))
+	_check("a base-bound node lists the base's 11 names in file order (got %s)" % str(from_base),
+		from_base == expected_base)
+	var from_grandchild := _string_values(component.get_array_variable("from_grandchild"))
+	_check("a grandchild-bound node lists the ROOT's names first, the child's addition after",
+		from_grandchild == expected_grandchild)
+	_check("and its own same-id title re-declaration added nothing (root-most wins)",
+		from_grandchild.count("title") == 1)
+	_check("the category row is listed by neither", not from_base.has("lore") and not from_grandchild.has("lore"))
+
+	# The degraded family: every rung answers an EMPTY array, and NONE of them latches a
+	# warning — reading each twice would prove a latch, but there is nothing to latch.
+	var evaluator = component._evaluator
+	_check("an unwired dataAsset pin answers an empty array",
+		evaluator.evaluate_string_array_input("CU", Handles.IN_STRING_ARRAY).is_empty())
+	_check("a dead reference answers an empty array",
+		evaluator.evaluate_string_array_input("CD", Handles.IN_STRING_ARRAY).is_empty())
+	_check("an unbound pill answers an empty array",
+		evaluator.evaluate_string_array_input("CE", Handles.IN_STRING_ARRAY).is_empty())
+	_check("and no degraded read latched any warning (11.1: no new tokens)",
+		component._context.data_asset_warnings_emitted == 0
+		and component._context.warned_data_asset_nodes.is_empty())
+	_teardown(component)
+
+	# ABSENT STORE: a context never handed a seed carries {}, and the arm must answer an empty
+	# array off it rather than reaching for a store that is not there.
+	var bare_script := Graph.build("scripts/NamesBare.sfe", {
+		"0": Graph.start(),
+		"PB": Graph.pill("PB", BASE),
+		"N": Graph.names_node("N"),
+		"C": Graph.node("C", Types.NodeType.SET_STRING_ARRAY, "setStringArray", {"variable": "unused", "isGlobal": false}),
+	}, [
+		Graph.pill_wire("PB", "N"),
+		Graph.data_wire("N", "string-array", "C", Handles.IN_STRING_ARRAY),
+	])
+	var bare_context := ContextScript.new()
+	bare_context.current_script = bare_script
+	bare_context.data_asset_seed = {}
+	bare_context.data_asset_overlay = {}
+	var bare_evaluator := EvaluatorScript.new()
+	bare_evaluator.initialize(bare_context, {}, {}, "en", {})
+	_check("an absent store answers an empty array",
+		bare_evaluator.evaluate_string_array_input("C", Handles.IN_STRING_ARRAY).is_empty())
+	_check("silently", bare_context.data_asset_warnings_emitted == 0)
+
+
+## The get_string of every element, order preserved, for comparing against a plain string list.
+func _string_values(elements: Array) -> Array:
+	var out: Array = []
+	for element in elements:
+		out.append(element.get_string() if element is VariantScript else "")
+	return out
 
 
 # =============================================================================
