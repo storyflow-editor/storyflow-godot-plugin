@@ -496,9 +496,12 @@ static func find_declaration_by_name(seed: Dictionary, asset_id: String, name: S
 ## its `eachDeclaration` walk. Derived from THE SAME [method _walk_chain] every resolver door
 ## uses — never a second walk that could disagree with what an accessor then resolves.
 ##
-## ORDER is the editor's: chain ROOT-first, each level's variables in file order. The walk
-## visits LEAF -> ROOT, so the collected levels are iterated BACKWARDS — that reversal is the
-## only thing making the first-wins rule below mean root-most-wins.
+## ORDER is the editor's: chain ROOT-first, each level's variables in file order.
+## [method _walk_chain] visits LEAF -> ROOT, so the collected levels are iterated BACKWARDS
+## below — the arrangement IS the mechanism: both claim dictionaries are plain FIRST-WINS, and
+## only that reversal makes "first" mean ROOT-MOST — for ids the slot that survives, for names
+## the position that does. Reverse the loop and the length and the names stay right while
+## PRECEDENCE silently flips to leaf-most, which no size or membership assert can see.
 ##
 ## FIRST-WINS on the id: a descendant re-declaring an inherited id adds nothing, the same rule
 ## [method find_declaration] follows by letting a later (root-er) hit overwrite an earlier one.
@@ -540,6 +543,8 @@ static func variable_names(seed: Dictionary, asset_id: String) -> Array[String]:
 		for declaration in variables:
 			if not declaration is Dictionary:
 				continue
+			# str() here, beside the deliberately-uncoerced name below: the id is a claim
+			# KEY only, never listed - coercion is safe where nothing reaches the output.
 			var declaration_id := str(declaration.get("id", ""))
 			if claimed_ids.has(declaration_id):
 				continue
