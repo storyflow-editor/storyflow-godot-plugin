@@ -46,6 +46,7 @@ func _initialize() -> void:
 	_test_media_whose_build_path_matches_the_asset_directory()
 	_test_media_whose_build_path_differs_only_in_case()
 	_test_data_assets_are_imported_and_never_become_a_script()
+	_test_data_asset_media_reaches_the_project_pool()
 	_test_inline_import_carries_data_assets()
 	_test_localization_is_imported_and_never_becomes_a_script()
 	_test_localization_degraded_ladder()
@@ -761,6 +762,54 @@ func _localization_payload() -> Dictionary:
 
 ## A two-level .sfd family: a base with scalars and a category row, and a child overriding an
 ## inherited id. Small on purpose — the resolver's own goldens live in test_data_asset_store.gd.
+## A .sfd image value resolves to a real imported resource (contract 2.1's 2026-09-04 amendment).
+##
+## The value ships as an asset KEY and data-assets.json carries its own "assets" registry; this
+## pins the engine half of that bargain - the registry is imported into the PROJECT pool, which is
+## the shared final fallback both image and audio resolution end at. Before it, a .sfd image value
+## was a path to a file the import had never copied.
+func _test_data_asset_media_reaches_the_project_pool() -> void:
+	print("-- .sfd media into the project pool --")
+	var build := _temp("da_media/build")
+	var out := _temp("da_media/out")
+	# _write_build plants a real 2x2 png at this path and wires it as a SCRIPT asset; the .sfd
+	# registry below names the same file, which is what an export does when a script and a Data
+	# Asset both point at one image.
+	_write_build(build, "images/pic.png")
+
+	var payload := _data_assets_payload()
+	payload["dataAssets"]["base"]["variables"].append(
+		{"id": "icon", "name": "icon", "type": "image", "value": "asset_image_900"})
+	payload["assets"] = {"asset_image_900": {"id": "asset_image_900", "type": "image", "path": "images/pic.png"}}
+	_write_text(build.path_join("data-assets.json"), JSON.stringify(payload, "	"))
+
+	var project := ImporterScript.new().import_project(build, out)
+	_check("import with .sfd media returns a project", project != null)
+	if project == null:
+		return
+
+	# The value stays the KEY - the .sfd surface learns nothing about assets.
+	var icon_decl: Dictionary = {}
+	for decl in project.data_assets.get("base", {}).get("variables", []):
+		if str(decl.get("id", "")) == "icon":
+			icon_decl = decl
+	# The declaration's value is TYPED at import (StoryFlowDataAssetStore.type_value), so it is read
+	# through the variant rather than compared as a bare string.
+	var icon_value = icon_decl.get("value", null)
+	var icon_text: String = icon_value.get_string("") if icon_value != null and icon_value.has_method("get_string") else str(icon_value)
+	_check("the image value is the asset key, not a path (got '%s')" % icon_text,
+		icon_text == "asset_image_900")
+
+	# THE HALF THAT WAS BROKEN: the key has to resolve to something the build contains.
+	_check("the .sfd registry landed in the project pool",
+		project.resolved_assets.get("asset_image_900") is Resource)
+
+	# And it survives the re-sweep an exported game performs on every launch.
+	var reloaded := ImporterScript.new().load_project_local(out)
+	_check("and still resolves after the launch-time reload",
+		reloaded != null and reloaded.resolved_assets.get("asset_image_900") is Resource)
+
+
 func _data_assets_payload() -> Dictionary:
 	return {
 		"dataAssets": {

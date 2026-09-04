@@ -226,6 +226,16 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 				if project.global_strings.has(key):
 					push_warning("StoryFlow: Data Asset string key '%s' overwrites existing global string" % key)
 				project.global_strings[key] = data_asset_strings[key]
+		# .sfd media (contract §2.1's 2026-09-04 amendment): image and audio values ship as asset
+		# KEYS with their files beside them, so this artifact carries an "assets" registry of its
+		# own exactly as characters.json does above. Imported into the PROJECT pool - the shared
+		# final fallback for both image and audio resolution - which is what makes a key handed
+		# back by get_data_asset_string resolve to something the build actually contains.
+		# ABSENT for a pre-amendment export, and then .sfd media is a bare path again with no
+		# branch for it, like the strings table above.
+		if data_assets_json.has("assets"):
+			var data_asset_media := _parse_assets_dict(data_assets_json["assets"])
+			_import_media_assets(build_dir, output_dir, data_asset_media, project.resolved_assets)
 		project.data_assets = _parse_data_assets(data_assets_json.get("dataAssets", {}))
 
 	# ------------------------------------------------------------------
