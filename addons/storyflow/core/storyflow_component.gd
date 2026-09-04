@@ -1293,6 +1293,133 @@ func set_data_asset_enum(asset: String, variable_name: String, value: String) ->
 ##
 ## No type gate runs here, so the caller owns checking what came back; the variant's own type tag
 ## says what it is.
+## Replace a Data Asset's ARRAY variable with [param elements]. True when the write landed.
+##
+## The container half of the surface, which used to be read-only: every type could be READ (scalars
+## typed, arrays and maps through get_data_asset_variant) and only scalars could be written, so a
+## Data Asset holding a list was a list a game could not edit - the graph's Set node was the only
+## way in.
+##
+## TWO TYPED SETTERS, NOT ONE VARIANT SETTER, and that is the design rather than a detail. A
+## StoryFlowVariant cannot say whether it IS an array, so a variant setter could not tell "write an
+## empty array" from "the caller passed a scalar", and writing the second over an array declaration
+## leaves a value nothing can read - which is why V2 left the container half out rather than
+## half-building it. Here the shape is in the SIGNATURE, so there is nothing to infer.
+##
+## THE SHAPE GATE runs before anything is written: the declaration must be an array (never a map,
+## never a scalar) and every element must match its declared type. One mismatch refuses the WHOLE
+## write - a partial list is a shape no author declared. An EMPTY list is a legitimate write and
+## clears the variable.
+func set_data_asset_array(asset: String, variable_name: String, elements: Array) -> bool:
+	var mgr := get_manager()
+	if not mgr:
+		return false
+	var asset_id := _resolve_data_asset_id(asset)
+	if asset_id.is_empty():
+		return false
+	var declaration := _find_data_asset_declaration(asset, asset_id, variable_name)
+	if declaration.is_empty():
+		return false
+
+	var declared_type = declaration.get("type", StoryFlowTypes.VariableType.NONE)
+	if not bool(declaration.get("is_array", false)) or declared_type == StoryFlowTypes.VariableType.MAP:
+		_warn_data_asset_once(asset, variable_name, "notarray",
+			"StoryFlow: Data Asset '%s.%s' is not an array" % [asset, variable_name])
+		return false
+
+	var typed: Array = []
+	for element in elements:
+		if not (element is StoryFlowVariant) or not _element_type_matches(declared_type, element.type):
+			_warn_data_asset_once(asset, variable_name, "wrongelement",
+				"StoryFlow: an element offered to '%s.%s' does not match its declared type" % [asset, variable_name])
+			return false
+		typed.append(element)
+
+	var value := StoryFlowVariant.new()
+	value.set_array(typed)
+	# set_array infers `type` from the FIRST element and has nothing to infer from when the list is
+	# empty, so the DECLARED type is stamped after: an empty write must still land as an array of
+	# that type rather than as a type-less variant.
+	value.type = declared_type
+	return _commit_data_asset_container(asset, asset_id, variable_name, declaration, value)
+
+
+## Replace a Data Asset's MAP variable with these entries. The map twin of
+## [method set_data_asset_array] - see it for why the shape lives in the signature.
+##
+## The gate is one step wider: every KEY must match the declared key type and every VALUE the
+## declared value type. KEYS ARE RAW (a String or an int) because that is how this engine stores
+## them; only values are variants. Parallel arrays mirror the map getters' shape, and a length mismatch refuses
+## rather than truncating to the shorter, which would silently drop entries the caller listed. Entry
+## ORDER is the caller's and is preserved.
+func set_data_asset_map(asset: String, variable_name: String, keys: Array, values: Array) -> bool:
+	var mgr := get_manager()
+	if not mgr:
+		return false
+	var asset_id := _resolve_data_asset_id(asset)
+	if asset_id.is_empty():
+		return false
+	var declaration := _find_data_asset_declaration(asset, asset_id, variable_name)
+	if declaration.is_empty():
+		return false
+
+	if declaration.get("type", StoryFlowTypes.VariableType.NONE) != StoryFlowTypes.VariableType.MAP:
+		_warn_data_asset_once(asset, variable_name, "notmap",
+			"StoryFlow: Data Asset '%s.%s' is not a map" % [asset, variable_name])
+		return false
+
+	if keys.size() != values.size():
+		_warn_data_asset_once(asset, variable_name, "mapcount",
+			"StoryFlow: '%s.%s' was offered %d keys and %d values" % [asset, variable_name, keys.size(), values.size()])
+		return false
+
+	var key_type = declaration.get("key_type", StoryFlowTypes.VariableType.NONE)
+	var value_type = declaration.get("value_type", StoryFlowTypes.VariableType.NONE)
+	# Keys are RAW (a String or an int), because that is how this engine stores them; only values
+	# are variants. Checking a raw key against its declared type is therefore a GDScript type test.
+	var key_is_text: bool = key_type == StoryFlowTypes.VariableType.STRING 		or key_type == StoryFlowTypes.VariableType.ENUM
+	# A DICTIONARY keyed by the raw key with variant values - the shape this engine stores maps in
+	# (see _snapshot_map_entries), not an entry list. GDScript preserves insertion order, so the
+	# caller's order is the stored order.
+	var entries := {}
+	for i in keys.size():
+		var k = keys[i]
+		var v = values[i]
+		var key_ok: bool = (typeof(k) == TYPE_STRING) if key_is_text else (typeof(k) == TYPE_INT)
+		if not key_ok or not (v is StoryFlowVariant) or not _element_type_matches(value_type, v.type):
+			_warn_data_asset_once(asset, variable_name, "wrongentry",
+				"StoryFlow: an entry offered to '%s.%s' does not match its declared key/value types" % [asset, variable_name])
+			return false
+		entries[k] = v
+
+	var value := StoryFlowVariant.new()
+	value.set_map(entries)
+	return _commit_data_asset_container(asset, asset_id, variable_name, declaration, value)
+
+
+## The ELEMENT-level twin of the scalar gate's string-family tolerance: a value stored as a string
+## satisfies a string, image, audio or character declaration, because all four store the same way.
+## ENUM is excluded for the same reason the scalar gate excludes it - it carries its own type tag.
+func _element_type_matches(declared, offered) -> bool:
+	if offered == StoryFlowTypes.VariableType.STRING:
+		return declared == StoryFlowTypes.VariableType.STRING 			or declared == StoryFlowTypes.VariableType.IMAGE 			or declared == StoryFlowTypes.VariableType.AUDIO 			or declared == StoryFlowTypes.VariableType.CHARACTER
+	return declared == offered
+
+
+## The store write and cache clear the two container setters share - the tail of
+## _write_data_asset_scalar with the scalar gate already behind it.
+func _commit_data_asset_container(asset: String, asset_id: String, variable_name: String,
+		declaration: Dictionary, value: StoryFlowVariant) -> bool:
+	var mgr := get_manager()
+	if not StoryFlowDataAssetStore.try_set(mgr.get_data_asset_seed(),
+			mgr.get_data_asset_overlay(), asset_id, str(declaration.get("id", "")), value):
+		_warn_data_asset_once(asset, variable_name, "writerefused",
+			"StoryFlow: Data Asset write '%s.%s' was refused" % [asset, variable_name])
+		return false
+	_context.clear_boolean_memo()
+	return true
+
+
 ## Every variable name the asset's chain DECLARES, root-most ancestor first (contract §11.1).
 ##
 ## The accessors above all need a name the caller already knew. This is how a game learns the

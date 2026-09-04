@@ -69,6 +69,7 @@ func _initialize() -> void:
 	_test_string_literals()
 	_test_refusal_warnings_are_latched()
 	_test_variable_names_door()
+	_test_container_setters()
 	_test_ambiguous_display_name()
 
 	if _failures == 0:
@@ -595,3 +596,66 @@ func _test_variable_names_door() -> void:
 
 	# A category row is not in the resolvable surface, so it cannot appear in the list either.
 	_check("no category row rides the list", not by_id.has("lore"))
+
+
+# =============================================================================
+# 11. The container setters
+# =============================================================================
+
+## Writing a Data Asset's arrays and maps from a game, which used to be impossible: the surface was
+## read-any / write-scalars-only and the graph's Set node was the only way in.
+##
+## THE SHAPE GATE is what this pins, because it is the whole reason these are two typed setters
+## rather than one variant setter. A StoryFlowVariant cannot say whether it IS an array, so a
+## variant setter could not tell an empty-array write from a scalar passed by mistake - and writing
+## the second over an array declaration leaves a value nothing can read.
+##
+## The scalar case names a STRING declaration deliberately: an int-typed one is refused by the
+## element check instead, which would leave the shape gate unexercised.
+func _test_container_setters() -> void:
+	print("-- the container setters --")
+	_manager.reset_data_assets()
+
+	var elements := [StoryFlowVariant.from_string("alpha"), StoryFlowVariant.from_string("beta")]
+	_check("a matching array write lands", _host.set_data_asset_array(BASE, "tags", elements))
+	var read = _host.get_data_asset_variant(BASE, "tags")
+	_check("and reads back as an array", read != null)
+	if read != null:
+		var arr: Array = read.get_array()
+		_check("with both elements (got %d)" % arr.size(), arr.size() == 2)
+		if arr.size() == 2:
+			_check("in the order written", arr[1].get_string("") == "beta")
+
+	# An EMPTY write is legitimate and clears the list - the case a variant setter could not tell
+	# from a scalar.
+	_check("an empty array write lands", _host.set_data_asset_array(BASE, "tags", []))
+	var cleared = _host.get_data_asset_variant(BASE, "tags")
+	_check("and clears the list", cleared != null and cleared.get_array().size() == 0)
+
+	# THE GATE.
+	_check("an element of the wrong type refuses the write",
+		not _host.set_data_asset_array(BASE, "tags", [StoryFlowVariant.from_int(7)]))
+	_check("a SCALAR declaration refuses an array write even when the elements match its type",
+		not _host.set_data_asset_array(BASE, "title", elements))
+	_check("and the scalar it refused to clobber still reads as a scalar",
+		_host.get_data_asset_string(BASE, "title", "<none>") == "Grunt")
+	_check("a MAP declaration refuses an array write",
+		not _host.set_data_asset_array(BASE, "loot", elements))
+
+	# The map twin. Keys are RAW; only values are variants.
+	_check("a matching map write lands",
+		_host.set_data_asset_map(BASE, "loot", ["gold"], [StoryFlowVariant.from_int(5)]))
+	var map_read = _host.get_data_asset_variant(BASE, "loot")
+	_check("and reads back as a map", map_read != null)
+	if map_read != null:
+		var m: Dictionary = map_read.get_map()
+		_check("with one entry (got %d)" % m.size(), m.size() == 1)
+		if m.has("gold"):
+			_check("carrying the value", m["gold"].get_int() == 5)
+		else:
+			_check("carrying the key", false)
+
+	_check("mismatched key/value counts refuse rather than truncating",
+		not _host.set_data_asset_map(BASE, "loot", ["gold"], []))
+	_check("an ARRAY declaration refuses a map write",
+		not _host.set_data_asset_map(BASE, "tags", ["gold"], [StoryFlowVariant.from_int(5)]))
