@@ -9,6 +9,7 @@ const StoryFlowLocalization = preload("res://addons/storyflow/core/storyflow_loc
 const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
 const StoryFlowSaveData = preload("res://addons/storyflow/core/storyflow_save_data.gd")
 const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
+const StoryFlowDataAssetAccess = preload("res://addons/storyflow/core/storyflow_data_asset_access.gd")
 const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.gd")
 
 ## Emitted when the language MOVES, with the code it moved to. The one signal a game's own
@@ -636,3 +637,100 @@ func _initialize_from_project() -> void:
 	if _localization.active_language != language_on_entry:
 		language_changed.emit(_localization.active_language)
 
+
+# =============================================================================
+# Data Assets - the host surface (engine contract §4)
+# =============================================================================
+#
+# THE SAME LADDER THE COMPONENT USES, reached through the same shared access layer
+# (storyflow_data_asset_access.gd) so the two public doors cannot answer one question two ways -
+# the rule the engine contract states for mirrored surfaces.
+#
+# WHY THE MANAGER HAS THESE AT ALL: reading a Data Asset never needed a running dialogue, but it
+# did need a COMPONENT OBJECT, because the ladder lived on the component. A pause menu, an
+# inventory screen or a save-slot list had to stand one up just to read a data table. Unity's
+# plugin has mirrored the surface on its manager all along; this is the Godot half.
+#
+# NO BOOLEAN-MEMO CLEAR after a write, and that is the one deliberate difference from the
+# component's identical calls: the memo belongs to an execution context and the manager owns
+# none. A component with a live dialogue clears its own on its own writes; a manager write that
+# lands while a dialogue is parked reaches that dialogue's memo at its next rebuild, the same
+# asymmetry global-variable writes have always had.
+#
+# The PRE-LOCALIZATION fallback language is "en" here rather than a per-component export: this
+# surface has no scene node to carry one, and a localized project ignores it anyway.
+
+const _DATA_ASSET_STRING_TYPES := [
+	StoryFlowTypes.VariableType.STRING, StoryFlowTypes.VariableType.IMAGE,
+	StoryFlowTypes.VariableType.AUDIO, StoryFlowTypes.VariableType.CHARACTER,
+]
+
+
+func _da() -> StoryFlowDataAssetAccess:
+	return StoryFlowDataAssetAccess.new(self, "en")
+
+
+func get_data_asset_bool(asset: String, variable_name: String, default := false) -> bool:
+	var value := _da().read_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.BOOLEAN])
+	return default if value == null else value.get_bool(default)
+
+
+func set_data_asset_bool(asset: String, variable_name: String, value: bool) -> bool:
+	return _da().write_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.BOOLEAN], value)
+
+
+func get_data_asset_int(asset: String, variable_name: String, default := 0) -> int:
+	var value := _da().read_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.INTEGER])
+	return default if value == null else value.get_int(default)
+
+
+func set_data_asset_int(asset: String, variable_name: String, value: int) -> bool:
+	return _da().write_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.INTEGER], value)
+
+
+func get_data_asset_float(asset: String, variable_name: String, default := 0.0) -> float:
+	var value := _da().read_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.FLOAT])
+	return default if value == null else value.get_float(default)
+
+
+func set_data_asset_float(asset: String, variable_name: String, value: float) -> bool:
+	return _da().write_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.FLOAT], value)
+
+
+func get_data_asset_string(asset: String, variable_name: String, default := "") -> String:
+	var value := _da().read_data_asset_scalar(asset, variable_name, _DATA_ASSET_STRING_TYPES)
+	return default if value == null else value.get_string(default)
+
+
+func set_data_asset_string(asset: String, variable_name: String, value: String) -> bool:
+	return _da().write_data_asset_scalar(asset, variable_name, _DATA_ASSET_STRING_TYPES, value)
+
+
+func get_data_asset_enum(asset: String, variable_name: String, default := "") -> String:
+	var value := _da().read_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.ENUM])
+	return default if value == null else value.get_string(default)
+
+
+func set_data_asset_enum(asset: String, variable_name: String, value: String) -> bool:
+	return _da().write_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.ENUM], value)
+
+
+## Every variable name the asset's chain DECLARES, root-most first. The manager twin of the
+## component's door - see it for why a game should not walk `parent` itself.
+func get_data_asset_variable_names(asset: String) -> Array[String]:
+	var empty: Array[String] = []
+	var asset_id := _da().resolve_data_asset_id(asset)
+	if asset_id.is_empty():
+		return empty
+	return StoryFlowDataAssetStore.variable_names(get_data_asset_seed(), asset_id)
+
+
+## Replace an ARRAY variable's elements. The manager twin of the component's setter - see it for
+## why the shape is in the signature rather than in a variant.
+func set_data_asset_array(asset: String, variable_name: String, elements: Array) -> bool:
+	return _da().set_array(asset, variable_name, elements)
+
+
+## Replace a MAP variable's entries, with RAW keys. The manager twin of the component's setter.
+func set_data_asset_map(asset: String, variable_name: String, keys: Array, values: Array) -> bool:
+	return _da().set_map(asset, variable_name, keys, values)

@@ -70,6 +70,7 @@ func _initialize() -> void:
 	_test_refusal_warnings_are_latched()
 	_test_variable_names_door()
 	_test_container_setters()
+	_test_manager_mirror()
 	_test_ambiguous_display_name()
 
 	if _failures == 0:
@@ -659,3 +660,50 @@ func _test_container_setters() -> void:
 		not _host.set_data_asset_map(BASE, "loot", ["gold"], []))
 	_check("an ARRAY declaration refuses a map write",
 		not _host.set_data_asset_map(BASE, "tags", ["gold"], [StoryFlowVariant.from_int(5)]))
+
+
+# =============================================================================
+# 12. The manager mirror
+# =============================================================================
+
+## The manager answers the same .sfd questions as the component, through the same shared ladder.
+##
+## Reading a Data Asset never needed a running dialogue, but it did need a COMPONENT OBJECT,
+## because the ladder lived on the component - so a pause menu or a save-slot list had to stand one
+## up just to read a data table. The ladder moved to storyflow_data_asset_access.gd and both doors
+## are thin now.
+##
+## WHAT THIS PINS IS AGREEMENT, not the ladder itself (the 100-odd checks above already drive that
+## through the component): every answer is compared against the component's for the same input, so
+## a future edit to one surface cannot quietly make them disagree.
+func _test_manager_mirror() -> void:
+	print("-- the manager mirror --")
+	_manager.reset_data_assets()
+
+	_check("int agrees", _manager.get_data_asset_int(BASE, "hp") == _host.get_data_asset_int(BASE, "hp"))
+	_check("bool agrees", _manager.get_data_asset_bool(CHILD, "alive") == _host.get_data_asset_bool(CHILD, "alive"))
+	_check("float agrees", _manager.get_data_asset_float(BASE, "speed") == _host.get_data_asset_float(BASE, "speed"))
+	_check("string agrees", _manager.get_data_asset_string(BASE, "title") == _host.get_data_asset_string(BASE, "title"))
+	_check("enum agrees", _manager.get_data_asset_enum(CHILD, "rank") == _host.get_data_asset_enum(CHILD, "rank"))
+	_check("the names door agrees",
+		_manager.get_data_asset_variable_names(BASE) == _host.get_data_asset_variable_names(BASE))
+
+	# Addressing by display NAME reaches the same asset from either door.
+	_check("a display name resolves the same",
+		_manager.get_data_asset_int("CreatureBase", "hp") == _host.get_data_asset_int("CreatureBase", "hp"))
+
+	# A manager WRITE lands in the same overlay the component reads - one store, two doors.
+	_check("a manager write lands", _manager.set_data_asset_int(CHILD, "hp", 42))
+	_check("and the component reads it back", _host.get_data_asset_int(CHILD, "hp") == 42)
+	_check("a component write lands", _host.set_data_asset_int(CHILD, "hp", 7))
+	_check("and the manager reads it back", _manager.get_data_asset_int(CHILD, "hp") == 7)
+
+	# The gates travel with the ladder rather than being re-implemented per surface.
+	_check("the manager refuses an unknown asset the same way",
+		_manager.get_data_asset_int("da_nope", "hp", -7) == -7)
+	_check("the manager refuses a mistyped read the same way",
+		_manager.get_data_asset_int(BASE, "speed", -7) == -7)
+	_check("the manager refuses an array write over a scalar",
+		not _manager.set_data_asset_array(BASE, "title", [StoryFlowVariant.from_string("x")]))
+
+	_manager.reset_data_assets()
