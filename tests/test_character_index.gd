@@ -156,8 +156,15 @@ func _test_ladder_rungs() -> void:
 		{"label": "a literal empty object is refused", "text": "{}"},
 		{"label": "no characters object is refused",
 			"text": JSON.stringify({"schemaVersion": "1"})},
+		# A NUMERIC version is refused on EVERY Godot build. JSON parses it to a float, and what a
+		# whole-valued float prints is version-dependent (4.3 renders 1.0 as "1", 4.6 as "1.0"), so
+		# the old str()-gated check accepted this file on one Godot and skipped the id bridge on
+		# another. The gate type-checks now, so this rung answers the same everywhere - which is
+		# the whole point of the rung.
+		{"label": "a numeric schemaVersion is refused (version-independently)",
+			"text": JSON.stringify({"schemaVersion": 1, "characters": {FX.ALICE_ID: FX.ALICE_KEY}})},
 	]
-	_check("ladder fixture drives 8 rungs", rungs.size() == 8)
+	_check("ladder fixture drives 9 rungs", rungs.size() == 9)
 	for i in rungs.size():
 		var rung: Dictionary = rungs[i]
 		var project = _import_decoy_build("ladder_%d" % i, rung["text"])

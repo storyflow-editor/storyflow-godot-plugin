@@ -1029,12 +1029,21 @@ func _parse_character_index(index_json: Dictionary) -> Dictionary:
 		push_warning("StoryFlow: character-index.json is unreadable or empty - the character id bridge was skipped; characters keep resolving by path")
 		return {}
 
-	if not index_json.has("schemaVersion") or str(index_json["schemaVersion"]) != "1":
+	# TYPE-CHECKED, never str()-gated - the same rule the localization reader carries since
+	# de0ed70e, and the last reader in this plugin that still branched on a formatter's output.
+	# The schema version is a STRING in the format ("1"), but a hand-edited numeric parses to a
+	# FLOAT whose printed form is Godot-version-dependent: 4.3 renders 1.0 as "1" and 4.6 as
+	# "1.0", so the old str() gate ACCEPTED that file on one Godot and silently skipped the id
+	# bridge on another. Requiring a genuine String removes the engine from the decision. It also
+	# gives up the numeric tolerance the old comment claimed from Unity, deliberately: matching
+	# Unreal's refusal is worth more than matching Unity's leniency when the third option is
+	# behaving differently per Godot build. The str() in the MESSAGE below is display-only and
+	# nothing branches on it.
+	var declared_version = index_json.get("schemaVersion")
+	if not (declared_version is String) or declared_version != "1":
 		# Absent and present-but-empty read differently in the warn - <missing> vs '' -
-		# the same distinction both sibling plugins print (the Unreal spelling). str()
-		# first, so a numeric 1 is accepted as "1" - the Unity reader's tolerance
-		# (Unreal's typed field getter refuses it).
-		var shown: String = str(index_json["schemaVersion"]) if index_json.has("schemaVersion") else "<missing>"
+		# the same distinction both sibling plugins print (the Unreal spelling).
+		var shown: String = str(declared_version) if index_json.has("schemaVersion") else "<missing>"
 		push_warning("StoryFlow: character-index.json has an unknown schemaVersion ('%s'; this plugin reads '1') - the character id bridge was skipped; characters keep resolving by path" % shown)
 		return {}
 
