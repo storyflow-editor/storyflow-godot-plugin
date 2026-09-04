@@ -661,6 +661,25 @@ func _test_container_setters() -> void:
 	_check("an ARRAY declaration refuses a map write",
 		not _host.set_data_asset_map(BASE, "tags", ["gold"], [StoryFlowVariant.from_int(5)]))
 
+	# THE STORAGE TAG. This engine flattens image/audio/character to STRING storage and the
+	# importer stamps container variants with that flattened tag; try_set trusts the tag as-is.
+	# The seed has no image-declared ARRAY, so one is injected - the same seed surgery the
+	# ambiguous-name case below performs - and the write must land STRING-tagged, exactly as an
+	# imported one would, not IMAGE-tagged.
+	var seed: Dictionary = _manager.get_data_asset_seed()
+	var base_def: Dictionary = seed[BASE]
+	var injected := {"id": "v-icons-injected", "name": "icons", "type": StoryFlowTypes.VariableType.IMAGE,
+		"is_array": true, "value": StoryFlowVariant.new()}
+	base_def["variables"].append(injected)
+	_check("an image-declared array write lands",
+		_host.set_data_asset_array(BASE, "icons", [StoryFlowVariant.from_string("a.png")]))
+	var stored = _manager.get_data_asset_overlay().get(BASE, {}).get("v-icons-injected")
+	_check("and the stored container carries the STORAGE tag (STRING), matching an imported one",
+		stored != null and stored.type == StoryFlowTypes.VariableType.STRING)
+	_check("never the declared IMAGE tag",
+		stored == null or stored.type != StoryFlowTypes.VariableType.IMAGE)
+	base_def["variables"].erase(injected)
+
 
 # =============================================================================
 # 12. The manager mirror

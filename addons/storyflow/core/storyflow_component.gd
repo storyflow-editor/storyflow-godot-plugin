@@ -924,7 +924,9 @@ func _da() -> StoryFlowDataAssetAccess:
 ## option gated through andBool(accessor, true) keeps answering the pre-write value until this runs.
 ## It stays on this surface because the access layer owns no execution context.
 func _da_written(ok: bool) -> bool:
-	if ok:
+	# _context is created in _ready, so a component that was never added to the tree has none -
+	# and a host write from such a component has no dialogue memo to clear anyway.
+	if ok and _context != null:
 		_context.clear_boolean_memo()
 	return ok
 

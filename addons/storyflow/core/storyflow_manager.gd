@@ -657,8 +657,12 @@ func _initialize_from_project() -> void:
 # lands while a dialogue is parked reaches that dialogue's memo at its next rebuild, the same
 # asymmetry global-variable writes have always had.
 #
-# The PRE-LOCALIZATION fallback language is "en" here rather than a per-component export: this
-# surface has no scene node to carry one, and a localized project ignores it anyway.
+# THE PRE-LOCALIZATION FALLBACK is the project's SOURCE language, which is what a sidecar-less
+# project's strings are keyed by; a localized project ignores it (language_for answers the active
+# language then). A component passes its own `language_code` export here instead, so on a
+# pre-localization project the two doors agree exactly when that export is the default - an
+# author who set a component's export to something else on such a project has two components
+# disagreeing with each other already, and this surface sides with the project.
 
 const _DATA_ASSET_STRING_TYPES := [
 	StoryFlowTypes.VariableType.STRING, StoryFlowTypes.VariableType.IMAGE,
@@ -667,7 +671,8 @@ const _DATA_ASSET_STRING_TYPES := [
 
 
 func _da() -> StoryFlowDataAssetAccess:
-	return StoryFlowDataAssetAccess.new(self, "en")
+	var fallback: String = _localization.source_language if _localization != null and not _localization.source_language.is_empty() else "en"
+	return StoryFlowDataAssetAccess.new(self, fallback)
 
 
 func get_data_asset_bool(asset: String, variable_name: String, default := false) -> bool:

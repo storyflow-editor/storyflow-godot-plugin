@@ -432,9 +432,12 @@ func set_array(asset: String, variable_name: String, elements: Array) -> bool:
 	var value := StoryFlowVariant.new()
 	value.set_array(typed)
 	# set_array infers `type` from the FIRST element and has nothing to infer from when the list is
-	# empty, so the DECLARED type is stamped after: an empty write must still land as an array of
-	# that type rather than as a type-less variant.
-	value.type = declared_type
+	# empty, so the type is stamped after - and it is the STORAGE type, not the declared one: this
+	# engine flattens image, audio and character to STRING storage (StoryFlowDataAssetStore.
+	# storage_type), the importer stamps container variants with that flattened tag, and try_set
+	# trusts the tag as-is. Stamping the declared type landed an IMAGE-tagged container in the
+	# overlay where every importer-built one is STRING-tagged.
+	value.type = StoryFlowDataAssetStore.storage_type(declared_type)
 	return commit_data_asset_container(asset, asset_id, variable_name, declaration, value)
 
 
