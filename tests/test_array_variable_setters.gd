@@ -29,6 +29,7 @@ func _initialize() -> void:
 	_run_enum_array_tests()
 	_run_asset_array_tests()
 	_run_missing_variable_test()
+	_run_typed_getter_tests()
 
 	if _failures == 0:
 		print("ALL %d CHECKS PASSED" % _checks)
@@ -143,3 +144,56 @@ func _run_missing_variable_test() -> void:
 	_component.set_string_array_variable("Nope", ["x"])
 	_check("missing: no variable created", _manager._global_variables.size() == count_before)
 	_check("missing: no 'Nope' entry", not _manager._global_variables.has("Nope"))
+
+
+## The typed GETTERS, which mirror the typed setters above (design 2026-09-04). Every setter had
+## a native-typed signature and every read came back as variants, so this half of the round trip
+## was hand-unpacking. The gate is the part worth testing: a wrong-typed or non-array variable
+## answers EMPTY rather than coercing.
+func _run_typed_getter_tests() -> void:
+	# A scalar, so the not-an-array arm has something to refuse.
+	_manager._global_variables["var_scalar"] = {
+		"id": "var_scalar",
+		"name": "Health",
+		"type": StoryFlowTypes.VariableType.INTEGER,
+		"value": StoryFlowVariant.new(),
+		"is_array": false,
+		"enum_values": [],
+	}
+
+	# ROUND TRIP, once per type: write native, read native.
+	_component.set_bool_array_variable("Flags", [true, false, true])
+	var flags := _component.get_bool_array_variable("Flags")
+	_check("typed get: bool round trip size", flags.size() == 3)
+	if flags.size() == 3:
+		_check("typed get: bool values survive", flags[0] == true and flags[1] == false)
+
+	_component.set_int_array_variable("Scores", [10, 20, 30])
+	var scores := _component.get_int_array_variable("Scores")
+	_check("typed get: int round trip", scores.size() == 3 and scores[2] == 30)
+
+	_component.set_float_array_variable("Weights", [0.5, 2.25])
+	var weights := _component.get_float_array_variable("Weights")
+	_check("typed get: float round trip", weights.size() == 2 and is_equal_approx(weights[1], 2.25))
+
+	_component.set_string_array_variable("Inventory", ["sword", "axe"])
+	var inv := _component.get_string_array_variable("Inventory")
+	_check("typed get: string round trip", inv.size() == 2 and inv[1] == "axe")
+
+	_component.set_enum_array_variable("Moods", ["happy", "sad"])
+	var moods := _component.get_enum_array_variable("Moods")
+	_check("typed get: enum round trip", moods.size() == 2 and moods[0] == "happy")
+
+	_component.set_image_array_variable("Gallery", ["asset_image_1", "asset_image_2"])
+	var gallery := _component.get_image_array_variable("Gallery")
+	_check("typed get: image round trip", gallery.size() == 2 and gallery[1] == "asset_image_2")
+
+	# THE GATE. Each of these pushes its own warning and answers empty.
+	_check("typed get: a bool array is not a string array", _component.get_string_array_variable("Flags").is_empty())
+	_check("typed get: a string array is not an int array", _component.get_int_array_variable("Inventory").is_empty())
+	_check("typed get: an image array is not an enum array", _component.get_enum_array_variable("Gallery").is_empty())
+	_check("typed get: a scalar is not an array", _component.get_int_array_variable("Health").is_empty())
+	_check("typed get: a missing variable is empty", _component.get_bool_array_variable("Nope").is_empty())
+
+	# The gate refuses; it must never mutate what it refused.
+	_check("typed get: the refused bool array is intact", _stored_array("var_b").size() == 3)

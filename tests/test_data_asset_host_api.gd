@@ -68,6 +68,7 @@ func _initialize() -> void:
 	_test_host_write_mid_chain()
 	_test_string_literals()
 	_test_refusal_warnings_are_latched()
+	_test_variable_names_door()
 	_test_ambiguous_display_name()
 
 	if _failures == 0:
@@ -562,3 +563,35 @@ func _load_fixture(file_name: String) -> Dictionary:
 	var parsed = JSON.parse_string(file.get_as_text())
 	file.close()
 	return parsed if parsed is Dictionary else {}
+
+
+# =============================================================================
+# 10. The variable-names door
+# =============================================================================
+
+## The public enumeration accessor (design 2026-09-04). The WALK is pinned in
+## tests/test_data_asset_store.gd; what is specific to this surface is that the door reaches the
+## same walk through this file's addressing rules, so a game never re-implements the chain.
+func _test_variable_names_door() -> void:
+	print("-- the variable-names door --")
+	_manager.reset_data_assets()
+
+	var by_id: Array = _host.get_data_asset_variable_names(BASE)
+	var by_name: Array = _host.get_data_asset_variable_names("CreatureBase")
+	_check("the door answers the base's declarations (got %s)" % str(by_id), by_id.size() == 11)
+	_check("addressing by display NAME answers identically", by_name == by_id)
+
+	# Root-most FIRST, and an override adds no name: the child declares nothing new, it only
+	# shadows values, so its list is its ancestor's plus its own declarations - never shorter.
+	var child: Array = _host.get_data_asset_variable_names("Goblin")
+	_check("a child's list still opens with the root's first declaration",
+		child.size() > 0 and by_id.size() > 0 and child[0] == by_id[0])
+	_check("a child never loses an inherited name", child.size() >= by_id.size())
+
+	# Every degraded address answers EMPTY rather than throwing or guessing.
+	_check("an unknown id is empty", _host.get_data_asset_variable_names("da_nope").is_empty())
+	_check("an unknown display name is empty", _host.get_data_asset_variable_names("NotAnAsset").is_empty())
+	_check("an empty asset string is empty", _host.get_data_asset_variable_names("").is_empty())
+
+	# A category row is not in the resolvable surface, so it cannot appear in the list either.
+	_check("no category row rides the list", not by_id.has("lore"))

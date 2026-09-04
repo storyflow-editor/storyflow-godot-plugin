@@ -1293,6 +1293,29 @@ func set_data_asset_enum(asset: String, variable_name: String, value: String) ->
 ##
 ## No type gate runs here, so the caller owns checking what came back; the variant's own type tag
 ## says what it is.
+## Every variable name the asset's chain DECLARES, root-most ancestor first (contract §11.1).
+##
+## The accessors above all need a name the caller already knew. This is how a game learns the
+## names - an inventory row per variable, a debug readout, a data-driven UI - and it is the SAME
+## answer the Get Variable Names graph node gives, because both forward to
+## StoryFlowDataAssetStore.variable_names, which owns every rule: root-first order, declarations
+## only (an override shadows a name, it never adds one), dedupe by id then by name.
+##
+## Walking `parent` yourself is the thing this exists to prevent: that walk re-implements those
+## rules, and a re-implementation that disagrees produces a plausible list nobody notices is
+## wrong. [param asset] takes an id or a display name, like every accessor here. Empty when the
+## asset cannot be resolved, there is no manager, or the seed does not carry it.
+func get_data_asset_variable_names(asset: String) -> Array[String]:
+	var empty: Array[String] = []
+	var mgr := get_manager()
+	if not mgr:
+		return empty
+	var asset_id := _resolve_data_asset_id(asset)
+	if asset_id.is_empty():
+		return empty
+	return StoryFlowDataAssetStore.variable_names(mgr.get_data_asset_seed(), asset_id)
+
+
 func get_data_asset_variant(asset: String, variable_name: String) -> StoryFlowVariant:
 	var mgr := get_manager()
 	if not mgr:
@@ -1397,6 +1420,102 @@ func get_array_variable(variable_name: String) -> Array[StoryFlowVariant]:
 		elif copy.type == StoryFlowTypes.VariableType.ENUM:
 			copy.set_enum(_resolve_string(copy.get_string("")))
 		out.append(copy)
+	return out
+
+
+## THE GATE THE TYPED ARRAY GETTERS SHARE: [method get_array_variable]'s list, but only for a
+## variable whose DECLARED element type is one this caller asked for.
+##
+## The typed getters exist because every typed SETTER already did, so a game could write an
+## Array[bool] and then had to read it back as variants and unpack by hand. Unpacking is the
+## whole job, so the gate is what makes them more than a loop: a missing, non-array or
+## wrong-typed variable warns and answers empty rather than coercing, matching the Unreal
+## plugin's Get*ArrayVariable contract.
+##
+## The gate runs BEFORE [method get_array_variable] rather than filtering after it, so the
+## not-an-array warning is emitted once, here, and never twice for one call.
+func _typed_array_elements(variable_name: String, expected: Array, type_label: String) -> Array[StoryFlowVariant]:
+	var empty: Array[StoryFlowVariant] = []
+	var result := _find_variable_by_display_name(variable_name)
+	if result.is_empty():
+		push_warning("StoryFlow: Variable '%s' not found" % variable_name)
+		return empty
+	var v: Dictionary = result["variable"]
+	if not v.get("is_array", false):
+		push_warning("StoryFlow: Variable '%s' is not an array" % variable_name)
+		return empty
+	if not expected.has(v.get("type", StoryFlowTypes.VariableType.NONE)):
+		push_warning("StoryFlow: Variable '%s' is not a %s array" % [variable_name, type_label])
+		return empty
+	return get_array_variable(variable_name)
+
+
+## Read a boolean array variable by display name as a native typed array.
+##
+## Mirrors [method get_array_variable]'s scoping (locals during dialogue, then globals) but
+## unpacks each element, so a caller never handles a variant. A missing, non-array or
+## wrong-typed variable warns and returns an empty array. Counterpart to
+## [method set_bool_array_variable].
+func get_bool_array_variable(variable_name: String) -> Array[bool]:
+	var out: Array[bool] = []
+	for elem in _typed_array_elements(variable_name, [StoryFlowTypes.VariableType.BOOLEAN], "boolean"):
+		out.append(elem.get_bool())
+	return out
+
+
+## Read an integer array variable as a native typed array. See
+## [method get_bool_array_variable] for the shared rules.
+func get_int_array_variable(variable_name: String) -> Array[int]:
+	var out: Array[int] = []
+	for elem in _typed_array_elements(variable_name, [StoryFlowTypes.VariableType.INTEGER], "integer"):
+		out.append(elem.get_int())
+	return out
+
+
+## Read a float array variable as a native typed array. See
+## [method get_bool_array_variable] for the shared rules.
+func get_float_array_variable(variable_name: String) -> Array[float]:
+	var out: Array[float] = []
+	for elem in _typed_array_elements(variable_name, [StoryFlowTypes.VariableType.FLOAT], "float"):
+		out.append(elem.get_float())
+	return out
+
+
+## Read a string array variable as a native typed array. Elements are resolved through the
+## string table, so callers receive LOCALIZED text — [method get_array_variable] does that
+## resolution and this inherits it. See [method get_bool_array_variable] for the shared rules.
+func get_string_array_variable(variable_name: String) -> Array[String]:
+	var out: Array[String] = []
+	for elem in _typed_array_elements(variable_name, [StoryFlowTypes.VariableType.STRING], "string"):
+		out.append(elem.get_string(""))
+	return out
+
+
+## Read an enum array variable as native option strings, resolved through the string table like
+## the string array above. See [method get_bool_array_variable] for the shared rules.
+func get_enum_array_variable(variable_name: String) -> Array[String]:
+	var out: Array[String] = []
+	for elem in _typed_array_elements(variable_name, [StoryFlowTypes.VariableType.ENUM], "enum"):
+		out.append(elem.get_string(""))
+	return out
+
+
+## Read an image array variable as native asset-key strings. Keys come back RAW, never string
+## table resolved, matching how image elements are stored. See [method get_bool_array_variable]
+## for the shared rules.
+func get_image_array_variable(variable_name: String) -> Array[String]:
+	var out: Array[String] = []
+	for elem in _typed_array_elements(variable_name, [StoryFlowTypes.VariableType.IMAGE], "image"):
+		out.append(elem.get_string(""))
+	return out
+
+
+## Read an audio array variable as native asset-key strings, raw like the image array above.
+## See [method get_bool_array_variable] for the shared rules.
+func get_audio_array_variable(variable_name: String) -> Array[String]:
+	var out: Array[String] = []
+	for elem in _typed_array_elements(variable_name, [StoryFlowTypes.VariableType.AUDIO], "audio"):
+		out.append(elem.get_string(""))
 	return out
 
 
