@@ -11,6 +11,28 @@ const StoryFlowSaveData = preload("res://addons/storyflow/core/storyflow_save_da
 const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
 const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.gd")
 
+## Emitted when the language MOVES, with the code it moved to. The one signal a game's own
+## language menu needs: nothing in this plugin repaints text that is already on screen, so a
+## switch reaches a read at the next read and everything else is the game's to refresh.
+##
+## IT FIRES WHEN THE LANGUAGE ACTUALLY MOVES, AND NEVER OTHERWISE. A refused code emits nothing
+## (it changed nothing) and neither does re-setting the language already active. A project
+## install emits only when the install MOVED the language - which happens when the incoming
+## project cannot carry the code the player was on, so it snaps to that project's source
+## language.
+##
+## ORDERING: whatever a handler can observe is already the new state. The language is assigned
+## before the emit, so get_language answers the new code; and from an install the WHOLE project
+## has been seeded first, so a handler reading a .sfd value, a global or a character sees the
+## project it was just told about. A handler that re-enters set_language is measured against the
+## new value, so it either no-ops or changes again and emits again.
+##
+## It lives on the manager rather than on StoryFlowComponent, where every other signal lives, for
+## the same reason set_language does: the language is one game-wide value, and a component-side
+## signal would fire once per component for one change. The manager is the plugin's autoload, so
+## a game connects with get_node("/root/StoryFlowRuntime").language_changed.connect(...).
+signal language_changed(language_code: String)
+
 # =============================================================================
 # Project
 # =============================================================================
@@ -362,8 +384,12 @@ func set_language(language_code: String) -> bool:
 		return false
 
 	if next != _localization.active_language:
+		# ASSIGN, THEN EMIT. A handler must never observe a half-applied switch: get_language has
+		# to answer the new code inside the handler, and a handler that re-enters set_language has
+		# to be measured against the new value so it no-ops instead of recursing.
 		_localization.active_language = next
 		print("[StoryFlow] Language set to '%s'" % next)
+		language_changed.emit(next)
 	return true
 
 
@@ -564,9 +590,19 @@ func reset_all_state() -> void:
 ## the one path nobody had walked - the .sfd seed and overlay beside it were already in-place, so
 ## a project swap left globals split in two while data assets stayed whole.
 func _initialize_from_project() -> void:
+	# The language can MOVE here (the snap branch inside install_from_project), and a game that
+	# swapped projects mid-session needs telling. Captured before anything changes; compared at
+	# the very end.
+	var language_on_entry: String = _localization.active_language
+
 	# THE LANGUAGE FIRST, because everything seeded below is read in it. The install replaces the
 	# tables wholesale (never appends) and carries the player's choice forward when the new project
 	# still ships it - see StoryFlowLocalization.install_from_project.
+	#
+	# THE SNAP SIGNAL IS NOT EMITTED HERE, deliberately - see the end of this method. Everything
+	# below is read in the language this line just set, so a handler running at this point would
+	# see the OUTGOING project's globals, characters and .sfd seed under the INCOMING project's
+	# language.
 	_localization.install_from_project(_project)
 
 	var fresh: Dictionary = StoryFlowVariant.deep_copy_variables(_project.global_variables)
@@ -590,4 +626,13 @@ func _initialize_from_project() -> void:
 	# falsifying the one invariant load_from_slot's no-cache-clear reasoning rests on. Component
 	# lifecycles balance the count on their own now (StoryFlowComponent._counted_dialogue_start),
 	# so there is no stale count left for this line to clean up.
+
+	# EVERYTHING IS SEEDED, so a handler can read the project it was told about. An install that
+	# carried the player's choice forward moves nothing and is silent; one that SNAPPED because
+	# this project cannot carry the old code emits, because that is a real change to what the
+	# player is reading. At boot this usually reaches nobody, which is fine - the case it exists
+	# for is a mid-session swap, and get_language is how a handler learns the language it started
+	# in.
+	if _localization.active_language != language_on_entry:
+		language_changed.emit(_localization.active_language)
 
