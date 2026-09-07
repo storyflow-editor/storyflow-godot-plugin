@@ -161,7 +161,7 @@ func write_data_asset_scalar(asset: String, variable_name: String, expected: Arr
 		_: value.set_string(str(raw))
 
 	if not StoryFlowDataAssetStore.try_set(mgr.get_data_asset_seed(),
-			mgr.get_data_asset_overlay(), asset_id, str(declaration.get("id", "")), value):
+			mgr.get_data_asset_overlay(), asset_id, str(declaration.get("id", "")), value, mgr.get_data_asset_revision()):
 		warn_data_asset_once(asset, variable_name, "writerefused",
 			"StoryFlow: Data Asset write '%s.%s' was refused" % [asset, variable_name])
 		return false
@@ -302,9 +302,11 @@ func write_character_scalar(id: String, variable_name: String, expected: Array, 
 		"name":
 			character.character_name = str(raw)
 			character.name_is_literal = true
+			_mgr.get_data_asset_revision()[0] += 1
 			return true
 		"image":
 			character.image_key = str(raw)
+			_mgr.get_data_asset_revision()[0] += 1
 			return true
 
 	var row: Dictionary = resolved["row"]
@@ -320,6 +322,7 @@ func write_character_scalar(id: String, variable_name: String, expected: Array, 
 	# THE CACHE-CLEAR OBLIGATION, in parity with _write_data_asset_scalar above: a char-var
 	# boolean behind a memoized parent goes stale across a host write in exactly the same
 	# way a .sfd one does. No overlay is touched — character state lives on the character.
+	_mgr.get_data_asset_revision()[0] += 1
 	return true
 
 
@@ -338,7 +341,7 @@ func commit_data_asset_container(asset: String, asset_id: String, variable_name:
 		declaration: Dictionary, value: StoryFlowVariant) -> bool:
 	var mgr := _mgr
 	if not StoryFlowDataAssetStore.try_set(mgr.get_data_asset_seed(),
-			mgr.get_data_asset_overlay(), asset_id, str(declaration.get("id", "")), value):
+			mgr.get_data_asset_overlay(), asset_id, str(declaration.get("id", "")), value, mgr.get_data_asset_revision()):
 		warn_data_asset_once(asset, variable_name, "writerefused",
 			"StoryFlow: Data Asset write '%s.%s' was refused" % [asset, variable_name])
 		return false
@@ -493,3 +496,28 @@ func set_map(asset: String, variable_name: String, keys: Array, values: Array) -
 	var value := StoryFlowVariant.new()
 	value.set_map(entries)
 	return commit_data_asset_container(asset, asset_id, variable_name, declaration, value)
+
+
+## Untyped host door shared by the manager and component, including detached containers.
+func read_data_asset_variant(asset: String, variable_name: String) -> StoryFlowVariant:
+	var mgr := _mgr
+	if not mgr:
+		return null
+	if routes_to_character(asset):
+		var resolved := resolve_character_branch(asset, variable_name, [])
+		if resolved.is_empty():
+			return null
+		var character: StoryFlowCharacter = resolved["character"]
+		match resolved.get("builtin", ""):
+			"name": return StoryFlowVariant.from_string(character.character_name)
+			"image": return StoryFlowVariant.from_string(character.image_key)
+		var value = resolved["row"].get("value")
+		return value.duplicate_variant() if value is StoryFlowVariant else null
+	var asset_id := resolve_data_asset_id(asset)
+	if asset_id.is_empty():
+		return null
+	var declaration := find_data_asset_declaration(asset, asset_id, variable_name)
+	if declaration.is_empty():
+		return null
+	return StoryFlowDataAssetStore.try_read(mgr.get_data_asset_seed(),
+		mgr.get_data_asset_overlay(), data_asset_locale(), asset_id, str(declaration.get("id", "")))

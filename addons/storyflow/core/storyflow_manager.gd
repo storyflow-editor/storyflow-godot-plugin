@@ -85,6 +85,7 @@ var _data_asset_seed: Dictionary = {}
 ## splitting reads and writes into two divergent stores for the rest of the session. That is
 ## exactly the bug rebinding _global_variables caused before v1.2.3.
 var _data_asset_overlay: Dictionary = {}
+var _data_asset_revision: Array = [0]
 
 
 func _ready() -> void:
@@ -255,7 +256,7 @@ func get_data_asset_overlay() -> Dictionary:
 func reset_data_assets() -> void:
 	if _project:
 		StoryFlowDataAssetStore.build_seed(_project, _data_asset_seed)
-	StoryFlowDataAssetStore.reset_overlay(_data_asset_overlay)
+	StoryFlowDataAssetStore.reset_overlay(_data_asset_overlay, _data_asset_revision)
 
 
 # =============================================================================
@@ -531,7 +532,7 @@ func load_from_slot(slot_name: String) -> bool:
 
 	# .sfd overlay: REPLACE, not merge (contract 7). Clearing unconditionally means an absent or
 	# malformed key - and every legacy save, which carries none - restores seed state.
-	StoryFlowDataAssetStore.reset_overlay(_data_asset_overlay)
+	StoryFlowDataAssetStore.reset_overlay(_data_asset_overlay, _data_asset_revision)
 	var saved_assets: Dictionary = data.get("data_assets", {})
 	for asset_id in saved_assets:
 		_data_asset_overlay[asset_id] = saved_assets[asset_id]
@@ -653,11 +654,8 @@ func _initialize_from_project() -> void:
 # inventory screen or a save-slot list had to stand one up just to read a data table. Unity's
 # plugin has mirrored the surface on its manager all along; this is the Godot half.
 #
-# NO BOOLEAN-MEMO CLEAR after a write, and that is the one deliberate difference from the
-# component's identical calls: the memo belongs to an execution context and the manager owns
-# none. A component with a live dialogue clears its own on its own writes; a manager write that
-# lands while a dialogue is parked reaches that dialogue's memo at its next rebuild, the same
-# asymmetry global-variable writes have always had.
+# Writes advance a shared revision. Live contexts observe it before evaluating cached
+# conditions, preserving completed execution outputs and avoiding reentrant advancement.
 #
 # THE PRE-LOCALIZATION FALLBACK is the project's SOURCE language, which is what a sidecar-less
 # project's strings are keyed by; a localized project ignores it (language_for answers the active
@@ -741,3 +739,13 @@ func set_data_asset_array(asset: String, variable_name: String, elements: Array)
 ## Replace a MAP variable's entries, with RAW keys. The manager twin of the component's setter.
 func set_data_asset_map(asset: String, variable_name: String, keys: Array, values: Array) -> bool:
 	return _da().set_map(asset, variable_name, keys, values)
+
+
+## Shared write generation; live contexts observe it before evaluating cached conditions.
+func get_data_asset_revision() -> Array:
+	return _data_asset_revision
+
+
+## Read any scalar or container as a detached value by asset id or unique display name.
+func get_data_asset_variant(asset: String, variable_name: String) -> StoryFlowVariant:
+	return _da().read_data_asset_variant(asset, variable_name)

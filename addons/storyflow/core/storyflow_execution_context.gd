@@ -73,6 +73,9 @@ var global_variable_name_index: Dictionary = {}
 ## to fresh empties, which is the "no store" state every accessor checks.
 var data_asset_seed: Dictionary = {}
 var data_asset_overlay: Dictionary = {}
+var data_asset_revision: Array = []
+var _observed_data_asset_revision: int = -1
+var resolution_failures: int = 0
 
 ## NON-OWNING reference to StoryFlowManager's P4 character id bridge (characters engine
 ## contract §3), handed over at dialogue start the same way the two above are. Same rule:
@@ -202,6 +205,9 @@ func should_warn_character_id(id: String, reason: String) -> bool:
 
 
 func get_node_state(node_id: String) -> StoryFlowNodeRuntimeState:
+	if not data_asset_revision.is_empty() and _observed_data_asset_revision != data_asset_revision[0]:
+		_observed_data_asset_revision = data_asset_revision[0]
+		clear_boolean_memo()
 	if not node_runtime_states.has(node_id):
 		node_runtime_states[node_id] = StoryFlowNodeRuntimeState.new()
 	return node_runtime_states[node_id]
@@ -211,6 +217,8 @@ func clear_cached_outputs() -> void:
 	for node_id in node_runtime_states:
 		var state: StoryFlowNodeRuntimeState = node_runtime_states[node_id]
 		state.cached_output = null
+	# Detached maps are completed execution results, like RunScript outputs. Dialogue and
+	# loop refreshes must retain them; another execution replaces them and reset() clears them.
 
 
 ## Drop ONLY the memoized derived booleans, leaving every other node output standing.
@@ -227,8 +235,8 @@ func clear_cached_outputs() -> void:
 ## reach for the same reason.
 ##
 ## NOT a replacement for clear_cached_outputs at CHAIN BOUNDARIES - option selection, dialogue
-## advance, loop iteration. Those legitimately want everything gone, because the chain that
-## produced those outputs is over.
+## advance, loop iteration. Those clear cached_output; completed detached maps and RunScript
+## outputs remain available independently of these evaluation caches.
 func clear_boolean_memo() -> void:
 	for node_id in node_runtime_states:
 		var node := current_script.get_node(node_id) if current_script else {}

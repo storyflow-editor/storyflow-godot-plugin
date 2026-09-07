@@ -917,7 +917,7 @@ static func _walk_for_value(seed: Dictionary, overlay: Dictionary, asset_id: Str
 ## accessor's own memo carve-out is not enough: a memoized boolean PARENT above an accessor
 ## keeps answering the pre-write value). ANY NEW CALLER — the host accessors, a save load — must
 ## do the same, or option conditions go stale for the rest of the session.
-static func try_set(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String, value: StoryFlowVariant) -> bool:
+static func try_set(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String, value: StoryFlowVariant, revision: Array = []) -> bool:
 	if value == null:
 		return false
 	if not has_asset(seed, asset_id):
@@ -929,14 +929,18 @@ static func try_set(seed: Dictionary, overlay: Dictionary, asset_id: String, var
 		overlay[asset_id] = {}
 	var level_overlay: Dictionary = overlay[asset_id]
 	level_overlay[variable_id] = value.duplicate_variant()
+	if not revision.is_empty():
+		revision[0] += 1
 	return true
 
 
 ## Drop every session write (game restart / new game). Cleared IN PLACE — never rebound,
 ## because the manager hands this same dictionary to every running dialogue. The seed is
 ## untouched.
-static func reset_overlay(overlay: Dictionary) -> void:
+static func reset_overlay(overlay: Dictionary, revision: Array = []) -> void:
 	overlay.clear()
+	if not revision.is_empty():
+		revision[0] += 1
 
 
 # =============================================================================

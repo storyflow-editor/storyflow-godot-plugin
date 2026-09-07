@@ -765,6 +765,7 @@ func _parse_node_data(type_string: String, node_obj: Dictionary) -> Dictionary:
 						"id": o.get("id", ""),
 						"name": o.get("name", ""),
 						"type": o.get("type", ""),
+						"isArray": o.get("isArray", false),
 					})
 			data["scriptOutputs"] = outputs
 		if iface.has("exits"):
@@ -796,6 +797,7 @@ func _parse_node_data(type_string: String, node_obj: Dictionary) -> Dictionary:
 					"id": o.get("id", ""),
 					"name": o.get("name", ""),
 					"type": o.get("type", ""),
+					"isArray": o.get("isArray", false),
 				})
 		data["scriptOutputs"] = outputs
 	if data_src.has("scriptExits") and not data.has("scriptExits"):

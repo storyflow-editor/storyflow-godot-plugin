@@ -1,0 +1,45 @@
+{
+  "_comment": "2026-09-07 shared restore contract: validate raw slots before conversion, drop incompatible whole slots, preserve compatible values and inheritance.",
+  "dataAssets": {
+    "base": {
+      "id": "base", "name": "Base", "parent": null,
+      "variables": [
+        { "id": "count", "name": "Count", "type": "integer", "value": 10 },
+        { "id": "rate", "name": "Rate", "type": "float", "value": 0.5 },
+        { "id": "alive", "name": "Alive", "type": "boolean", "value": true },
+        { "id": "label", "name": "Label", "type": "string", "value": "Default" },
+        { "id": "mood", "name": "Mood", "type": "enum", "enumValues": ["calm", "alert"], "value": "calm" },
+        { "id": "counts", "name": "Counts", "type": "integer", "isArray": true, "value": [5, 6] },
+        { "id": "words", "name": "Words", "type": "string", "isArray": true, "value": ["seed"] },
+        { "id": "map", "name": "Map", "type": "map", "keyType": "string", "valueType": "integer", "value": [{ "key": "gold", "value": 2 }] },
+        { "id": "enumMap", "name": "EnumMap", "type": "map", "keyType": "enum", "keyEnumValues": ["gold", "silver"], "valueType": "integer", "value": [{ "key": "gold", "value": 3 }] }
+      ],
+      "overrides": {}
+    },
+    "child": {
+      "id": "child", "name": "Child", "parent": "base",
+      "variables": [{ "id": "count", "name": "Shadow", "type": "string", "value": "ignored declaration" }],
+      "overrides": {}
+    }
+  },
+  "saved": {
+    "base": { "count": 99, "rate": 1.25, "alive": 0, "label": false, "mood": "removed", "counts": [1, "old string"], "words": ["literal"], "map": [{ "key": "gold", "value": "old string" }], "enumMap": [{ "key": "silver", "value": 8 }], "deleted": 17 },
+    "child": { "count": "42", "counts": [], "words": ["ok", 7], "enumMap": [{ "key": "removed", "value": 4 }] },
+    "deletedAsset": { "count": 25 }
+  },
+  "expectedOverlay": {
+    "base": { "count": 99, "rate": 1.25, "words": ["literal"], "enumMap": [{ "key": "silver", "value": 8 }] },
+    "child": { "counts": [] }
+  },
+  "expectedReads": [
+    { "assetId": "child", "variableId": "count", "value": 99 },
+    { "assetId": "child", "variableId": "alive", "value": true },
+    { "assetId": "child", "variableId": "label", "value": "Default" },
+    { "assetId": "child", "variableId": "mood", "value": "calm" },
+    { "assetId": "base", "variableId": "counts", "value": [5, 6] },
+    { "assetId": "child", "variableId": "counts", "value": [] },
+    { "assetId": "child", "variableId": "words", "value": ["literal"] },
+    { "assetId": "child", "variableId": "map", "value": [{ "key": "gold", "value": 2 }] },
+    { "assetId": "child", "variableId": "enumMap", "value": [{ "key": "silver", "value": 8 }] }
+  ]
+}

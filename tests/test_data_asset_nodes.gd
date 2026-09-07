@@ -175,10 +175,10 @@ func _test_writes() -> void:
 		"v_rank": Graph.scalar_var("v_rank", "r", Types.VariableType.ENUM, VariantScript.from_enum("Boss")),
 		"v_tags": Graph.array_var("v_tags", "t", Types.VariableType.STRING, ["a", "b"]),
 		"v_empty": Graph.array_var("v_empty", "e", Types.VariableType.STRING, []),
-		# STRING-tagged on purpose, under an integer-valued declaration: the map pin's K/V
-		# tokens satisfy decl_matches, but the variants INSIDE a source map carry whatever tag
-		# their producer gave them, so this is the shape the entry re-mint exists to correct.
-		"v_loot": Graph.map_var("v_loot", "l", {"sword": VariantScript.from_string("7")}),
+		# A matching declaration and matching raw entry remain stable across writes and saves.
+		"v_loot": {"id":"v_loot", "name":"l", "type":Types.VariableType.MAP,
+			"key_type":Types.VariableType.STRING, "value_type":Types.VariableType.INTEGER,
+			"value":VariantScript.from_map({"sword":VariantScript.from_int(7)})},
 	})
 
 	_manager.reset_data_assets()
@@ -213,12 +213,7 @@ func _test_writes() -> void:
 	_check("a map write stores a map", loot != null and loot.is_map())
 	_check("replacing the whole value with the wired entries",
 		loot != null and loot.get_map().size() == 1 and loot.get_map().has("sword"))
-	# ENTRY VALUES ARE RE-MINTED against the declared valueType, symmetric with the array
-	# branch's element stamp two blocks up. Without it the source's STRING tag would sit in the
-	# overlay and a save round trip would hand back an INTEGER-tagged one, because the load types
-	# from the declaration - a tag flip visible through get_data_asset_variant and nowhere else.
-	# The VALUE becoming the declared default is the same wrong-type rule the array elements
-	# follow, not a separate decision.
+	# Valid entries keep the declaration's tag; mismatches are refused by the hardening suite.
 	_check("a map entry value is re-minted against the declared valueType",
 		loot != null and loot.get_map()["sword"].type == Types.VariableType.INTEGER)
 

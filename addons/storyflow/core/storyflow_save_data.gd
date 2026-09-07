@@ -619,9 +619,9 @@ static func _unified_characters_from_json(data) -> Dictionary:
 ## An asset whose every entry was dropped leaves NO entry behind — an empty inner table would
 ## ride every subsequent save carrying nothing.
 ##
-## Values are NOT otherwise re-validated: a stale-TYPED entry is typed against the declaration
-## through the store's one typing rule and degrades at the accessor via contract 6.1, exactly as
-## a stale session write does.
+## Remaining bare slots are validated against the current rootmost declaration before
+## conversion. An incompatible scalar or any incompatible container entry drops the whole
+## slot, revealing the current inherited/default value.
 static func _deserialize_data_assets(data, seed: Dictionary) -> Dictionary:
 	var result := {}
 	if not data is Dictionary:
@@ -640,7 +640,9 @@ static func _deserialize_data_assets(data, seed: Dictionary) -> Dictionary:
 			var declaration := StoryFlowDataAssetStore.find_declaration(seed, str(asset_id), str(variable_id))
 			if declaration.is_empty():
 				continue
-			values[variable_id] = _bare_value_from_json(table[variable_id], declaration)
+			var restored := _bare_value_from_json(table[variable_id], declaration)
+			if restored != null:
+				values[variable_id] = restored
 		if not values.is_empty():
 			result[asset_id] = values
 	return result
@@ -653,14 +655,46 @@ static func _deserialize_data_assets(data, seed: Dictionary) -> Dictionary:
 ## wrong is invisible to a read (an enum and a string both answer get_string) and visible in the
 ## NEXT save, so a save -> load -> save cycle would stop being stable.
 ##
-## A value the declaration cannot type falls back to the declared TYPE DEFAULT rather than being
-## dropped, matching the sibling ports' non-throwing readers: this input arrives from a file, and
-## the store's invariant is that a stored value is always of the declared shape.
+## Incompatible tokens return null; the caller omits that entire saved slot.
 static func _bare_value_from_json(token, declaration: Dictionary) -> StoryFlowVariant:
-	var typed := StoryFlowDataAssetStore.type_value(declaration, token)
-	if typed != null:
-		return typed
-	return StoryFlowDataAssetStore.type_default(declaration)
+	if not _saved_value_matches(token, declaration):
+		return null
+	return StoryFlowDataAssetStore.type_value(declaration, token)
+
+
+static func _saved_value_matches(raw, declaration: Dictionary) -> bool:
+	var declared: int = declaration.get("type", StoryFlowTypes.VariableType.NONE)
+	if declared == StoryFlowTypes.VariableType.MAP:
+		if not raw is Array:
+			return false
+		for entry in raw:
+			if not entry is Dictionary or not _saved_scalar_matches(entry.get("key"), declaration.get("key_type", 0), declaration.get("key_enum_values", [])) or not _saved_scalar_matches(entry.get("value"), declaration.get("value_type", 0), declaration.get("value_enum_values", [])):
+				return false
+		return true
+	if declaration.get("is_array", false):
+		if not raw is Array:
+			return false
+		for element in raw:
+			if not _saved_scalar_matches(element, declared, declaration.get("enum_values", [])):
+				return false
+		return true
+	return _saved_scalar_matches(raw, declared, declaration.get("enum_values", []))
+
+
+static func _saved_scalar_matches(raw, declared: int, options: Array) -> bool:
+	match declared:
+		StoryFlowTypes.VariableType.BOOLEAN:
+			return raw is bool
+		StoryFlowTypes.VariableType.INTEGER:
+			return raw is int or (raw is float and is_finite(raw) and floor(raw) == raw and raw >= -9223372036854775808.0 and raw < 9223372036854775808.0)
+		StoryFlowTypes.VariableType.FLOAT:
+			return (raw is int or raw is float) and is_finite(float(raw))
+		StoryFlowTypes.VariableType.ENUM:
+			return raw is String and (options.is_empty() or options.has(raw))
+		StoryFlowTypes.VariableType.STRING, StoryFlowTypes.VariableType.IMAGE, StoryFlowTypes.VariableType.AUDIO, StoryFlowTypes.VariableType.CHARACTER:
+			return raw is String
+	return false
+
 
 
 # =============================================================================

@@ -8,6 +8,9 @@ const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.
 ## Cached evaluation output (used by evaluator to avoid re-evaluation).
 var cached_output: StoryFlowVariant = null
 
+## Latest completed detached .sfd map mutation; retained until execution replaces it or context reset.
+var detached_map_output: Dictionary = {}
+
 ## Current loop index (for forEach nodes).
 var loop_index: int = 0
 
@@ -28,9 +31,14 @@ var loop_keys: Array = []
 var loop_values: Array = []
 var loop_key = null
 var loop_value: StoryFlowVariant = null
+## Data Asset map snapshots contain literal keys and already resolved string values.
+var loop_text_is_resolved: bool = false
 
 ## Output variable values from RunScript return (variable_id → StoryFlowVariant).
 var output_values: Dictionary = {}
+
+## Declared array shape retained even when an output contains no elements.
+var output_arrays: Dictionary = {}
 
 ## Whether output_values has been populated.
 var has_output_values: bool = false
