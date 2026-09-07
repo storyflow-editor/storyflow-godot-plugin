@@ -384,6 +384,7 @@ func set_language(language_code: String) -> bool:
 		push_warning("[StoryFlow] set_language: unknown language '%s' - staying on '%s'" % [language_code, _localization.active_language])
 		return false
 
+	_localization.has_language_choice = true
 	if next != _localization.active_language:
 		# ASSIGN, THEN EMIT. A handler must never observe a half-applied switch: get_language has
 		# to answer the new code inside the handler, and a handler that re-enters set_language has
@@ -514,6 +515,7 @@ func load_from_slot(slot_name: String) -> bool:
 		var saved: Dictionary = saved_chars[path]
 		if saved.has("name"):
 			character.character_name = saved["name"]
+			character.name_is_literal = saved.get("nameIsLiteral", true)
 		if saved.has("image"):
 			character.image_key = saved["image"]
 		var saved_vars: Dictionary = saved.get("variables", {})

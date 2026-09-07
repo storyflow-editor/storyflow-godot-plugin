@@ -237,7 +237,7 @@ func start_dialogue_with_script(path: String) -> void:
 
 	# Create evaluator
 	_evaluator = StoryFlowEvaluator.new()
-	_evaluator.initialize(_context, mgr.get_global_variables(), mgr.get_runtime_characters(), language_code, project.global_strings)
+	_evaluator.initialize(_context, mgr.get_global_variables(), mgr.get_runtime_characters(), language_code, project.global_strings, mgr)
 	_evaluator.set_trace(_sf_trace)
 
 	# Wire up text interpolator with manager reference
@@ -619,7 +619,7 @@ func get_character_variable(character_path: String, variable_name: String) -> St
 	# this lane RESOLVES — it owns language state via _resolve_string — unlike the
 	# evaluator arm and the DA-surface branch, which answer the stored key.
 	if StoryFlowCharacter.is_name_token(variable_name):
-		return StoryFlowVariant.from_string(_resolve_string(character.character_name))
+		return StoryFlowVariant.from_string(character.character_name if character.name_is_literal else _resolve_string(character.character_name))
 
 	# Handle built-in "Image" field (current portrait asset key; first tier, as above)
 	if StoryFlowCharacter.is_image_token(variable_name):
@@ -658,6 +658,7 @@ func _apply_character_variable(character: StoryFlowCharacter, variable_name: Str
 	var lower := variable_name.to_lower()
 	if lower == StoryFlowCharacter.CF_NAME_ID:
 		character.character_name = value.get_string("")
+		character.name_is_literal = true
 		return true
 	if lower == StoryFlowCharacter.CF_IMAGE_ID:
 		character.image_key = value.get_string("")
@@ -1112,8 +1113,8 @@ func get_array_variable(variable_name: String) -> Array[StoryFlowVariant]:
 		if not (elem is StoryFlowVariant):
 			continue
 		var copy: StoryFlowVariant = elem.duplicate_variant()
-		if copy.type == StoryFlowTypes.VariableType.STRING:
-			copy.set_string(_resolve_string(copy.get_string("")))
+		if copy.type == StoryFlowTypes.VariableType.STRING and not copy.string_key.is_empty():
+			copy.set_string(_resolve_string(copy.string_key))
 		elif copy.type == StoryFlowTypes.VariableType.ENUM:
 			copy.set_enum(_resolve_string(copy.get_string("")))
 		out.append(copy)
@@ -3447,6 +3448,7 @@ func _handle_set_character_var(node: Dictionary) -> void:
 			# cf_-only second tier lives on public set_character_variable).
 			if StoryFlowCharacter.is_name_token(variable_name):
 				character.character_name = new_value.get_string("")
+				character.name_is_literal = true
 				mutated = true
 			# Handle built-in "Image" field (first tier, same as Name above)
 			elif StoryFlowCharacter.is_image_token(variable_name):
@@ -3673,6 +3675,9 @@ func _type_data_asset_element(declared: StoryFlowTypes.VariableType, source) -> 
 			element.set_float(source.get_float())
 		StoryFlowTypes.VariableType.ENUM:
 			element.set_enum(source.get_string())
+		StoryFlowTypes.VariableType.STRING:
+			# A session write captures displayed text, not the source array's authored key.
+			element.set_string(_evaluator._array_string(source))
 		_:
 			element.set_string(source.get_string())
 	return element
@@ -3748,11 +3753,8 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 		var character: StoryFlowCharacter = mgr.get_runtime_character(character_path)
 		if character:
 			var char_data := StoryFlowCharacterData.new()
-			# The speaker label resolves AT READ TIME from the key the runtime record stores, so a
-			# mid-session set_language flips it on the next rendered node (localization spec §9).
-			# This engine bakes no display name at import - the Unity port does, and its speaker
-			# labels lag a language switch until re-import; Unreal and this plugin do not.
-			char_data.name = _text.get_string(character.character_name, language_code)
+			# Authored names resolve at read time; player-written names remain literal.
+			char_data.name = character.character_name if character.name_is_literal else _text.get_string(character.character_name, language_code)
 
 			# Resolve character portrait to actual Texture2D (reads from mutable
 			# runtime character, so SetCharacterVar "Image" changes are reflected)

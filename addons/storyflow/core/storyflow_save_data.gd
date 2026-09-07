@@ -317,10 +317,17 @@ static func _variable_to_json(fallback_id: String, v: Dictionary) -> Dictionary:
 		obj["value"] = _map_entries_to_json(value)
 	elif is_array:
 		var elements := []
+		var string_keys := {}
 		if value is StoryFlowVariant:
 			for element in value.get_array():
+				if type == StoryFlowTypes.VariableType.STRING and element is StoryFlowVariant and not element.string_key.is_empty():
+					string_keys[str(elements.size())] = element.string_key
 				elements.append(_variant_to_json(element))
 		obj["value"] = elements
+		# Sparse authored identities keep runtime strings literal, including key-shaped writes.
+		# Readers of older envelopes ignore this additive field; absent metadata is literal.
+		if not string_keys.is_empty():
+			obj["stringKeys"] = string_keys
 	else:
 		obj["value"] = _variant_to_json(value if value is StoryFlowVariant else null)
 
@@ -356,7 +363,10 @@ static func _map_entries_to_json(value) -> Array:
 	for key in map:
 		var entry_value = map[key]
 		if entry_value is StoryFlowVariant:
-			entries.append({"key": key, "value": _variant_to_json(entry_value)})
+			var entry := {"key": key, "value": _variant_to_json(entry_value)}
+			if entry_value.type == StoryFlowTypes.VariableType.STRING and not entry_value.string_key.is_empty():
+				entry["stringKey"] = entry_value.string_key
+			entries.append(entry)
 	return entries
 
 
@@ -389,6 +399,7 @@ static func _serialize_characters(characters: Dictionary) -> Dictionary:
 				vars[vname] = _variable_to_json(str(vname), vdata)
 		result[path] = {
 			"name": c.character_name,
+			"nameIsLiteral": c.name_is_literal,
 			"image": c.image_key,
 			"variables": vars,
 		}
@@ -506,9 +517,15 @@ static func _variable_from_json(fallback_id: String, record: Dictionary) -> Dict
 
 	if is_array:
 		var elements: Array = []
+		var string_keys = record.get("stringKeys", {})
 		if token is Array:
 			for element in token:
-				elements.append(_variant_from_json(element, type))
+				var restored := _variant_from_json(element, type)
+				if type == StoryFlowTypes.VariableType.STRING and string_keys is Dictionary:
+					var key = string_keys.get(str(elements.size()), "")
+					if key is String and key == restored.get_string():
+						restored.string_key = key
+				elements.append(restored)
 		var array_variant := StoryFlowVariant.new()
 		array_variant.set_array(elements)
 		# The ELEMENT TYPE is stated, never inferred: set_array reads the tag off element zero,
@@ -541,7 +558,11 @@ static func _map_entries_from_json(token, key_type: StoryFlowTypes.VariableType,
 			key = int(key) if (key is int or key is float) else str(key)
 		elif not key is int:
 			key = str(key)
-		entries[key] = _variant_from_json(entry_obj.get("value"), value_type)
+		var value := _variant_from_json(entry_obj.get("value"), value_type)
+		var string_key = entry_obj.get("stringKey", "")
+		if value_type == StoryFlowTypes.VariableType.STRING and string_key is String and string_key == value.get_string():
+			value.string_key = string_key
+		entries[key] = value
 	return entries
 
 
@@ -561,6 +582,9 @@ static func _unified_characters_from_json(data) -> Dictionary:
 		var entry := {"variables": {}}
 		if record.get("name", null) is String:
 			entry["name"] = record["name"]
+			# Old saves cannot distinguish player text from authored keys.
+			var literal = record.get("nameIsLiteral", true)
+			entry["nameIsLiteral"] = literal if literal is bool else true
 		if record.get("image", null) is String:
 			entry["image"] = record["image"]
 		var vars = record.get("variables", {})

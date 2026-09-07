@@ -11,7 +11,7 @@ extends SceneTree
 ## A5 SEATS IN THIS ENGINE: expected.value lands on the surfaces that own language state -
 ## the node-lane typed reads (evaluate_*_from_node resolves string results through
 ## _resolve_string_key) and the public/ById getters' builtin Name arm - while expected.stored
-## lands on the stored-key doors: the evaluator arm's raw variant, the DA-surface character
+## lands on the stored-key doors: the evaluator's custom-variable variant, the DA-surface character
 ## branch, the raw record fields, and the save output. Image `stored` is the characters.json
 ## asset id; image `value` is the assets-table path the import resolves it to (asserted via
 ## the copied media file and the portrait resolving to a real texture).
@@ -377,13 +377,14 @@ func _assert_string_read(name: String, gid: String, ref: Dictionary, variable: D
 	var resolved := str(evaluator.evaluate_string_from_node(gid))
 	_check("%s: node lane RESOLVES to '%s' (got '%s')" % [name, value, resolved], resolved == value)
 	var arm: String = evaluator._evaluate_character_variable(_node_data(ref, variable), gid).get_string("")
-	_check("%s: evaluator arm answers the STORED key '%s' (got '%s')" % [name, stored, arm], arm == stored)
 	var host = _host_variant(ref, var_name)
 	if CharacterScript.is_name_token(var_name):
+		_check("%s: evaluator Name arm answers finished text '%s' (got '%s')" % [name, value, arm], arm == value)
 		_check("%s: the public getter's Name arm resolves to '%s' (got '%s')" % [name, value, host.get_string("")],
 			host != null and host.get_string("") == value)
 		_check("%s: the raw record name field holds '%s'" % [name, stored], record.character_name == stored)
 	else:
+		_check("%s: evaluator arm answers the STORED key '%s' (got '%s')" % [name, stored, arm], arm == stored)
 		_check("%s: the public getter answers the stored key '%s' (got '%s')" % [name, stored, host.get_string("") if host else "<null>"],
 			host != null and host.get_string("") == stored)
 		_check("%s: the raw record row holds '%s'" % [name, stored], _var_of(record, var_name).get_string("") == stored)

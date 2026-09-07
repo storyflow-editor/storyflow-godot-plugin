@@ -294,6 +294,19 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 	_publish_project_file(project_file, build_dir, output_dir)
 	if norm_build != norm_output:
 		_copy_directory_recursive(build_dir, output_dir)
+		# Reconcile this owned optional sidecar only in a previously imported output.
+		# Never remove user files or delete through two spellings of the same directory.
+		var source_directory := ProjectSettings.globalize_path(build_dir).simplify_path()
+		var output_directory := ProjectSettings.globalize_path(output_dir).simplify_path()
+		var old_sidecar := output_dir.path_join("localization.json")
+		if source_directory.nocasecmp_to(output_directory) != 0 \
+				and not FileAccess.file_exists(localization_file) \
+				and FileAccess.file_exists(output_dir.path_join(IMPORT_META_FILENAME)) \
+				and FileAccess.file_exists(old_sidecar):
+			var remove_error := DirAccess.remove_absolute(old_sidecar)
+			if remove_error != OK:
+				_error_count += 1
+				push_error("StoryFlow: Failed to remove stale localization sidecar: %s" % error_string(remove_error))
 
 	# Save metadata so the manager can reload from the local copy
 	if norm_build != norm_output:
@@ -1339,7 +1352,10 @@ func _parse_map_entries(entries_raw: Array, key_type_string: String, value_type_
 		var key = _coerce_map_key(entry_obj["key"], key_type_string)
 		# String-family values store the exported strings-table key / asset id
 		# verbatim; resolution happens at read time, exactly like scalar variables
-		entries[key] = _parse_variant(entry_obj.get("value"), value_type_string)
+		var value := _parse_variant(entry_obj.get("value"), value_type_string)
+		if value_type_string == "string" and entry_obj.get("value") is String:
+			value.string_key = entry_obj["value"]
+		entries[key] = value
 	return entries
 
 
@@ -1382,7 +1398,10 @@ func _parse_variant(value, type_hint: String = "") -> StoryFlowVariant:
 	elif value is Array:
 		var arr: Array = []
 		for item in value:
-			arr.append(_parse_variant(item, type_hint))
+			var element := _parse_variant(item, type_hint)
+			if type_hint == "string" and item is String:
+				element.string_key = item
+			arr.append(element)
 		variant.set_array(arr)
 
 	return variant

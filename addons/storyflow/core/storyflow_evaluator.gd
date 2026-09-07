@@ -24,6 +24,7 @@ var _context: StoryFlowExecutionContext = null
 var _global_variables: Dictionary = {} # id -> variable Dictionary
 var _characters: Dictionary = {} # normalized_path -> StoryFlowCharacter
 var _global_strings: Dictionary = {} # flattened "lang.key" -> value
+var _manager: Node = null
 
 ## PRE-LOCALIZATION ONLY (localization spec §9): the prefix into an artifact strings block that
 ## carries more than one language block, still honored for a project exported before localization
@@ -40,12 +41,20 @@ var _trace_fn: Callable = Callable()
 # Initialization
 # =============================================================================
 
-func initialize(context: StoryFlowExecutionContext, global_variables: Dictionary, characters: Dictionary = {}, language_code: String = "en", global_strings: Dictionary = {}) -> void:
+func initialize(context: StoryFlowExecutionContext, global_variables: Dictionary, characters: Dictionary = {}, language_code: String = "en", global_strings: Dictionary = {}, manager: Node = null) -> void:
 	_context = context
 	_global_variables = global_variables
 	_characters = characters
 	_global_strings = global_strings
 	_language_code = language_code
+	_manager = manager
+
+
+func _current_global_strings() -> Dictionary:
+	if is_instance_valid(_manager):
+		var project = _manager.get_project()
+		return project.global_strings if project != null else {}
+	return _global_strings
 
 
 ## Set the trace logging callable. Called by StoryFlowComponent to wire up trace output.
@@ -218,7 +227,7 @@ func evaluate_boolean_from_node(node_id: String, source_handle: String = "") -> 
 			var arr := evaluate_string_array_input(node_id, StoryFlowHandles.IN_STRING_ARRAY)
 			var value := evaluate_string_input(node_id, StoryFlowHandles.IN_STRING, _get_localized_data_string(data, "value"))
 			for element: StoryFlowVariant in arr:
-				if element.get_string() == value:
+				if _array_string(element) == value:
 					result = true
 					break
 
@@ -503,7 +512,7 @@ func evaluate_integer_from_node(node_id: String, source_handle: String = "") -> 
 			var value := evaluate_string_input(node_id, StoryFlowHandles.IN_STRING, _get_localized_data_string(data, "value"))
 			result = -1
 			for i in range(arr.size()):
-				if arr[i].get_string() == value:
+				if _array_string(arr[i]) == value:
 					result = i
 					break
 
@@ -798,6 +807,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 	_context.evaluation_depth += 1
 
 	var result: String = ""
+	var result_is_resolved := false
 
 	var node := _context.current_script.get_node(node_id)
 	if node.is_empty():
@@ -903,12 +913,14 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 			var arr := evaluate_string_array_input(node_id, StoryFlowHandles.IN_STRING_ARRAY)
 			var index := evaluate_integer_input(node_id, StoryFlowHandles.IN_INTEGER, _get_data_int(data, "value", 0))
 			if index >= 0 and index < arr.size():
-				result = arr[index].get_string()
+				result = _array_string(arr[index])
+			result_is_resolved = true
 
 		StoryFlowTypes.NodeType.GET_RANDOM_STRING_ARRAY_ELEMENT:
 			var arr := evaluate_string_array_input(node_id, StoryFlowHandles.IN_STRING_ARRAY)
 			if arr.size() > 0:
-				result = arr[randi_range(0, arr.size() - 1)].get_string()
+				result = _array_string(arr[randi_range(0, arr.size() - 1)])
+			result_is_resolved = true
 
 		StoryFlowTypes.NodeType.GET_IMAGE_ARRAY_ELEMENT:
 			var arr := evaluate_image_array_input(node_id, StoryFlowHandles.IN_IMAGE_ARRAY)
@@ -979,6 +991,9 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 			var loop_state := _context.get_node_state(node_id)
 			if loop_state.cached_output != null:
 				result = loop_state.cached_output.get_string()
+				if node_type == StoryFlowTypes.NodeType.FOR_EACH_STRING_LOOP:
+					result = _array_string(loop_state.cached_output)
+					result_is_resolved = true
 
 		StoryFlowTypes.NodeType.RUN_SCRIPT:
 			result = _evaluate_run_script_output_string(node_id, source_handle, data)
@@ -988,6 +1003,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 			var char_result := _evaluate_character_variable(data, node_id)
 			if char_result is StoryFlowVariant:
 				result = char_result.get_string()
+				result_is_resolved = StoryFlowCharacter.is_name_token(str(data.get("variableName", "")))
 
 		# The .sfd accessors, and the ONE arm in this function that RETURNS EARLY.
 		#
@@ -1025,13 +1041,9 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 	# read already passed the store's own provenance-gated door and this one is shape-gated.
 	# Anything added here must be added there too, or the two paths silently diverge.
 	#
-	# THE CONTAINER RESIDUE, recorded rather than fixed (the divergence register): a value read
-	# OUT of a .sfd array or map by a downstream node — a getStringArrayElement, a getMapValue —
-	# re-enters this ladder as THAT node's result, so an element the store already localized is
-	# looked up a second time. It is harmless for declared prose (a translated line keys nothing,
-	# so the lookup misses and the raw-fallback tier hands the same text back) and the same limit
-	# exists in the Unity port, which recorded it in the same words. Closing it would mean
-	# tainting values with their origin all the way through the evaluator, which no engine does.
+	# String-array reads already resolved their authored key (or preserved a runtime literal).
+	# Do not run their finished text through another shape-based lookup. Map-value reads still
+	# use the generic tail; their existing provenance limitation is independent of arrays.
 	#
 	# THE REACH DISCIPLINE (localization spec §9) lives here, and GDScript has no type that can
 	# enforce it: what gets looked up is THE KEY THE RECORD STORES, taken straight off the value
@@ -1041,7 +1053,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 	# `<characterBeingRead>.<variableId>.value` would key nothing anywhere, pass every
 	# non-inherited case, and silently show the raw id for the inherited ones. Pinned by the
 	# ancestor-key cases of the golden package (tests/test_character_contract.gd).
-	var resolved_result := _resolve_string_key(result)
+	var resolved_result := result if result_is_resolved else _resolve_string_key(result)
 	_sf_trace("EVAL %s %s result=%s" % [node_id, node.get("type_string", ""), resolved_result])
 
 	_context.evaluation_depth -= 1
@@ -1949,10 +1961,10 @@ func _evaluate_character_variable(data: Dictionary, node_id: String = "") -> Sto
 	# Handle built-in "Name" field. FIRST TIER of the A2(a) aliases: this arm was already
 	# case-insensitive, so the shared predicate folds cf_name in (the second, cf_-only
 	# tier lives on public set_character_variable — see StoryFlowCharacter.CF_NAME_ID).
-	# A5: this arm answers the RAW stored key, never the localized string — pre-P4
-	# posture, kept.
+	# Names are finished display text here; the string evaluator skips its generic
+	# lookup tail so a runtime name matching a real key cannot be translated again.
 	if StoryFlowCharacter.is_name_token(variable_name):
-		return StoryFlowVariant.from_string(character.character_name)
+		return StoryFlowVariant.from_string(character.character_name if character.name_is_literal else _resolve_string_key(character.character_name))
 
 	# Handle built-in "Image" field (first tier, same as Name above)
 	if StoryFlowCharacter.is_image_token(variable_name):
@@ -2000,7 +2012,7 @@ func _evaluate_character_variable(data: Dictionary, node_id: String = "") -> Sto
 ## script tier; a .sfd value is the one that must not have it.
 func _data_asset_locale() -> Dictionary:
 	return StoryFlowLocalization.reading_locale(
-		_context.localization if _context else null, _global_strings, _language_code)
+		_context.localization if _context else null, _current_global_strings(), _language_code)
 
 
 ## The accessor's spawn-time snapshot as ONE Dictionary, pulled off node data in one place so
@@ -2212,8 +2224,12 @@ func _resolve_string_key(value: String) -> String:
 		return value
 	var script = _context.current_script if _context else null
 	var localization = _context.localization if _context else null
-	var resolved = StoryFlowLocalization.look_up(localization, script, _global_strings, value, _language_code)
+	var resolved = StoryFlowLocalization.look_up(localization, script, _current_global_strings(), value, _language_code)
 	return value if resolved == null else resolved
+
+
+func _array_string(value: StoryFlowVariant) -> String:
+	return _resolve_string_key(value.string_key) if not value.string_key.is_empty() else value.get_string()
 
 
 ## Get a localized string from node data. The data value is used as a string

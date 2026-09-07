@@ -301,6 +301,7 @@ func write_character_scalar(id: String, variable_name: String, expected: Array, 
 	match resolved.get("builtin", ""):
 		"name":
 			character.character_name = str(raw)
+			character.name_is_literal = true
 			return true
 		"image":
 			character.image_key = str(raw)

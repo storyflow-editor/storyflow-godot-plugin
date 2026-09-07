@@ -59,6 +59,8 @@ var tables: Dictionary = {}
 ## Written ONLY through StoryFlowManager.set_language and this file's install - one resolve point,
 ## so an unregistered code can never reach it.
 var active_language: String = "en"
+var has_language_choice: bool = false
+var _has_installed_project: bool = false
 
 
 # =============================================================================
@@ -97,8 +99,9 @@ func install_from_project(project) -> void:
 		for code in project.language_strings:
 			tables[str(code)] = project.language_strings[code]
 
-	var carried := resolve_code(active_language)
+	var carried := resolve_code(active_language) if _has_installed_project or has_language_choice else ""
 	active_language = carried if not carried.is_empty() else source_language
+	_has_installed_project = project != null
 
 
 # =============================================================================
@@ -255,6 +258,9 @@ static func look_up(localization, script: StoryFlowScript, global_strings: Dicti
 		var from_source = _look_up_exact(script, global_strings, source + "." + key)
 		if from_source != null:
 			return from_source
+	# Older localized exports always put their authored source table under en.
+	if not source.is_empty() and source != "en" and language != "en":
+		return _look_up_exact(script, global_strings, "en." + key)
 
 	return null
 

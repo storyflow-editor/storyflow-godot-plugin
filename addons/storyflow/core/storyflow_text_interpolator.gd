@@ -166,7 +166,7 @@ func _resolve_character_field(path_variant, inner_field: String, var_name: Strin
 	# First-tier A2(a) alias on the existing case-insensitive Name arm; like the
 	# {Character.X} lane, this one has no Image arm to alias.
 	if StoryFlowCharacter.is_name_token(inner_field):
-		return get_string(character.character_name, _language_code)
+		return character.character_name if character.name_is_literal else get_string(character.character_name, _language_code)
 	if character.variables.has(inner_field):
 		var v: Dictionary = character.variables[inner_field]
 		var val = v.get("value", null)

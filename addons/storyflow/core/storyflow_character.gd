@@ -7,6 +7,8 @@ const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.
 
 ## String table key for display name
 var character_name: String = ""
+## Runtime writes are display text, even when their bytes match an authored key.
+var name_is_literal: bool = false
 
 ## Asset key for default portrait image
 var image_key: String = ""
@@ -146,6 +148,7 @@ static func _claim_id_warn(warn_owner: Object, id: String, reason: String) -> bo
 func duplicate_character() -> StoryFlowCharacter:
 	var c := new()
 	c.character_name = character_name
+	c.name_is_literal = name_is_literal
 	c.image_key = image_key
 	c.character_path = character_path
 	c.resolved_assets = resolved_assets.duplicate()
