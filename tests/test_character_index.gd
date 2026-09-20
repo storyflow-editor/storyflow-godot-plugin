@@ -39,6 +39,7 @@ func _initialize() -> void:
 	_test_verbatim_bridge_and_decoys()
 	_test_ladder_rungs()
 	_test_inline_arm_parity()
+	_test_character_variable_ids()
 	_test_phantom_script_regression()
 	_test_node_field_carry()
 	_test_context_latch_mechanics()
@@ -223,6 +224,43 @@ func _test_inline_arm_parity() -> void:
 	})
 	_check("an inline index that is no object is refused",
 		not_object != null and not_object.character_id_index.is_empty())
+
+
+## The exporter keys character variables by stable id while the runtime looks them up by
+## display name. Both import arms must retain the id on the row without changing that lookup.
+func _test_character_variable_ids() -> void:
+	print("-- character variable ids --")
+	var wire_id := "var_12345678"
+	var rows: Dictionary = {}
+	rows[wire_id] = {"name": "Trust", "type": "integer", "value": 3}
+	var characters: Dictionary = {}
+	characters[FX.ALICE_KEY] = {"name": "Alice", "image": "", "variables": rows}
+	var payload := {"characters": characters}
+	var importer := ImporterScript.new()
+	var inline_project = importer.import_project_from_json({"version": "1.0", "characters": payload})
+
+	var build := _temp("variable_ids/build")
+	var out := _temp("variable_ids/out")
+	FX.write_build(build)
+	FX.write_text(build.path_join("characters.json"), JSON.stringify(payload))
+	var disk_project = importer.import_project(build, out)
+
+	for arm in ["inline", "disk"]:
+		var project = {"inline": inline_project, "disk": disk_project}[arm]
+		_check("%s import returns a project" % arm, project != null)
+		if project == null:
+			continue
+		var character = project.characters.get(FX.ALICE_KEY)
+		_check("%s import keeps the character" % arm, character != null)
+		if character == null:
+			continue
+		_check("%s import keeps name-based variable lookup" % arm,
+			character.variables.has("Trust") and not character.variables.has(wire_id))
+		var variable: Dictionary = character.variables.get("Trust", {})
+		_check("%s import retains the distinct wire id" % arm, variable.get("id", "") == wire_id)
+		_check("%s import retains the display name" % arm, variable.get("name", "") == "Trust")
+		var value = variable.get("value")
+		_check("%s import retains the value" % arm, value != null and value.get_int(-1) == 3)
 
 
 # =============================================================================

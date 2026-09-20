@@ -1007,6 +1007,7 @@ func _parse_character_variables(raw: Dictionary) -> Dictionary:
 		elif var_obj.has("value"):
 			value = _parse_variant(var_obj["value"], type_string)
 		result[var_name] = {
+			"id": str(var_key),
 			"name": var_name,
 			"type": var_type,
 			"value": value,
