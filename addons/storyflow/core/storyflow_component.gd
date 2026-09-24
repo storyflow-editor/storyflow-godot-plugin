@@ -97,6 +97,10 @@ var _dialogue_dirty: bool = false
 var _waiting_for_audio_advance: bool = false
 var _audio_advance_allow_skip: bool = false
 
+# Presentation hooks: a redraw keeps its entry, while revisiting even the same node gets a new one.
+var _dialogue_entry_serial: int = 0
+var _current_speaker_path: String = ""
+
 ## Whether THIS component currently holds a registration on the manager's active-dialogue count.
 ##
 ## That count gates save loading - StoryFlowManager.load_from_slot refuses while it is above zero
@@ -117,6 +121,7 @@ var _node_handlers: Dictionary = {}
 # =============================================================================
 
 func _ready() -> void:
+	add_to_group("storyflow_components")
 	_context = StoryFlowExecutionContext.new()
 	_text = StoryFlowTextInterpolator.new()
 	_text.set_context(_context)
@@ -154,6 +159,7 @@ func _exit_tree() -> void:
 ## keeps a teardown where the autoload is already freed a no-op rather than an error.
 func _end_dialogue_registration() -> void:
 	_evaluator = null
+	_current_speaker_path = ""
 	if not _counted_dialogue_start:
 		return
 	_counted_dialogue_start = false
@@ -470,6 +476,26 @@ func resume_dialogue() -> void:
 	_context.is_paused = false
 	if _context.is_waiting_for_input:
 		dialogue_updated.emit(_context.current_dialogue_state)
+
+
+## Resolved speaker identity, independent of the localized display name. Empty for narration.
+func get_current_speaker_path() -> String:
+	return _current_speaker_path
+
+
+## Monotonic line-entry identity. UI refreshes keep this value, new entries increment it.
+func get_dialogue_entry_serial() -> int:
+	return _dialogue_entry_serial
+
+
+## The actual player, including a paused line or audio retained after dialogue ends.
+func get_current_dialogue_audio_player() -> AudioStreamPlayer:
+	return _audio.get_player() if _audio else null
+
+
+## Distinguishes playback of the same stream on a reused player from an old line's audio tail.
+func get_dialogue_audio_playback_serial() -> int:
+	return _audio.get_playback_serial() if _audio else 0
 
 # =============================================================================
 # State Access
@@ -1980,6 +2006,8 @@ func _handle_dialogue(node: Dictionary) -> void:
 	# Check if this is a fresh entry or returning from a Set* node
 	var is_fresh_entry := _context.entering_dialogue_via_edge
 	_context.entering_dialogue_via_edge = false
+	if is_fresh_entry:
+		_dialogue_entry_serial += 1
 
 	# Clear evaluation cache for fresh option visibility evaluation
 	if _evaluator:
@@ -3742,6 +3770,7 @@ func _handle_set_node_end(node: Dictionary, source_handle: String) -> void:
 # =============================================================================
 
 func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
+	_current_speaker_path = ""
 	var state := StoryFlowDialogueState.new()
 	state.is_valid = true
 	state.node_id = dialogue_node.get("id", "")
@@ -3762,6 +3791,7 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 	if character_path != "" and mgr:
 		var character: StoryFlowCharacter = mgr.get_runtime_character(character_path)
 		if character:
+			_current_speaker_path = StoryFlowCharacter.normalize_path(character_path)
 			var char_data := StoryFlowCharacterData.new()
 			# Authored names resolve at read time; player-written names remain literal.
 			char_data.name = character.character_name if character.name_is_literal else _text.get_string(character.character_name, language_code)

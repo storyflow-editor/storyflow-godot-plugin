@@ -19,6 +19,12 @@ func _enter_tree() -> void:
 		preload("core/storyflow_component.gd"),
 		preload("icons/storyflow_icon.svg") if FileAccess.file_exists("res://addons/storyflow/icons/storyflow_icon.svg") else null
 	)
+	add_custom_type(
+		"StoryFlowLipsync",
+		"Node",
+		preload("lipsync/storyflow_lipsync.gd"),
+		preload("icons/storyflow_icon.svg") if FileAccess.file_exists("res://addons/storyflow/icons/storyflow_icon.svg") else null
+	)
 
 	# Load icon
 	if FileAccess.file_exists("res://addons/storyflow/icons/storyflow_logo.svg"):
@@ -59,6 +65,7 @@ func _enter_tree() -> void:
 
 func _exit_tree() -> void:
 	remove_custom_type("StoryFlowComponent")
+	remove_custom_type("StoryFlowLipsync")
 
 	if _toolbar_button:
 		remove_control_from_container(CONTAINER_TOOLBAR, _toolbar_button)

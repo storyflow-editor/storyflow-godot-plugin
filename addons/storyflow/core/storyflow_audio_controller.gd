@@ -15,6 +15,7 @@ var _looping: bool = false
 var _owner: Node = null
 var _bus: StringName = &"Master"
 var _volume_db: float = 0.0
+var _playback_serial: int = 0
 
 
 func initialize(owner: Node, bus: StringName, volume_db: float) -> void:
@@ -29,14 +30,14 @@ func play(audio_stream: AudioStream, loop: bool) -> void:
 
 	stop()
 
-	if not _player:
+	if not is_instance_valid(_player):
 		_player = AudioStreamPlayer.new()
 		_player.bus = _bus
 		_owner.add_child(_player)
 
 	_player.stream = audio_stream
 	_player.volume_db = _volume_db
-	_player.bus = _bus
+	# Keep an optional lipsync analysis route across line changes. Its bus forwards to _bus.
 	_looping = loop
 
 	if not _player.finished.is_connected(_on_audio_finished):
@@ -46,13 +47,22 @@ func play(audio_stream: AudioStream, loop: bool) -> void:
 
 
 func stop() -> void:
-	if _player and _player.playing:
+	_playback_serial += 1
+	if is_instance_valid(_player) and _player.playing:
 		_player.stop()
 	_looping = false
 
 
 func is_playing() -> bool:
-	return _player != null and _player.playing
+	return is_instance_valid(_player) and _player.playing
+
+
+func get_player() -> AudioStreamPlayer:
+	return _player if is_instance_valid(_player) else null
+
+
+func get_playback_serial() -> int:
+	return _playback_serial
 
 
 func resolve_audio_asset(audio_path: String, script: StoryFlowScript, manager: Node) -> AudioStream:
@@ -86,7 +96,7 @@ func _try_load_asset(assets: Dictionary, key: String) -> Resource:
 
 
 func _on_audio_finished() -> void:
-	if _looping and _player:
+	if _looping and is_instance_valid(_player):
 		_player.play()
 	else:
 		playback_finished.emit()

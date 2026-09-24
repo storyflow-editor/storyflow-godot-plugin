@@ -67,4 +67,15 @@ if ($LASTEXITCODE -ne 0) { $failed = 1 }
 if ($LASTEXITCODE -ne 0) { $failed = 1 }
 & $GodotExe --headless --path $repoRoot --script res://tests/test_data_asset_hardening.gd
 if ($LASTEXITCODE -ne 0) { $failed = 1 }
+# Godot can print a script error and still return zero. Require the test's completed
+# summary as well, and bound the run so an aborted async test cannot hang the suite.
+foreach ($testName in @('driver', 'runtime', 'analyzer', 'component')) {
+    $testOutput = @(& $GodotExe --headless --audio-driver Dummy --max-fps 120 --quit-after 7200 --path $repoRoot --script "res://tests/test_lipsync_$testName.gd" 2>&1)
+    $testCode = $LASTEXITCODE
+    $testOutput | ForEach-Object { Write-Output $_ }
+    $testText = $testOutput -join [Environment]::NewLine
+    if ($testCode -ne 0 -or $testText -match 'SCRIPT ERROR:|\bERROR:|FAIL:' -or $testText -notmatch 'checks, 0 failures') {
+        $failed = 1
+    }
+}
 exit $failed
