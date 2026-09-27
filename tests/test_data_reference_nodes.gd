@@ -183,5 +183,86 @@ func _initialize() -> void:
 	component.stop_dialogue()
 	component.free()
 	manager.free()
+	_test_data_array_isolation()
 	print("data reference nodes: %d checks, %d failures" % [checks,failures])
 	quit(1 if failures else 0)
+
+
+func _array_strings(values: Array) -> Array:
+	var result := []
+	for value in values:
+		result.append(value.get_string())
+	return result
+
+
+func _array_source_value(component, manager, kind: String) -> Array:
+	match kind:
+		"script": return component._context.local_variables.refs.value.get_array()
+		"global": return manager.get_global_variables().refs.value.get_array()
+		"character": return manager.get_runtime_character("hero.sfc").variables.Refs.value.get_array()
+		_: return manager.get_data_asset_variant("asset", "Refs").get_array()
+
+
+func _test_data_array_isolation() -> void:
+	var imp = Importer.new()
+	for kind in ["script", "global", "character", "data"]:
+		var project = Project.new()
+		var rows = [{"id":"refs","name":"Refs","type":"dataAsset","isArray":true,"value":["start"]},
+			{"id":"char","name":"CharacterRef","type":"character","value":"da_hero"}]
+		project.character_id_index = {"da_hero":"hero.sfc","da_decoy":"decoy.sfc"}
+		project.global_variables = imp._parse_variables(rows)
+		project.data_assets = imp._parse_data_assets({"asset":{"id":"asset","variables":[rows[0]]}})
+		for path in ["hero.sfc", "decoy.sfc"]:
+			var character = preload("res://addons/storyflow/core/storyflow_character.gd").new()
+			character.variables = imp._parse_character_variables({"refs":rows[0]})
+			project.characters[path] = character
+		var manager = Manager.new()
+		manager.name = "StoryFlowRuntime"
+		root.add_child(manager)
+		manager.set_project(project)
+		var source = n("SOURCE", "getDataAssetRefArray", {"variable":"refs", "isGlobal":kind == "global"})
+		if kind == "character":
+			source = n("SOURCE", "getCharacterVar", {"characterPath":"decoy.sfc","characterId":"da_decoy","variableName":"Refs","variableType":"dataAsset","isArray":true})
+		elif kind == "data":
+			source = Graph.accessor("SOURCE", {"variableId":"refs","variableType":"dataAsset","isArray":true})
+		var nodes = {"0":Graph.start(),"D":Graph.dialogue("D"),"SOURCE":source,
+			"CHAR":n("CHAR","getCharacter",{"variable":"char"}),"P":Graph.pill("P","asset"),"VALUE":Graph.pill("VALUE","extra"),
+			"ADD":n("ADD","addToDataAssetArray"),"ADD2":n("ADD2","addToDataAssetArray",{"value":"third"}),
+			"REMOVE":n("REMOVE","removeFromDataAssetArray",{"value":V.from_int(0)}),
+			"CLEAR":n("CLEAR","clearDataAssetArray"),"DIRECT":n("DIRECT","clearDataAssetArray")}
+		var edges = [Graph.exec("0","D"),Graph.pill_wire("P","SOURCE"),
+			Graph.data_wire("CHAR","character","SOURCE","character-character-input"),
+			Graph.data_wire("SOURCE","dataAsset-array","ADD","dataAsset-array-2"),
+			Graph.data_wire("VALUE","dataAsset","ADD","dataAsset-3"),
+			Graph.data_wire("SOURCE","dataAsset-array","DIRECT","dataAsset-array-2")]
+		for op in ["ADD2","REMOVE","CLEAR"]:
+			edges.append(Graph.data_wire("ADD","dataAsset-array",op,"dataAsset-array-2"))
+		var script = Graph.build("isolation.sfe",nodes,edges,imp._parse_variables(rows))
+		project.scripts[script.script_path] = script
+		var component = Component.new()
+		component.dialogue_ui_scene = null
+		root.add_child(component)
+		component.start_dialogue_with_script(script.script_path)
+		var original = _array_source_value(component,manager,kind)
+		component._process_node(nodes.ADD)
+		check(kind + " immediate add writes target",_array_strings(_array_source_value(component,manager,kind)),["start","extra"])
+		check(kind + " original input snapshot detached",_array_strings(original),["start"])
+		var result = component._context.get_node_state("ADD").cached_output.get_array()
+		for op in ["CLEAR","REMOVE","ADD2"]:
+			component._process_node(nodes[op])
+			check(kind + " chained " + op + " preserves original",_array_strings(_array_source_value(component,manager,kind)),["start","extra"])
+			check(kind + " chained " + op + " preserves source output",_array_strings(result),["start","extra"])
+			var expected_output = {"CLEAR":[],"REMOVE":["extra"],"ADD2":["start","extra","third"]}[op]
+			check(kind + " chained " + op + " result",_array_strings(component._context.get_node_state(op).cached_output.get_array()),expected_output)
+		var live = _array_source_value(component,manager,kind)
+		live.append(V.from_string("host"))
+		live[0].set_string("host-updated")
+		check(kind + " stored target does not alias output",_array_strings(result),["start","extra"])
+		component._process_node(nodes.DIRECT)
+		check(kind + " direct clear writes target",_array_strings(_array_source_value(component,manager,kind)),[])
+		check(kind + " direct clear preserves previous output",_array_strings(result),["start","extra"])
+		if kind == "character":
+			check("wired character write leaves inline decoy unchanged",_array_strings(manager.get_runtime_character("decoy.sfc").variables.Refs.value.get_array()),["start"])
+		component.stop_dialogue()
+		component.free()
+		manager.free()

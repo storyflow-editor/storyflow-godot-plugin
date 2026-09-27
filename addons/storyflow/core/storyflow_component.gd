@@ -2619,7 +2619,8 @@ func _handle_array_modify(node: Dictionary) -> void:
 	# Get the array via the input edge (same as HTML's getArrayInput)
 	var arr: Array = []
 	if _evaluator and not array_handle_suffix.is_empty():
-		arr = _evaluator.evaluate_string_array_input(node_id, array_handle_suffix)
+		if node_type not in [NT.ADD_TO_DATA_ARRAY, NT.REMOVE_FROM_DATA_ARRAY, NT.CLEAR_DATA_ARRAY]:
+			arr = _evaluator.evaluate_string_array_input(node_id, array_handle_suffix)
 		# Use type-specific evaluator based on element type
 		match node_type:
 			NT.ADD_TO_BOOL_ARRAY, NT.REMOVE_FROM_BOOL_ARRAY, NT.CLEAR_BOOL_ARRAY:
@@ -2635,7 +2636,9 @@ func _handle_array_modify(node: Dictionary) -> void:
 			NT.ADD_TO_CHARACTER_ARRAY, NT.REMOVE_FROM_CHARACTER_ARRAY, NT.CLEAR_CHARACTER_ARRAY:
 				arr = _evaluator.evaluate_character_array_input(node_id, StoryFlowHandles.IN_CHARACTER_ARRAY)
 			NT.ADD_TO_DATA_ARRAY, NT.REMOVE_FROM_DATA_ARRAY, NT.CLEAR_DATA_ARRAY:
-				arr = _evaluator.evaluate_data_array_input(node_id, StoryFlowHandles.IN_DATA_ARRAY)
+				# HTML getArrayInput returns a copy. A chained modifier must not mutate
+				# its input node's cached output or the original variable through an alias.
+				arr = _evaluator.evaluate_data_array_input(node_id, StoryFlowHandles.IN_DATA_ARRAY).duplicate()
 			NT.ADD_TO_AUDIO_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY, NT.CLEAR_AUDIO_ARRAY:
 				arr = _evaluator.evaluate_audio_array_input(node_id, StoryFlowHandles.IN_AUDIO_ARRAY)
 
@@ -2732,6 +2735,11 @@ func _handle_array_modify(node: Dictionary) -> void:
 ## Trace the array input edge back to the source node to find and update the variable.
 ## Matches HTML runtime's updateConnectedArrayVariable(node, handleSuffix, newArray).
 func _update_connected_array_variable(node: Dictionary, array_handle_suffix: String, new_array: Array) -> void:
+	# Store Data arrays independently of the modifier's cached output. Their elements
+	# are mutable variant objects here, while the HTML runtime stores primitive IDs.
+	var is_data_array := array_handle_suffix.begins_with("dataAsset-array")
+	if is_data_array:
+		new_array = StoryFlowVariant.from_array(new_array).duplicate_variant().get_array()
 	if not _context or not _context.current_script:
 		return
 	var node_id: String = node.get("id", "")
@@ -2817,10 +2825,22 @@ func _update_connected_array_variable(node: Dictionary, array_handle_suffix: Str
 		# SAME node fields the array READ resolved through — left path-keyed, an id-bound
 		# array chain would read one character and write the modification back to whatever
 		# stale record the path field names. NODE lane -> the context latch pair.
+		var wired := false
+		if is_data_array and _evaluator:
+			var char_edge := _context.current_script.find_input_edge(source_id, StoryFlowHandles.IN_CHARACTER_INPUT)
+			if not char_edge.is_empty():
+				var char_source := _context.current_script.get_node(char_edge.get("source", ""))
+				if not char_source.is_empty():
+					char_path = _evaluator.evaluate_string_from_node(char_source.get("id", ""), char_edge.get("source_handle", ""))
+					wired = true
 		if mgr:
-			char_path = StoryFlowCharacter.resolve_character_ref(
-				_context.character_id_bridge, mgr.get_runtime_characters(),
-				str(source_data.get("characterId", "")), char_path, _context)
+			if wired:
+				char_path = StoryFlowCharacter.resolve_character_key(
+					_context.character_id_bridge, mgr.get_runtime_characters(), char_path, _context)
+			else:
+				char_path = StoryFlowCharacter.resolve_character_ref(
+					_context.character_id_bridge, mgr.get_runtime_characters(),
+					str(source_data.get("characterId", "")), char_path, _context)
 		if mgr and not char_path.is_empty() and not var_name.is_empty():
 			var character: StoryFlowCharacter = mgr.get_runtime_character(char_path)
 			if character and character.variables.has(var_name):
