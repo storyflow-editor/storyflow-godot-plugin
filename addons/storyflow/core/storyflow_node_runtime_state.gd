@@ -40,5 +40,8 @@ var output_values: Dictionary = {}
 ## Declared array shape retained even when an output contains no elements.
 var output_arrays: Dictionary = {}
 
+## Actual callee declarations, independent of the caller's interface snapshot.
+var output_types: Dictionary = {}
+
 ## Whether output_values has been populated.
 var has_output_values: bool = false

@@ -12,6 +12,8 @@ var _float_value: float = 0.0
 var _string_value: String = ""
 ## Authored string container value identity. Runtime writes clear it, even for key-shaped text.
 var string_key: String = ""
+## Scalar prose written during play must not be looked up as an authored key.
+var string_is_literal: bool = false
 var _array_value: Array = []
 # Map entries: key -> StoryFlowVariant value. Godot Dictionaries preserve
 # insertion order, which is contractual — entry order is observable through
@@ -80,6 +82,7 @@ func set_string(value: String) -> void:
 	type = StoryFlowTypes.VariableType.STRING
 	_string_value = value
 	string_key = ""
+	string_is_literal = true
 
 
 func set_enum(value: String) -> void:
@@ -142,6 +145,7 @@ func duplicate_variant() -> StoryFlowVariant:
 	v._float_value = _float_value
 	v._string_value = _string_value
 	v.string_key = string_key
+	v.string_is_literal = string_is_literal
 	# duplicate(true) deep-copies nested containers but NOT Object values, and
 	# StoryFlowVariant is a RefCounted - so BOTH containers must duplicate their
 	# variant members explicitly or the copy keeps handing out the source's own
@@ -168,6 +172,7 @@ func reset() -> void:
 	_float_value = 0.0
 	_string_value = ""
 	string_key = ""
+	string_is_literal = false
 	_array_value.clear()
 	_map_value.clear()
 
@@ -197,6 +202,7 @@ static func from_float(value: float) -> StoryFlowVariant:
 static func from_string(value: String) -> StoryFlowVariant:
 	var v := new()
 	v.set_string(value)
+	v.string_is_literal = false
 	return v
 
 

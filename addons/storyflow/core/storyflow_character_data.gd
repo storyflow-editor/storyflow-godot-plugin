@@ -9,3 +9,6 @@ var image: Texture2D = null
 
 ## Character variables for interpolation: var_name -> display string.
 var variables: Dictionary = {}
+
+## Live speaker identity; presentation strings must never revive a missing reference.
+var character_path: String = ""

@@ -202,6 +202,7 @@ static func _type_name(type: StoryFlowTypes.VariableType) -> String:
 		StoryFlowTypes.VariableType.IMAGE: return "Image"
 		StoryFlowTypes.VariableType.AUDIO: return "Audio"
 		StoryFlowTypes.VariableType.CHARACTER: return "Character"
+		StoryFlowTypes.VariableType.DATA_ASSET: return "DataAsset"
 		StoryFlowTypes.VariableType.MAP: return "Map"
 		_: return "None"
 
@@ -221,6 +222,7 @@ static func _parse_type_name(name: String) -> StoryFlowTypes.VariableType:
 		"Image": return StoryFlowTypes.VariableType.IMAGE
 		"Audio": return StoryFlowTypes.VariableType.AUDIO
 		"Character": return StoryFlowTypes.VariableType.CHARACTER
+		"DataAsset": return StoryFlowTypes.VariableType.DATA_ASSET
 		"Map": return StoryFlowTypes.VariableType.MAP
 		_: return StoryFlowTypes.VariableType.NONE
 
@@ -266,7 +268,7 @@ static func _variant_from_json(token, type: StoryFlowTypes.VariableType) -> Stor
 		StoryFlowTypes.VariableType.ENUM:
 			v.set_enum(str(token) if token is String else "")
 		StoryFlowTypes.VariableType.STRING, StoryFlowTypes.VariableType.IMAGE, \
-		StoryFlowTypes.VariableType.AUDIO, StoryFlowTypes.VariableType.CHARACTER:
+		StoryFlowTypes.VariableType.AUDIO, StoryFlowTypes.VariableType.CHARACTER, StoryFlowTypes.VariableType.DATA_ASSET:
 			v.set_string(str(token) if token is String else "")
 		_:
 			v.type = type
@@ -330,6 +332,8 @@ static func _variable_to_json(fallback_id: String, v: Dictionary) -> Dictionary:
 			obj["stringKeys"] = string_keys
 	else:
 		obj["value"] = _variant_to_json(value if value is StoryFlowVariant else null)
+		if type == StoryFlowTypes.VariableType.STRING and value is StoryFlowVariant:
+			obj["stringIsLiteral"] = value.string_is_literal
 
 	# Enum value LISTS travel with the record (the golden fixture carries them and Unreal writes
 	# them). Godot reads its own back from the project rather than from the save, so these are
@@ -537,6 +541,8 @@ static func _variable_from_json(fallback_id: String, record: Dictionary) -> Dict
 		return v
 
 	v["value"] = _variant_from_json(token, type)
+	if type == StoryFlowTypes.VariableType.STRING:
+		v["value"].string_is_literal = record.get("stringIsLiteral", true)
 	return v
 
 
@@ -691,7 +697,7 @@ static func _saved_scalar_matches(raw, declared: int, options: Array) -> bool:
 			return (raw is int or raw is float) and is_finite(float(raw))
 		StoryFlowTypes.VariableType.ENUM:
 			return raw is String and (options.is_empty() or options.has(raw))
-		StoryFlowTypes.VariableType.STRING, StoryFlowTypes.VariableType.IMAGE, StoryFlowTypes.VariableType.AUDIO, StoryFlowTypes.VariableType.CHARACTER:
+		StoryFlowTypes.VariableType.STRING, StoryFlowTypes.VariableType.IMAGE, StoryFlowTypes.VariableType.AUDIO, StoryFlowTypes.VariableType.CHARACTER, StoryFlowTypes.VariableType.DATA_ASSET:
 			return raw is String
 	return false
 

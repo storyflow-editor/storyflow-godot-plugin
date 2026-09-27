@@ -228,6 +228,22 @@ enum NodeType {
 	GET_DATA_ASSET_VARIABLE_NAMES,
 
 	UNKNOWN,
+
+	# Data reference variables; append without changing existing ordinals.
+	GET_DATA_ARRAY,
+	SET_DATA_ARRAY,
+	GET_DATA_ARRAY_ELEMENT,
+	SET_DATA_ARRAY_ELEMENT,
+	GET_RANDOM_DATA_ARRAY_ELEMENT,
+	ADD_TO_DATA_ARRAY,
+	REMOVE_FROM_DATA_ARRAY,
+	CLEAR_DATA_ARRAY,
+	ARRAY_LENGTH_DATA,
+	ARRAY_CONTAINS_DATA,
+	FIND_IN_DATA_ARRAY,
+	FOR_EACH_DATA_LOOP,
+	GET_DATA,
+	SET_DATA,
 }
 
 enum VariableType {
@@ -241,6 +257,7 @@ enum VariableType {
 	AUDIO,
 	CHARACTER,
 	MAP,
+	DATA_ASSET,
 }
 
 enum AssetType {
@@ -410,16 +427,27 @@ static var _node_type_map: Dictionary = {
 
 	# Character Arrays
 	"getCharacterArray": NodeType.GET_CHARACTER_ARRAY,
+	"getDataAssetRefArray": NodeType.GET_DATA_ARRAY,
 	"setCharacterArray": NodeType.SET_CHARACTER_ARRAY,
+	"setDataAssetRefArray": NodeType.SET_DATA_ARRAY,
 	"getCharacterArrayElement": NodeType.GET_CHARACTER_ARRAY_ELEMENT,
+	"getDataAssetArrayElement": NodeType.GET_DATA_ARRAY_ELEMENT,
 	"setCharacterArrayElement": NodeType.SET_CHARACTER_ARRAY_ELEMENT,
+	"setDataAssetArrayElement": NodeType.SET_DATA_ARRAY_ELEMENT,
 	"getRandomCharacterArrayElement": NodeType.GET_RANDOM_CHARACTER_ARRAY_ELEMENT,
+	"getRandomDataAssetArrayElement": NodeType.GET_RANDOM_DATA_ARRAY_ELEMENT,
 	"addToCharacterArray": NodeType.ADD_TO_CHARACTER_ARRAY,
+	"addToDataAssetArray": NodeType.ADD_TO_DATA_ARRAY,
 	"removeFromCharacterArray": NodeType.REMOVE_FROM_CHARACTER_ARRAY,
+	"removeFromDataAssetArray": NodeType.REMOVE_FROM_DATA_ARRAY,
 	"clearCharacterArray": NodeType.CLEAR_CHARACTER_ARRAY,
+	"clearDataAssetArray": NodeType.CLEAR_DATA_ARRAY,
 	"arrayLengthCharacter": NodeType.ARRAY_LENGTH_CHARACTER,
+	"arrayLengthDataAsset": NodeType.ARRAY_LENGTH_DATA,
 	"arrayContainsCharacter": NodeType.ARRAY_CONTAINS_CHARACTER,
+	"arrayContainsDataAsset": NodeType.ARRAY_CONTAINS_DATA,
 	"findInCharacterArray": NodeType.FIND_IN_CHARACTER_ARRAY,
+	"findInDataAssetArray": NodeType.FIND_IN_DATA_ARRAY,
 
 	# Audio Arrays
 	"getAudioArray": NodeType.GET_AUDIO_ARRAY,
@@ -441,6 +469,7 @@ static var _node_type_map: Dictionary = {
 	"forEachStringLoop": NodeType.FOR_EACH_STRING_LOOP,
 	"forEachImageLoop": NodeType.FOR_EACH_IMAGE_LOOP,
 	"forEachCharacterLoop": NodeType.FOR_EACH_CHARACTER_LOOP,
+	"forEachDataAssetLoop": NodeType.FOR_EACH_DATA_LOOP,
 	"forEachAudioLoop": NodeType.FOR_EACH_AUDIO_LOOP,
 
 	# Media
@@ -451,7 +480,9 @@ static var _node_type_map: Dictionary = {
 	"setAudio": NodeType.SET_AUDIO,
 	"playAudio": NodeType.PLAY_AUDIO,
 	"getCharacter": NodeType.GET_CHARACTER,
+	"getDataAssetRef": NodeType.GET_DATA,
 	"setCharacter": NodeType.SET_CHARACTER,
+	"setDataAssetRef": NodeType.SET_DATA,
 
 	# Character Variables
 	"getCharacterVar": NodeType.GET_CHARACTER_VAR,
@@ -501,6 +532,7 @@ static var _variable_type_map: Dictionary = {
 	"image": VariableType.IMAGE,
 	"audio": VariableType.AUDIO,
 	"character": VariableType.CHARACTER,
+	"dataAsset": VariableType.DATA_ASSET,
 	"map": VariableType.MAP,
 }
 
@@ -516,25 +548,25 @@ static func parse_variable_type(type_string: String) -> VariableType:
 static var _set_node_types: Array[NodeType] = [
 	NodeType.SET_BOOL, NodeType.SET_INT, NodeType.SET_FLOAT,
 	NodeType.SET_STRING, NodeType.SET_ENUM,
-	NodeType.SET_IMAGE, NodeType.SET_AUDIO, NodeType.SET_CHARACTER,
+	NodeType.SET_IMAGE, NodeType.SET_AUDIO, NodeType.SET_CHARACTER, NodeType.SET_DATA,
 	NodeType.SET_BOOL_ARRAY, NodeType.SET_INT_ARRAY, NodeType.SET_FLOAT_ARRAY,
 	NodeType.SET_STRING_ARRAY, NodeType.SET_IMAGE_ARRAY,
-	NodeType.SET_CHARACTER_ARRAY, NodeType.SET_AUDIO_ARRAY,
+	NodeType.SET_CHARACTER_ARRAY, NodeType.SET_DATA_ARRAY, NodeType.SET_AUDIO_ARRAY,
 	NodeType.SET_BOOL_ARRAY_ELEMENT, NodeType.SET_INT_ARRAY_ELEMENT,
 	NodeType.SET_FLOAT_ARRAY_ELEMENT, NodeType.SET_STRING_ARRAY_ELEMENT,
-	NodeType.SET_IMAGE_ARRAY_ELEMENT, NodeType.SET_CHARACTER_ARRAY_ELEMENT,
+	NodeType.SET_IMAGE_ARRAY_ELEMENT, NodeType.SET_CHARACTER_ARRAY_ELEMENT, NodeType.SET_DATA_ARRAY_ELEMENT,
 	NodeType.SET_AUDIO_ARRAY_ELEMENT,
 	NodeType.ADD_TO_BOOL_ARRAY, NodeType.ADD_TO_INT_ARRAY,
 	NodeType.ADD_TO_FLOAT_ARRAY, NodeType.ADD_TO_STRING_ARRAY,
-	NodeType.ADD_TO_IMAGE_ARRAY, NodeType.ADD_TO_CHARACTER_ARRAY,
+	NodeType.ADD_TO_IMAGE_ARRAY, NodeType.ADD_TO_CHARACTER_ARRAY, NodeType.ADD_TO_DATA_ARRAY,
 	NodeType.ADD_TO_AUDIO_ARRAY,
 	NodeType.REMOVE_FROM_BOOL_ARRAY, NodeType.REMOVE_FROM_INT_ARRAY,
 	NodeType.REMOVE_FROM_FLOAT_ARRAY, NodeType.REMOVE_FROM_STRING_ARRAY,
-	NodeType.REMOVE_FROM_IMAGE_ARRAY, NodeType.REMOVE_FROM_CHARACTER_ARRAY,
+	NodeType.REMOVE_FROM_IMAGE_ARRAY, NodeType.REMOVE_FROM_CHARACTER_ARRAY, NodeType.REMOVE_FROM_DATA_ARRAY,
 	NodeType.REMOVE_FROM_AUDIO_ARRAY,
 	NodeType.CLEAR_BOOL_ARRAY, NodeType.CLEAR_INT_ARRAY,
 	NodeType.CLEAR_FLOAT_ARRAY, NodeType.CLEAR_STRING_ARRAY,
-	NodeType.CLEAR_IMAGE_ARRAY, NodeType.CLEAR_CHARACTER_ARRAY,
+	NodeType.CLEAR_IMAGE_ARRAY, NodeType.CLEAR_CHARACTER_ARRAY, NodeType.CLEAR_DATA_ARRAY,
 	NodeType.CLEAR_AUDIO_ARRAY,
 	NodeType.SET_CHARACTER_VAR,
 	NodeType.SET_BACKGROUND_IMAGE,
@@ -581,30 +613,30 @@ static var _logic_node_types: Array[NodeType] = [
 	# Get* nodes
 	NodeType.GET_BOOL, NodeType.GET_INT, NodeType.GET_FLOAT,
 	NodeType.GET_STRING, NodeType.GET_ENUM,
-	NodeType.GET_IMAGE, NodeType.GET_AUDIO, NodeType.GET_CHARACTER,
+	NodeType.GET_IMAGE, NodeType.GET_AUDIO, NodeType.GET_CHARACTER, NodeType.GET_DATA,
 	NodeType.GET_CHARACTER_VAR,
 	# Array read-only operations
 	NodeType.GET_BOOL_ARRAY, NodeType.GET_INT_ARRAY, NodeType.GET_FLOAT_ARRAY,
 	NodeType.GET_STRING_ARRAY, NodeType.GET_IMAGE_ARRAY,
-	NodeType.GET_CHARACTER_ARRAY, NodeType.GET_AUDIO_ARRAY,
+	NodeType.GET_CHARACTER_ARRAY, NodeType.GET_DATA_ARRAY, NodeType.GET_AUDIO_ARRAY,
 	NodeType.GET_BOOL_ARRAY_ELEMENT, NodeType.GET_INT_ARRAY_ELEMENT,
 	NodeType.GET_FLOAT_ARRAY_ELEMENT, NodeType.GET_STRING_ARRAY_ELEMENT,
-	NodeType.GET_IMAGE_ARRAY_ELEMENT, NodeType.GET_CHARACTER_ARRAY_ELEMENT,
+	NodeType.GET_IMAGE_ARRAY_ELEMENT, NodeType.GET_CHARACTER_ARRAY_ELEMENT, NodeType.GET_DATA_ARRAY_ELEMENT,
 	NodeType.GET_AUDIO_ARRAY_ELEMENT,
 	NodeType.GET_RANDOM_BOOL_ARRAY_ELEMENT, NodeType.GET_RANDOM_INT_ARRAY_ELEMENT,
 	NodeType.GET_RANDOM_FLOAT_ARRAY_ELEMENT, NodeType.GET_RANDOM_STRING_ARRAY_ELEMENT,
-	NodeType.GET_RANDOM_IMAGE_ARRAY_ELEMENT, NodeType.GET_RANDOM_CHARACTER_ARRAY_ELEMENT,
+	NodeType.GET_RANDOM_IMAGE_ARRAY_ELEMENT, NodeType.GET_RANDOM_CHARACTER_ARRAY_ELEMENT, NodeType.GET_RANDOM_DATA_ARRAY_ELEMENT,
 	NodeType.GET_RANDOM_AUDIO_ARRAY_ELEMENT,
 	NodeType.ARRAY_LENGTH_BOOL, NodeType.ARRAY_LENGTH_INT, NodeType.ARRAY_LENGTH_FLOAT,
 	NodeType.ARRAY_LENGTH_STRING, NodeType.ARRAY_LENGTH_IMAGE,
-	NodeType.ARRAY_LENGTH_CHARACTER, NodeType.ARRAY_LENGTH_AUDIO,
+	NodeType.ARRAY_LENGTH_CHARACTER, NodeType.ARRAY_LENGTH_DATA, NodeType.ARRAY_LENGTH_AUDIO,
 	NodeType.ARRAY_CONTAINS_BOOL, NodeType.ARRAY_CONTAINS_INT,
 	NodeType.ARRAY_CONTAINS_FLOAT, NodeType.ARRAY_CONTAINS_STRING,
-	NodeType.ARRAY_CONTAINS_IMAGE, NodeType.ARRAY_CONTAINS_CHARACTER,
+	NodeType.ARRAY_CONTAINS_IMAGE, NodeType.ARRAY_CONTAINS_CHARACTER, NodeType.ARRAY_CONTAINS_DATA,
 	NodeType.ARRAY_CONTAINS_AUDIO,
 	NodeType.FIND_IN_BOOL_ARRAY, NodeType.FIND_IN_INT_ARRAY,
 	NodeType.FIND_IN_FLOAT_ARRAY, NodeType.FIND_IN_STRING_ARRAY,
-	NodeType.FIND_IN_IMAGE_ARRAY, NodeType.FIND_IN_CHARACTER_ARRAY,
+	NodeType.FIND_IN_IMAGE_ARRAY, NodeType.FIND_IN_CHARACTER_ARRAY, NodeType.FIND_IN_DATA_ARRAY,
 	NodeType.FIND_IN_AUDIO_ARRAY,
 	# Map read-only operations
 	NodeType.GET_MAP, NodeType.GET_MAP_VALUE, NodeType.HAS_MAP_KEY,
@@ -665,7 +697,7 @@ static var _boolean_memo_node_types: Array[NodeType] = [
 	# Array membership tests - an array input can be a .sfd accessor
 	NodeType.ARRAY_CONTAINS_BOOL, NodeType.ARRAY_CONTAINS_INT, NodeType.ARRAY_CONTAINS_FLOAT,
 	NodeType.ARRAY_CONTAINS_STRING, NodeType.ARRAY_CONTAINS_IMAGE,
-	NodeType.ARRAY_CONTAINS_CHARACTER, NodeType.ARRAY_CONTAINS_AUDIO,
+	NodeType.ARRAY_CONTAINS_CHARACTER, NodeType.ARRAY_CONTAINS_DATA, NodeType.ARRAY_CONTAINS_AUDIO,
 	# Boolean array element reads - array and index inputs, both derivable from a .sfd read
 	NodeType.GET_BOOL_ARRAY_ELEMENT, NodeType.GET_RANDOM_BOOL_ARRAY_ELEMENT,
 ]
@@ -682,7 +714,7 @@ static func is_boolean_memo_node(node_type: NodeType) -> bool:
 static var _for_each_loop_types: Array[NodeType] = [
 	NodeType.FOR_EACH_BOOL_LOOP, NodeType.FOR_EACH_INT_LOOP,
 	NodeType.FOR_EACH_FLOAT_LOOP, NodeType.FOR_EACH_STRING_LOOP,
-	NodeType.FOR_EACH_IMAGE_LOOP, NodeType.FOR_EACH_CHARACTER_LOOP,
+	NodeType.FOR_EACH_IMAGE_LOOP, NodeType.FOR_EACH_CHARACTER_LOOP, NodeType.FOR_EACH_DATA_LOOP,
 	NodeType.FOR_EACH_AUDIO_LOOP,
 	# forEachMap iterates {key, value} entries instead of array elements, so it
 	# gets its own execution handler (mirroring the Unreal dispatch) — but it is

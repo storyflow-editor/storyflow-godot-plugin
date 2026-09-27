@@ -692,6 +692,8 @@ func _apply_character_variable(character: StoryFlowCharacter, variable_name: Str
 		return true
 	if not character.variables.has(variable_name):
 		return false
+	if value is StoryFlowVariant:
+		value.string_is_literal = true
 	character.variables[variable_name]["value"] = value
 	return true
 
@@ -1689,10 +1691,10 @@ func _build_dispatch_table() -> void:
 	var array_set_handler := _handle_array_set
 	for t in [
 		NT.SET_BOOL_ARRAY, NT.SET_INT_ARRAY, NT.SET_FLOAT_ARRAY, NT.SET_STRING_ARRAY,
-		NT.SET_IMAGE_ARRAY, NT.SET_CHARACTER_ARRAY, NT.SET_AUDIO_ARRAY,
+		NT.SET_IMAGE_ARRAY, NT.SET_CHARACTER_ARRAY, NT.SET_DATA_ARRAY, NT.SET_AUDIO_ARRAY,
 		NT.SET_BOOL_ARRAY_ELEMENT, NT.SET_INT_ARRAY_ELEMENT, NT.SET_FLOAT_ARRAY_ELEMENT,
 		NT.SET_STRING_ARRAY_ELEMENT, NT.SET_IMAGE_ARRAY_ELEMENT,
-		NT.SET_CHARACTER_ARRAY_ELEMENT, NT.SET_AUDIO_ARRAY_ELEMENT,
+		NT.SET_CHARACTER_ARRAY_ELEMENT, NT.SET_DATA_ARRAY_ELEMENT, NT.SET_AUDIO_ARRAY_ELEMENT,
 	]:
 		_node_handlers[t] = array_set_handler
 
@@ -1701,13 +1703,13 @@ func _build_dispatch_table() -> void:
 	for t in [
 		NT.ADD_TO_BOOL_ARRAY, NT.ADD_TO_INT_ARRAY, NT.ADD_TO_FLOAT_ARRAY,
 		NT.ADD_TO_STRING_ARRAY, NT.ADD_TO_IMAGE_ARRAY,
-		NT.ADD_TO_CHARACTER_ARRAY, NT.ADD_TO_AUDIO_ARRAY,
+		NT.ADD_TO_CHARACTER_ARRAY, NT.ADD_TO_DATA_ARRAY, NT.ADD_TO_AUDIO_ARRAY,
 		NT.REMOVE_FROM_BOOL_ARRAY, NT.REMOVE_FROM_INT_ARRAY, NT.REMOVE_FROM_FLOAT_ARRAY,
 		NT.REMOVE_FROM_STRING_ARRAY, NT.REMOVE_FROM_IMAGE_ARRAY,
-		NT.REMOVE_FROM_CHARACTER_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY,
+		NT.REMOVE_FROM_CHARACTER_ARRAY, NT.REMOVE_FROM_DATA_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY,
 		NT.CLEAR_BOOL_ARRAY, NT.CLEAR_INT_ARRAY, NT.CLEAR_FLOAT_ARRAY,
 		NT.CLEAR_STRING_ARRAY, NT.CLEAR_IMAGE_ARRAY,
-		NT.CLEAR_CHARACTER_ARRAY, NT.CLEAR_AUDIO_ARRAY,
+		NT.CLEAR_CHARACTER_ARRAY, NT.CLEAR_DATA_ARRAY, NT.CLEAR_AUDIO_ARRAY,
 	]:
 		_node_handlers[t] = array_modify_handler
 
@@ -1715,23 +1717,23 @@ func _build_dispatch_table() -> void:
 	for t in [
 		NT.GET_BOOL_ARRAY, NT.GET_INT_ARRAY, NT.GET_FLOAT_ARRAY,
 		NT.GET_STRING_ARRAY, NT.GET_IMAGE_ARRAY,
-		NT.GET_CHARACTER_ARRAY, NT.GET_AUDIO_ARRAY,
+		NT.GET_CHARACTER_ARRAY, NT.GET_DATA_ARRAY, NT.GET_AUDIO_ARRAY,
 		NT.GET_BOOL_ARRAY_ELEMENT, NT.GET_INT_ARRAY_ELEMENT, NT.GET_FLOAT_ARRAY_ELEMENT,
 		NT.GET_STRING_ARRAY_ELEMENT, NT.GET_IMAGE_ARRAY_ELEMENT,
-		NT.GET_CHARACTER_ARRAY_ELEMENT, NT.GET_AUDIO_ARRAY_ELEMENT,
+		NT.GET_CHARACTER_ARRAY_ELEMENT, NT.GET_DATA_ARRAY_ELEMENT, NT.GET_AUDIO_ARRAY_ELEMENT,
 		NT.GET_RANDOM_BOOL_ARRAY_ELEMENT, NT.GET_RANDOM_INT_ARRAY_ELEMENT,
 		NT.GET_RANDOM_FLOAT_ARRAY_ELEMENT, NT.GET_RANDOM_STRING_ARRAY_ELEMENT,
-		NT.GET_RANDOM_IMAGE_ARRAY_ELEMENT, NT.GET_RANDOM_CHARACTER_ARRAY_ELEMENT,
+		NT.GET_RANDOM_IMAGE_ARRAY_ELEMENT, NT.GET_RANDOM_CHARACTER_ARRAY_ELEMENT, NT.GET_RANDOM_DATA_ARRAY_ELEMENT,
 		NT.GET_RANDOM_AUDIO_ARRAY_ELEMENT,
 		NT.ARRAY_LENGTH_BOOL, NT.ARRAY_LENGTH_INT, NT.ARRAY_LENGTH_FLOAT,
 		NT.ARRAY_LENGTH_STRING, NT.ARRAY_LENGTH_IMAGE,
-		NT.ARRAY_LENGTH_CHARACTER, NT.ARRAY_LENGTH_AUDIO,
+		NT.ARRAY_LENGTH_CHARACTER, NT.ARRAY_LENGTH_DATA, NT.ARRAY_LENGTH_AUDIO,
 		NT.ARRAY_CONTAINS_BOOL, NT.ARRAY_CONTAINS_INT, NT.ARRAY_CONTAINS_FLOAT,
 		NT.ARRAY_CONTAINS_STRING, NT.ARRAY_CONTAINS_IMAGE,
-		NT.ARRAY_CONTAINS_CHARACTER, NT.ARRAY_CONTAINS_AUDIO,
+		NT.ARRAY_CONTAINS_CHARACTER, NT.ARRAY_CONTAINS_DATA, NT.ARRAY_CONTAINS_AUDIO,
 		NT.FIND_IN_BOOL_ARRAY, NT.FIND_IN_INT_ARRAY, NT.FIND_IN_FLOAT_ARRAY,
 		NT.FIND_IN_STRING_ARRAY, NT.FIND_IN_IMAGE_ARRAY,
-		NT.FIND_IN_CHARACTER_ARRAY, NT.FIND_IN_AUDIO_ARRAY,
+		NT.FIND_IN_CHARACTER_ARRAY, NT.FIND_IN_DATA_ARRAY, NT.FIND_IN_AUDIO_ARRAY,
 	]:
 		_node_handlers[t] = logic_handler
 
@@ -1740,7 +1742,7 @@ func _build_dispatch_table() -> void:
 	for t in [
 		NT.FOR_EACH_BOOL_LOOP, NT.FOR_EACH_INT_LOOP, NT.FOR_EACH_FLOAT_LOOP,
 		NT.FOR_EACH_STRING_LOOP, NT.FOR_EACH_IMAGE_LOOP,
-		NT.FOR_EACH_CHARACTER_LOOP, NT.FOR_EACH_AUDIO_LOOP,
+		NT.FOR_EACH_CHARACTER_LOOP, NT.FOR_EACH_DATA_LOOP, NT.FOR_EACH_AUDIO_LOOP,
 	]:
 		_node_handlers[t] = for_each_handler
 
@@ -1748,6 +1750,11 @@ func _build_dispatch_table() -> void:
 	_node_handlers[NT.GET_IMAGE] = logic_handler
 	_node_handlers[NT.GET_AUDIO] = logic_handler
 	_node_handlers[NT.GET_CHARACTER] = logic_handler
+	for t in [NT.GET_DATA, NT.GET_DATA_ARRAY, NT.GET_DATA_ARRAY_ELEMENT,
+		NT.GET_RANDOM_DATA_ARRAY_ELEMENT, NT.ARRAY_LENGTH_DATA,
+		NT.ARRAY_CONTAINS_DATA, NT.FIND_IN_DATA_ARRAY]:
+		_node_handlers[t] = _handle_data_read
+	_node_handlers[NT.SET_DATA] = _handle_set_data
 
 	# Media set handlers
 	_node_handlers[NT.SET_IMAGE] = _handle_set_image
@@ -1897,6 +1904,7 @@ func _handle_end(node: Dictionary) -> void:
 		# read site — the call boundary is observably a snapshot both ways.
 		var output_by_name: Dictionary = {}
 		var output_arrays_by_name: Dictionary = {}
+		var output_types_by_name: Dictionary = {}
 		for var_id in _context.local_variables:
 			var v: Dictionary = _context.local_variables[var_id]
 			if v.get("is_output", false):
@@ -1907,6 +1915,7 @@ func _handle_end(node: Dictionary) -> void:
 						out_val = out_val.duplicate_variant()
 					output_by_name[var_name] = out_val
 					output_arrays_by_name[var_name] = bool(v.get("is_array", false))
+					output_types_by_name[var_name] = v.get("type", StoryFlowTypes.VariableType.NONE)
 
 		# Pop call stack
 		var frame: StoryFlowCallFrame = _context.call_stack.pop_back()
@@ -1929,6 +1938,7 @@ func _handle_end(node: Dictionary) -> void:
 			# We match by name: scriptOutputs entry name ↔ variable name.
 			var output_values: Dictionary = {}
 			var output_arrays: Dictionary = {}
+			var output_types: Dictionary = {}
 			if output_by_name.size() > 0:
 				var rs_node: Dictionary = _context.current_script.get_node(frame.return_node_id)
 				var rs_data: Dictionary = rs_node.get("data", {})
@@ -1940,16 +1950,19 @@ func _handle_end(node: Dictionary) -> void:
 						if not out_id.is_empty() and output_by_name.has(out_name):
 							output_values[out_id] = output_by_name[out_name]
 							output_arrays[out_id] = output_arrays_by_name[out_name]
+							output_types[out_id] = output_types_by_name[out_name]
 				# Also store by variable name as fallback
 				for var_name in output_by_name:
 					output_values[var_name] = output_by_name[var_name]
 					output_arrays[var_name] = output_arrays_by_name[var_name]
+					output_types[var_name] = output_types_by_name[var_name]
 
 			# Store output values on the RunScript node's runtime state
 			if output_values.size() > 0:
 				var rs_state: StoryFlowNodeRuntimeState = _context.get_node_state(frame.return_node_id)
 				rs_state.output_values = output_values
 				rs_state.output_arrays = output_arrays
+				rs_state.output_types = output_types
 				rs_state.has_output_values = true
 
 			# Route: exit handle if exit flow, otherwise default output
@@ -2085,6 +2098,12 @@ func _handle_dialogue(node: Dictionary) -> void:
 # =============================================================================
 
 func _handle_run_script(node: Dictionary) -> void:
+	# A prior completed call cannot supply outputs while the next call is unfinished.
+	var pending_state := _context.get_node_state(node["id"])
+	pending_state.has_output_values = false
+	pending_state.output_values = {}
+	pending_state.output_arrays = {}
+	pending_state.output_types = {}
 	if _context.call_stack.size() >= StoryFlowExecutionContext.MAX_SCRIPT_DEPTH:
 		_report_error("Max script nesting depth exceeded (%d)" % StoryFlowExecutionContext.MAX_SCRIPT_DEPTH)
 		return
@@ -2131,6 +2150,7 @@ func _handle_run_script(node: Dictionary) -> void:
 					"string": arr = _evaluator.evaluate_string_array_input(node.get("id", ""), handle_suffix)
 					"image": arr = _evaluator.evaluate_image_array_input(node.get("id", ""), handle_suffix)
 					"character": arr = _evaluator.evaluate_character_array_input(node.get("id", ""), handle_suffix)
+					"dataAsset": arr = _evaluator.evaluate_data_array_input(node.get("id", ""), handle_suffix)
 					"audio": arr = _evaluator.evaluate_audio_array_input(node.get("id", ""), handle_suffix)
 				var variant := StoryFlowVariant.new()
 				variant.set_array(arr)
@@ -2156,6 +2176,8 @@ func _handle_run_script(node: Dictionary) -> void:
 					if source_map is Dictionary:
 						entries = _snapshot_map_entries(source_map)
 					param_values[param_name] = StoryFlowVariant.from_map(entries)
+				elif param_type == "dataAsset":
+					param_values[param_name] = StoryFlowVariant.from_string(_evaluator.evaluate_data_input(node.get("id", ""), handle_suffix, ""))
 				elif param_type == "boolean":
 					param_values[param_name] = StoryFlowVariant.from_bool(
 						_evaluator.evaluate_boolean_input(node.get("id", ""), handle_suffix, false)
@@ -2486,6 +2508,9 @@ func _handle_random_branch(node: Dictionary) -> void:
 # =============================================================================
 
 func _handle_array_set(node: Dictionary) -> void:
+	if node.get("type") == StoryFlowTypes.NodeType.SET_DATA_ARRAY_ELEMENT:
+		_handle_set_data_array_element(node)
+		return
 	var data: Dictionary = node.get("data", {})
 	var var_id: String = data.get("variable", "")
 	var is_global: bool = data.get("isGlobal", false)
@@ -2567,6 +2592,8 @@ func _handle_array_set(node: Dictionary) -> void:
 				new_array = _evaluator.evaluate_image_array_input(node.get("id", ""), StoryFlowHandles.IN_IMAGE_ARRAY)
 			NT.SET_CHARACTER_ARRAY:
 				new_array = _evaluator.evaluate_character_array_input(node.get("id", ""), StoryFlowHandles.IN_CHARACTER_ARRAY)
+			NT.SET_DATA_ARRAY:
+				new_array = _evaluator.evaluate_data_array_input(node.get("id", ""), StoryFlowHandles.IN_DATA_ARRAY)
 			NT.SET_AUDIO_ARRAY:
 				new_array = _evaluator.evaluate_audio_array_input(node.get("id", ""), StoryFlowHandles.IN_AUDIO_ARRAY)
 		variant.set_array(new_array)
@@ -2607,6 +2634,8 @@ func _handle_array_modify(node: Dictionary) -> void:
 				arr = _evaluator.evaluate_image_array_input(node_id, StoryFlowHandles.IN_IMAGE_ARRAY)
 			NT.ADD_TO_CHARACTER_ARRAY, NT.REMOVE_FROM_CHARACTER_ARRAY, NT.CLEAR_CHARACTER_ARRAY:
 				arr = _evaluator.evaluate_character_array_input(node_id, StoryFlowHandles.IN_CHARACTER_ARRAY)
+			NT.ADD_TO_DATA_ARRAY, NT.REMOVE_FROM_DATA_ARRAY, NT.CLEAR_DATA_ARRAY:
+				arr = _evaluator.evaluate_data_array_input(node_id, StoryFlowHandles.IN_DATA_ARRAY)
 			NT.ADD_TO_AUDIO_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY, NT.CLEAR_AUDIO_ARRAY:
 				arr = _evaluator.evaluate_audio_array_input(node_id, StoryFlowHandles.IN_AUDIO_ARRAY)
 
@@ -2656,6 +2685,9 @@ func _handle_array_modify(node: Dictionary) -> void:
 			var elem := StoryFlowVariant.new()
 			elem.set_string(eval_result)
 			arr.append(elem)
+		NT.ADD_TO_DATA_ARRAY:
+			var dv: String = inline_value.get_string() if inline_value is StoryFlowVariant else str(inline_value) if inline_value is String else ""
+			arr.append(StoryFlowVariant.from_string(_evaluator.evaluate_data_input(node_id, StoryFlowHandles.IN_DATA, dv) if _evaluator else dv))
 		NT.ADD_TO_IMAGE_ARRAY, NT.ADD_TO_CHARACTER_ARRAY, NT.ADD_TO_AUDIO_ARRAY:
 			var dv := ""
 			if inline_value is StoryFlowVariant:
@@ -2669,7 +2701,7 @@ func _handle_array_modify(node: Dictionary) -> void:
 		# Remove operations
 		NT.REMOVE_FROM_BOOL_ARRAY, NT.REMOVE_FROM_INT_ARRAY, NT.REMOVE_FROM_FLOAT_ARRAY, \
 		NT.REMOVE_FROM_STRING_ARRAY, NT.REMOVE_FROM_IMAGE_ARRAY, \
-		NT.REMOVE_FROM_CHARACTER_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY:
+		NT.REMOVE_FROM_CHARACTER_ARRAY, NT.REMOVE_FROM_DATA_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY:
 			var dv := 0
 			if inline_value is StoryFlowVariant:
 				dv = inline_value.get_int(0)
@@ -2680,7 +2712,7 @@ func _handle_array_modify(node: Dictionary) -> void:
 		# Clear operations
 		NT.CLEAR_BOOL_ARRAY, NT.CLEAR_INT_ARRAY, NT.CLEAR_FLOAT_ARRAY, \
 		NT.CLEAR_STRING_ARRAY, NT.CLEAR_IMAGE_ARRAY, \
-		NT.CLEAR_CHARACTER_ARRAY, NT.CLEAR_AUDIO_ARRAY:
+		NT.CLEAR_CHARACTER_ARRAY, NT.CLEAR_DATA_ARRAY, NT.CLEAR_AUDIO_ARRAY:
 			arr.clear()
 
 	# Store the result array on this node's cached output (matches HTML's setNodeOutputValue).
@@ -2805,6 +2837,13 @@ func _update_connected_array_variable(node: Dictionary, array_handle_suffix: Str
 	if var_name.is_empty():
 		var_name = source_data.get("variable", "")
 
+	# Exported variable nodes bind by ID; retain the name fallback for legacy graphs.
+	var bound := _find_variable(str(source_data.get("variable", "")), is_global)
+	if not bound.is_empty() and bound.get("is_array", false) and bound.get("value") is StoryFlowVariant:
+		bound["value"].set_array(new_array)
+		_notify_variable_changed(bound, is_global)
+		return
+
 	# Find the variable by name in the appropriate scope
 	if is_global:
 		var mgr := get_manager()
@@ -2847,6 +2886,8 @@ func _get_array_handle_suffix(node_type: StoryFlowTypes.NodeType) -> String:
 			return StoryFlowHandles.IN_IMAGE_ARRAY
 		NT.ADD_TO_CHARACTER_ARRAY, NT.REMOVE_FROM_CHARACTER_ARRAY, NT.CLEAR_CHARACTER_ARRAY:
 			return StoryFlowHandles.IN_CHARACTER_ARRAY
+		NT.ADD_TO_DATA_ARRAY, NT.REMOVE_FROM_DATA_ARRAY, NT.CLEAR_DATA_ARRAY:
+			return StoryFlowHandles.IN_DATA_ARRAY
 		NT.ADD_TO_AUDIO_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY, NT.CLEAR_AUDIO_ARRAY:
 			return StoryFlowHandles.IN_AUDIO_ARRAY
 	return ""
@@ -2878,6 +2919,8 @@ func _handle_for_each_loop(node: Dictionary) -> void:
 					loop_array = _evaluator.evaluate_image_array_input(node.get("id", ""), StoryFlowHandles.IN_IMAGE_ARRAY)
 				NT.FOR_EACH_CHARACTER_LOOP:
 					loop_array = _evaluator.evaluate_character_array_input(node.get("id", ""), StoryFlowHandles.IN_CHARACTER_ARRAY)
+				NT.FOR_EACH_DATA_LOOP:
+					loop_array = _evaluator.evaluate_data_array_input(node.get("id", ""), StoryFlowHandles.IN_DATA_ARRAY)
 				NT.FOR_EACH_AUDIO_LOOP:
 					loop_array = _evaluator.evaluate_audio_array_input(node.get("id", ""), StoryFlowHandles.IN_AUDIO_ARRAY)
 
@@ -3422,7 +3465,9 @@ func _handle_set_character_var(node: Dictionary) -> void:
 		var source_node: Dictionary = _context.current_script.get_node(input_edge.get("source", ""))
 		if not source_node.is_empty():
 			var source_handle: String = input_edge.get("source_handle", "")
-			if variable_type == "boolean":
+			if variable_type == "dataAsset":
+				new_value.set_string(_evaluator.evaluate_data_from_node(source_node.get("id", ""), source_handle))
+			elif variable_type == "boolean":
 				new_value.set_bool(_evaluator.evaluate_boolean_from_node(source_node.get("id", ""), source_handle))
 			elif variable_type == "integer":
 				new_value.set_int(_evaluator.evaluate_integer_from_node(source_node.get("id", ""), source_handle))
@@ -3508,6 +3553,8 @@ func _evaluate_character_var_array_input(node_id: String, variable_type: String,
 			return _evaluator.evaluate_image_array_input(node_id, handle_suffix).duplicate()
 		"character":
 			return _evaluator.evaluate_character_array_input(node_id, handle_suffix).duplicate()
+		"dataAsset":
+			return _evaluator.evaluate_data_array_input(node_id, handle_suffix).duplicate()
 		"audio":
 			return _evaluator.evaluate_audio_array_input(node_id, handle_suffix).duplicate()
 		_:
@@ -3675,6 +3722,8 @@ func _read_data_asset_set_input_core(node: Dictionary, data: Dictionary) -> Stor
 			value.set_int(_evaluator.evaluate_integer_from_node(source_id, source_handle))
 		StoryFlowTypes.VariableType.FLOAT:
 			value.set_float(_evaluator.evaluate_float_from_node(source_id, source_handle))
+		StoryFlowTypes.VariableType.DATA_ASSET:
+			value.set_string(_evaluator.evaluate_data_from_node(source_id, source_handle))
 		StoryFlowTypes.VariableType.ENUM:
 			value.set_enum(_evaluator.evaluate_string_from_node(source_id, source_handle))
 		StoryFlowTypes.VariableType.STRING, \
@@ -3794,6 +3843,7 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 			_current_speaker_path = StoryFlowCharacter.normalize_path(character_path)
 			var char_data := StoryFlowCharacterData.new()
 			# Authored names resolve at read time; player-written names remain literal.
+			char_data.character_path = character_path
 			char_data.name = character.character_name if character.name_is_literal else _text.get_string(character.character_name, language_code)
 
 			# Resolve character portrait to actual Texture2D (reads from mutable
@@ -4175,3 +4225,46 @@ func _load_audio_direct(file_path: String) -> AudioStream:
 	var stream := AudioStreamMP3.new()
 	stream.data = buffer
 	return stream
+
+
+func _handle_set_data(node: Dictionary) -> void:
+	var data: Dictionary = node.get("data", {})
+	var variable := _find_variable(str(data.get("variable", "")), bool(data.get("isGlobal", false)))
+	if variable.get("type", -1) == StoryFlowTypes.VariableType.DATA_ASSET and not variable.get("is_array", false):
+		var inline_value = data.get("value")
+		var current = variable.get("value")
+		var fallback: String = current.get_string() if current is StoryFlowVariant else ""
+		if inline_value is StoryFlowVariant:
+			fallback = inline_value.get_string()
+		elif inline_value is String:
+			fallback = inline_value
+		var value := _evaluator.evaluate_data_input(node.get("id", ""), "dataAsset-2", fallback) if _evaluator else fallback
+		_set_variable_on_node(node, StoryFlowVariant.from_string(value))
+		_sf_trace('VAR SET "%s" global=%s value=%s' % [variable.get("name", ""), str(data.get("isGlobal", false)).to_lower(), value])
+	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
+
+
+func _handle_data_read(node: Dictionary) -> void:
+	var suffix := "dataAsset-"
+	match node.get("type"):
+		StoryFlowTypes.NodeType.ARRAY_LENGTH_DATA, StoryFlowTypes.NodeType.FIND_IN_DATA_ARRAY:
+			suffix = StoryFlowHandles.OUT_INTEGER
+		StoryFlowTypes.NodeType.ARRAY_CONTAINS_DATA:
+			suffix = StoryFlowHandles.OUT_BOOLEAN
+	_process_next_node(StoryFlowHandles.source(node["id"], suffix))
+
+
+func _handle_set_data_array_element(node: Dictionary) -> void:
+	var node_id: String = node["id"]
+	var data: Dictionary = node.get("data", {})
+	var suffix := "dataAsset-array-2"
+	if _evaluator:
+		var failures_before := _context.resolution_failures
+		var arr := _evaluator.evaluate_data_array_input(node_id, suffix).duplicate()
+		var index := _evaluator.evaluate_integer_input(node_id, "integer-3", _evaluator._get_data_int(data, "value1", 0))
+		var value := _evaluator.evaluate_data_input(node_id, "dataAsset-4", _evaluator._get_data_string(data, "value2"))
+		if _context.resolution_failures == failures_before and index >= 0 and index < arr.size():
+			arr[index] = StoryFlowVariant.from_string(value)
+			_context.get_node_state(node_id).cached_output = StoryFlowVariant.from_array(arr)
+			_update_connected_array_variable(node, suffix, arr)
+	_handle_set_node_end(node, StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_FLOW))

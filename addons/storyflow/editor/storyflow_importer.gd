@@ -1398,6 +1398,7 @@ func _parse_variant(value, type_hint: String = "") -> StoryFlowVariant:
 			variant.set_enum(value)
 		else:
 			variant.set_string(value)
+			variant.string_is_literal = false
 	elif value is Array:
 		var arr: Array = []
 		for item in value:

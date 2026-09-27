@@ -1,0 +1,564 @@
+{
+  "_comment": "Shared engine interpolation cases verified against the real editor HTML runtime by engine-reference-interpolation-parity.test.ts. Data asset and character IDs are references, never interpolated scalar strings.",
+  "dataAssets": {
+    "da_base": {
+      "id": "da_base",
+      "name": "Base",
+      "parent": null,
+      "overrides": {},
+      "variables": [
+        {
+          "id": "hp",
+          "name": "HP",
+          "type": "integer",
+          "value": 10
+        },
+        {
+          "id": "next",
+          "name": "Next",
+          "type": "dataAsset",
+          "value": "da_other"
+        },
+        {
+          "id": "owner",
+          "name": "Owner",
+          "type": "character",
+          "value": "da_hero"
+        },
+        {
+          "id": "title",
+          "name": "Title",
+          "type": "string",
+          "value": "Knight"
+        },
+        {
+          "id": "literal",
+          "name": "Literal",
+          "type": "string",
+          "value": "{count}"
+        },
+        {
+          "id": "enabled",
+          "name": "Enabled",
+          "type": "boolean",
+          "value": false
+        },
+        {
+          "id": "zero",
+          "name": "Zero",
+          "type": "integer",
+          "value": 0
+        },
+        {
+          "id": "ratio",
+          "name": "Ratio",
+          "type": "float",
+          "value": 1.25
+        },
+        {
+          "id": "empty",
+          "name": "Empty",
+          "type": "string",
+          "value": ""
+        },
+        {
+          "id": "rank",
+          "name": "Rank",
+          "type": "enum",
+          "value": "Gold",
+          "enumValues": [
+            "Gold",
+            "Silver"
+          ]
+        },
+        {
+          "id": "dot",
+          "name": "Skill.Level",
+          "type": "integer",
+          "value": 11
+        },
+        {
+          "id": "skill",
+          "name": "Skill",
+          "type": "dataAsset",
+          "value": "da_other"
+        },
+        {
+          "id": "image",
+          "name": "Icon",
+          "type": "image",
+          "value": "Images/Icon.png"
+        },
+        {
+          "id": "audio",
+          "name": "Sound",
+          "type": "audio",
+          "value": "Audio/Sound.ogg"
+        },
+        {
+          "id": "list",
+          "name": "List",
+          "type": "integer",
+          "value": [
+            1
+          ],
+          "isArray": true
+        },
+        {
+          "id": "refs",
+          "name": "Refs",
+          "type": "dataAsset",
+          "value": [
+            "da_other"
+          ],
+          "isArray": true
+        },
+        {
+          "id": "map",
+          "name": "Slots",
+          "type": "map",
+          "value": [
+            {
+              "key": "slot",
+              "value": "da_other"
+            }
+          ],
+          "keyType": "string",
+          "valueType": "dataAsset"
+        },
+        {
+          "id": "unicode",
+          "name": "Price in gold",
+          "type": "integer",
+          "value": 6
+        },
+        {
+          "id": "unicode2",
+          "name": "Цена",
+          "type": "integer",
+          "value": 7
+        }
+      ]
+    },
+    "da_child": {
+      "id": "da_child",
+      "name": "Child",
+      "parent": "da_base",
+      "overrides": {
+        "hp": 20
+      },
+      "variables": []
+    },
+    "da_other": {
+      "id": "da_other",
+      "name": "Other",
+      "parent": null,
+      "overrides": {},
+      "variables": [
+        {
+          "id": "next",
+          "name": "Next",
+          "type": "dataAsset",
+          "value": "da_child"
+        },
+        {
+          "id": "hp2",
+          "name": "HP",
+          "type": "integer",
+          "value": 30
+        },
+        {
+          "id": "level",
+          "name": "Level",
+          "type": "integer",
+          "value": 99
+        }
+      ]
+    }
+  },
+  "characters": [
+    {
+      "id": "da_hero",
+      "path": "Characters/Hero.sfc",
+      "name": "Hero",
+      "variables": [
+        {
+          "id": "stats",
+          "name": "Stats",
+          "type": "dataAsset",
+          "value": "da_child"
+        },
+        {
+          "id": "friend",
+          "name": "Friend",
+          "type": "character",
+          "value": "da_villain"
+        },
+        {
+          "id": "dot",
+          "name": "Skill.Level",
+          "type": "integer",
+          "value": 17
+        },
+        {
+          "id": "literal",
+          "name": "Literal",
+          "type": "string",
+          "value": "{count}"
+        }
+      ]
+    },
+    {
+      "id": "da_villain",
+      "path": "Characters/Villain.sfc",
+      "name": "Villain",
+      "variables": [
+        {
+          "id": "stats2",
+          "name": "Stats",
+          "type": "dataAsset",
+          "value": "da_other"
+        },
+        {
+          "id": "friend2",
+          "name": "Friend",
+          "type": "character",
+          "value": "da_hero"
+        }
+      ]
+    }
+  ],
+  "roots": [
+    {
+      "id": "r",
+      "name": "DB",
+      "type": "dataAsset",
+      "value": "da_child"
+    },
+    {
+      "id": "p",
+      "name": "Player",
+      "type": "character",
+      "value": "da_hero"
+    },
+    {
+      "id": "count",
+      "name": "count",
+      "type": "integer",
+      "value": 42
+    },
+    {
+      "id": "literal",
+      "name": "Literal",
+      "type": "string",
+      "value": "{count}"
+    },
+    {
+      "id": "assetList",
+      "name": "AssetList",
+      "type": "dataAsset",
+      "value": [
+        "da_child"
+      ],
+      "isArray": true
+    }
+  ],
+  "assignedCharacterId": "da_hero",
+  "cases": [
+    {
+      "name": "data-inherited-override",
+      "text": "HP {DB.HP}, title {DB.Title}",
+      "expected": "HP 20, title Knight"
+    },
+    {
+      "name": "mixed-data-character-data",
+      "text": "{DB.Owner.Stats.HP}",
+      "expected": "20"
+    },
+    {
+      "name": "character-data",
+      "text": "{Player.Stats.Next.HP}",
+      "expected": "30"
+    },
+    {
+      "name": "assigned-character-data",
+      "text": "{Character.Stats.HP}",
+      "expected": "20"
+    },
+    {
+      "name": "nested-characters",
+      "text": "{Player.Friend.Stats.HP} {Character.Friend.Name}",
+      "expected": "30 Villain"
+    },
+    {
+      "name": "finite-revisited-reference",
+      "text": "{DB.Next.Next.HP} {Player.Friend.Friend.Stats.HP}",
+      "expected": "20 20"
+    },
+    {
+      "name": "long-finite-chain",
+      "text": "{DB.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.Next.HP}",
+      "expected": "20"
+    },
+    {
+      "name": "dotted-fields-win",
+      "text": "{DB.Skill.Level} {Player.Skill.Level} {DB.Owner.Skill.Level}",
+      "expected": "11 17 17"
+    },
+    {
+      "name": "scalar-formatting",
+      "text": "{DB.Enabled}|{DB.Zero}|{DB.Ratio}|{DB.Empty}|{DB.Rank}",
+      "expected": "false|0|1.25||Gold"
+    },
+    {
+      "name": "character-name-alias",
+      "text": "{Character.Name}|{Character.name}|{DB.Owner.NAME}",
+      "expected": "Hero|Hero|Hero"
+    },
+    {
+      "name": "unicode-and-spaces",
+      "text": "{DB.Price in gold}|{DB.Цена}",
+      "expected": "6|7"
+    },
+    {
+      "name": "trim-outer-only",
+      "text": "{ DB.HP }|{Character. Name}|{DB. HP}",
+      "expected": "20|Hero|{DB. HP}"
+    },
+    {
+      "name": "single-pass-insertion",
+      "text": "{DB.Literal}|{Player.Literal}|{Character.Literal}|{Literal}|{count}",
+      "expected": "{count}|{count}|{count}|{count}|42"
+    },
+    {
+      "name": "missing-field",
+      "text": "{DB.Missing}|{Player.Missing}|{Character.Missing}",
+      "expected": "{DB.Missing}|{Player.Missing}|{Character.Missing}"
+    },
+    {
+      "name": "scalar-cannot-hop",
+      "text": "{DB.HP.More}|{count.HP}",
+      "expected": "{DB.HP.More}|{count.HP}"
+    },
+    {
+      "name": "reference-leaves-stay-literal",
+      "text": "{DB}|{Player}|{DB.Owner}|{Player.Stats}",
+      "expected": "{DB}|{Player}|{DB.Owner}|{Player.Stats}"
+    },
+    {
+      "name": "containers-stay-literal",
+      "text": "{DB.List}|{DB.Refs}|{DB.Slots}|{AssetList}|{AssetList.HP}",
+      "expected": "{DB.List}|{DB.Refs}|{DB.Slots}|{AssetList}|{AssetList.HP}"
+    },
+    {
+      "name": "media-leaves-stay-literal",
+      "text": "{DB.Icon}|{DB.Sound}",
+      "expected": "{DB.Icon}|{DB.Sound}"
+    },
+    {
+      "name": "bad-syntax-stays-literal",
+      "text": "{DB..HP}|{DB.}|{}|{DB.HP)|{DB.HP",
+      "expected": "{DB..HP}|{DB.}|{}|{DB.HP)|{DB.HP"
+    },
+    {
+      "name": "adjacent-repeated-tokens",
+      "text": "{DB.HP}{DB.HP}{count}",
+      "expected": "202042"
+    },
+    {
+      "name": "local-root-shadows-global",
+      "text": "{DB.HP}",
+      "expected": "30",
+      "roots": [
+        {
+          "id": "r",
+          "name": "DB",
+          "type": "dataAsset",
+          "value": "da_child"
+        },
+        {
+          "id": "p",
+          "name": "Player",
+          "type": "character",
+          "value": "da_hero"
+        },
+        {
+          "id": "count",
+          "name": "count",
+          "type": "integer",
+          "value": 42
+        },
+        {
+          "id": "literal",
+          "name": "Literal",
+          "type": "string",
+          "value": "{count}"
+        },
+        {
+          "id": "assetList",
+          "name": "AssetList",
+          "type": "dataAsset",
+          "value": [
+            "da_child"
+          ],
+          "isArray": true
+        },
+        {
+          "id": "local",
+          "name": "DB",
+          "type": "dataAsset",
+          "value": "da_other"
+        }
+      ]
+    },
+    {
+      "name": "wrong-type-local-still-shadows",
+      "text": "{DB.HP}",
+      "expected": "{DB.HP}",
+      "roots": [
+        {
+          "id": "r",
+          "name": "DB",
+          "type": "dataAsset",
+          "value": "da_child"
+        },
+        {
+          "id": "p",
+          "name": "Player",
+          "type": "character",
+          "value": "da_hero"
+        },
+        {
+          "id": "count",
+          "name": "count",
+          "type": "integer",
+          "value": 42
+        },
+        {
+          "id": "literal",
+          "name": "Literal",
+          "type": "string",
+          "value": "{count}"
+        },
+        {
+          "id": "assetList",
+          "name": "AssetList",
+          "type": "dataAsset",
+          "value": [
+            "da_child"
+          ],
+          "isArray": true
+        },
+        {
+          "id": "local",
+          "name": "DB",
+          "type": "string",
+          "value": "da_child"
+        }
+      ]
+    },
+    {
+      "name": "wrong-kind-reference",
+      "text": "{DB.HP}|{Player.Name}",
+      "expected": "{DB.HP}|{Player.Name}",
+      "roots": [
+        {
+          "id": "r",
+          "name": "DB",
+          "type": "dataAsset",
+          "value": "da_hero"
+        },
+        {
+          "id": "p",
+          "name": "Player",
+          "type": "character",
+          "value": "da_child"
+        }
+      ]
+    },
+    {
+      "name": "missing-reference",
+      "text": "{DB.HP}|{Player.Name}",
+      "expected": "{DB.HP}|{Player.Name}",
+      "roots": [
+        {
+          "id": "r",
+          "name": "DB",
+          "type": "dataAsset",
+          "value": "da_missing"
+        },
+        {
+          "id": "p",
+          "name": "Player",
+          "type": "character",
+          "value": "da_missing"
+        }
+      ]
+    },
+    {
+      "name": "empty-reference",
+      "text": "{DB.HP}|{Player.Name}",
+      "expected": "{DB.HP}|{Player.Name}",
+      "roots": [
+        {
+          "id": "r",
+          "name": "DB",
+          "type": "dataAsset",
+          "value": ""
+        },
+        {
+          "id": "p",
+          "name": "Player",
+          "type": "character",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "name": "reserved-assigned-character",
+      "text": "{Character.Stats.HP}",
+      "expected": "20",
+      "roots": [
+        {
+          "id": "r",
+          "name": "DB",
+          "type": "dataAsset",
+          "value": "da_child"
+        },
+        {
+          "id": "p",
+          "name": "Player",
+          "type": "character",
+          "value": "da_hero"
+        },
+        {
+          "id": "count",
+          "name": "count",
+          "type": "integer",
+          "value": 42
+        },
+        {
+          "id": "literal",
+          "name": "Literal",
+          "type": "string",
+          "value": "{count}"
+        },
+        {
+          "id": "assetList",
+          "name": "AssetList",
+          "type": "dataAsset",
+          "value": [
+            "da_child"
+          ],
+          "isArray": true
+        },
+        {
+          "id": "reserved",
+          "name": "Character",
+          "type": "character",
+          "value": "da_villain"
+        }
+      ]
+    }
+  ]
+}

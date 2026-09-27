@@ -79,6 +79,8 @@ const IN_AUDIO_ARRAY := "audio-array"
 # The accessor's REFERENCE pin: the wire from a getDataAsset pill into this pin IS the
 # binding (engine contract 2.2 — the accessor stores no assetId of its own). "asset" is
 # the optionId the editor gives it (DATA_ASSET_TARGET_OPTION_ID in data-asset-binding.tsx).
+const IN_DATA := "dataAsset"
+const IN_DATA_ARRAY := "dataAsset-array"
 const IN_DATA_ASSET := "dataAsset-asset"
 
 ## The optionId of the .sfd Set node's VALUE input pin. Placed by SetDataAssetVariableNode.tsx
@@ -137,12 +139,10 @@ static func is_data_handle(source_handle: String) -> bool:
 
 ## Returns the VariableType for a data handle suffix, or NONE if not a data suffix.
 static func get_data_type_from_suffix(suffix: String) -> StoryFlowTypes.VariableType:
-	# The .sfd reference pin names an ASSET, not a value — there is no VariableType
-	# for it and there must not be one (engine contract 2.2: the wire is the binding,
-	# and the value's type comes from the accessor's own snapshot). Answered FIRST so
-	# no value-type prefix can ever claim it if the arms below are reordered.
+	# Data reference values and the original .sfd pill share the dataAsset pin type.
+	# Accessors still take their field value type from the declaration snapshot.
 	if suffix.begins_with("dataAsset"):
-		return StoryFlowTypes.VariableType.NONE
+		return StoryFlowTypes.VariableType.DATA_ASSET
 	if suffix.begins_with("boolean"):
 		return StoryFlowTypes.VariableType.BOOLEAN
 	elif suffix.begins_with("integer"):

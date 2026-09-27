@@ -224,7 +224,7 @@ static func storage_type(declared_type: StoryFlowTypes.VariableType) -> StoryFlo
 	match declared_type:
 		StoryFlowTypes.VariableType.IMAGE, \
 		StoryFlowTypes.VariableType.AUDIO, \
-		StoryFlowTypes.VariableType.CHARACTER:
+		StoryFlowTypes.VariableType.CHARACTER, StoryFlowTypes.VariableType.DATA_ASSET:
 			return StoryFlowTypes.VariableType.STRING
 		_:
 			return declared_type
@@ -326,7 +326,7 @@ static func _type_scalar(declared_type: StoryFlowTypes.VariableType, raw) -> Sto
 		StoryFlowTypes.VariableType.STRING, \
 		StoryFlowTypes.VariableType.IMAGE, \
 		StoryFlowTypes.VariableType.AUDIO, \
-		StoryFlowTypes.VariableType.CHARACTER:
+		StoryFlowTypes.VariableType.CHARACTER, StoryFlowTypes.VariableType.DATA_ASSET:
 			if not raw is String:
 				return null
 			return StoryFlowVariant.from_string(raw)
