@@ -1,0 +1,121 @@
+{
+	"global_variables": {
+		"g_arr": {
+			"is_array": true,
+			"name": "inventory",
+			"type": 4,
+			"value": {
+				"array": [
+					{
+						"type": 4,
+						"value": "rope"
+					},
+					{
+						"type": 4,
+						"value": "lamp"
+					}
+				],
+				"type": 4,
+				"value": ""
+			}
+		},
+		"g_bool": {
+			"is_array": false,
+			"name": "metKing",
+			"type": 1,
+			"value": {
+				"type": 1,
+				"value": true
+			}
+		},
+		"g_empty": {
+			"is_array": true,
+			"name": "spent",
+			"type": 4,
+			"value": {
+				"type": 4,
+				"value": ""
+			}
+		},
+		"g_enum": {
+			"is_array": false,
+			"name": "mood",
+			"type": 5,
+			"value": {
+				"type": 5,
+				"value": "Happy"
+			}
+		},
+		"g_float": {
+			"is_array": false,
+			"name": "accuracy",
+			"type": 3,
+			"value": {
+				"type": 3,
+				"value": 0.75
+			}
+		},
+		"g_int": {
+			"is_array": false,
+			"name": "gold",
+			"type": 2,
+			"value": {
+				"type": 2,
+				"value": 42
+			}
+		},
+		"g_map": {
+			"is_array": false,
+			"key_type": 4,
+			"name": "scores",
+			"type": 9,
+			"value": {
+				"type": 9,
+				"value": [
+					{
+						"key": "alice",
+						"value": {
+							"type": 2,
+							"value": 10
+						}
+					},
+					{
+						"key": "bob",
+						"value": {
+							"type": 2,
+							"value": 20
+						}
+					}
+				]
+			},
+			"value_type": 2
+		},
+		"g_str": {
+			"is_array": false,
+			"name": "playerName",
+			"type": 4,
+			"value": {
+				"type": 4,
+				"value": "Ada"
+			}
+		}
+	},
+	"runtime_characters": {
+		"characters\\hero.json": {
+			"variables": {
+				"affection": {
+					"type": 2,
+					"value": {
+						"type": 2,
+						"value": 7
+					}
+				}
+			}
+		}
+	},
+	"save_version": 1,
+	"used_once_only_options": [
+		"D1-o1",
+		"D2-o2"
+	]
+}

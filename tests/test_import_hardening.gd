@@ -45,6 +45,12 @@ func _initialize() -> void:
 	_test_media_is_written_once_per_sync()
 	_test_media_whose_build_path_matches_the_asset_directory()
 	_test_media_whose_build_path_differs_only_in_case()
+	_test_data_assets_are_imported_and_never_become_a_script()
+	_test_data_asset_media_reaches_the_project_pool()
+	_test_inline_import_carries_data_assets()
+	_test_localization_is_imported_and_never_becomes_a_script()
+	_test_localization_degraded_ladder()
+	_test_inline_import_carries_localization()
 	# Runaway-recursion guard last: without it this scenario never returns.
 	_test_nested_output_is_refused()
 
@@ -476,6 +482,357 @@ func _test_nested_output_is_refused() -> void:
 		not DirAccess.dir_exists_absolute(out.path_join("out")))
 	_check("the refused copy is counted (got %d)" % importer.get_error_count(),
 		importer.get_error_count() == 1)
+
+
+# =============================================================================
+# Data Assets
+# =============================================================================
+
+## data-assets.json must land in project.data_assets AND must never be swept up as a script.
+##
+## THE KILLER REGRESSION: the standalone-script sweep walks every .json file in the build
+## directory, and load_project_local re-runs it on EVERY launch. A sidecar missing from the
+## exclusion list becomes a phantom script named after its filename, silently, in shipped
+## games — so the phantom check matters more than the parse check.
+func _test_data_assets_are_imported_and_never_become_a_script() -> void:
+	var build := _temp("data_assets/build")
+	var out := _temp("data_assets/out")
+	_write_build(build, "")
+	_write_text(build.path_join("data-assets.json"), JSON.stringify(_data_assets_payload(), "\t"))
+
+	var importer := ImporterScript.new()
+	var project := importer.import_project(build, out)
+	_check("import with data-assets.json returns a project", project != null)
+	if project == null:
+		return
+
+	_check("data-assets.json does not become a phantom script",
+		not project.scripts.has("data-assets"))
+	_check("only the real script is imported (got %s)" % [project.scripts.keys()],
+		project.scripts.size() == 1 and project.scripts.has("Main"))
+	_check("data assets land on the project (got %d)" % project.data_assets.size(),
+		project.data_assets.size() == 2)
+	_check("the category row is dropped and the rest keep declaration order",
+		project.data_assets.get("base", {}).get("variables", []).size() == 2)
+	_check("overrides stay RAW for the store's second pass",
+		project.data_assets.get("child", {}).get("raw_overrides", {}).has("hp"))
+
+	# The re-sweep an exported game performs on every launch must stay clean too.
+	var reloaded := importer.load_project_local(out)
+	_check("reloading the output directory still produces no phantom script",
+		reloaded != null and not reloaded.scripts.has("data-assets"))
+	_check("reloading the output directory still carries the data assets",
+		reloaded != null and reloaded.data_assets.size() == 2)
+
+
+## import_project_from_json is public API and must carry data assets too — the parallel inline
+## importer silently dropping them would leave a synced project with no .sfd state.
+func _test_inline_import_carries_data_assets() -> void:
+	var importer := ImporterScript.new()
+
+	var flat := importer.import_project_from_json({
+		"version": "1.0",
+		"scripts": {"Main": {"nodes": {"0": {"type": "start"}}, "connections": []}},
+		"dataAssets": _data_assets_payload()["dataAssets"],
+	})
+	_check("inline import returns a project", flat != null)
+	_check("inline import carries the data assets",
+		flat != null and flat.data_assets.size() == 2)
+	_check("inline import parses declarations the same way",
+		flat != null and flat.data_assets.get("base", {}).get("variables", []).size() == 2)
+
+	# The data-assets.json wrapper shape is accepted too, matching how the characters block
+	# accepts either nesting.
+	var wrapped := importer.import_project_from_json({
+		"version": "1.0",
+		"dataAssets": _data_assets_payload(),
+	})
+	_check("inline import accepts the data-assets.json wrapper shape",
+		wrapped != null and wrapped.data_assets.size() == 2)
+
+
+# =============================================================================
+# Localization (localization.json, spec §9)
+# =============================================================================
+
+## localization.json must land on the project AND must never be swept up as a script — the same
+## killer regression the data-assets test above guards, reached through the newest sidecar.
+##
+## THE FILE-PRESENCE MARKER is asserted in both directions here, because that is the whole branch
+## this contract has: a build WITH the file is a localized project, a build WITHOUT it is a
+## pre-localization export and behaves exactly as this plugin did before localization existed.
+func _test_localization_is_imported_and_never_becomes_a_script() -> void:
+	var build := _temp("localization/build")
+	var out := _temp("localization/out")
+	_write_build(build, "")
+	_write_text(build.path_join("localization.json"), JSON.stringify(_localization_payload(), "\t"))
+
+	var importer := ImporterScript.new()
+	var project := importer.import_project(build, out)
+	_check("import with localization.json returns a project", project != null)
+	if project == null:
+		return
+
+	_check("localization.json does not become a phantom script",
+		not project.scripts.has("localization"))
+	_check("only the real script is imported (got %s)" % [project.scripts.keys()],
+		project.scripts.size() == 1 and project.scripts.has("Main"))
+	_check("the presence marker is set", project.has_localization)
+	_check("the source language is read (got '%s')" % project.source_language,
+		project.source_language == "en")
+	_check("the registry keeps the author's order (got %s)" % [project.languages],
+		project.languages.size() == 2
+			and project.languages[0].get("code") == "fr" and project.languages[0].get("name") == "French"
+			and project.languages[1].get("code") == "es")
+	_check("a language with no label falls back to its own code",
+		project.languages[1].get("name") == "es")
+	_check("both tables land (got %s)" % [project.language_strings.keys()],
+		project.language_strings.size() == 2)
+	_check("rows are stored verbatim",
+		project.language_strings.get("fr", {}).get("1.text", "") == "Bien le bonjour.")
+	_check("a non-string row is skipped, trusted-seed posture",
+		not project.language_strings.get("fr", {}).has("bad.row"))
+
+	# The re-sweep an exported game performs on every launch must stay clean too.
+	var reloaded := importer.load_project_local(out)
+	_check("reloading the output directory still produces no phantom script",
+		reloaded != null and not reloaded.scripts.has("localization"))
+	_check("reloading the output directory still carries the tables",
+		reloaded != null and reloaded.has_localization and reloaded.language_strings.size() == 2)
+
+	# THE ABSENT SIDECAR: a genuinely pre-localization build, source-only and untouched.
+	var plain_build := _temp("localization_absent/build")
+	var plain_out := _temp("localization_absent/out")
+	_write_build(plain_build, "")
+	var plain := ImporterScript.new().import_project(plain_build, plain_out)
+	_check("a build with no localization.json is not a localized project",
+		plain != null and not plain.has_localization)
+	_check("and registers no tables", plain != null and plain.language_strings.is_empty())
+
+
+## The degraded ladder: every refusing rung leaves the project SOURCE-ONLY (has_localization
+## false, no tables), so strings keep resolving to their source text instead of the import failing.
+##
+## The MISSING and UNSUPPORTED schemaVersion rungs are separate cases because they are separate
+## warnings: a sidecar that declares no version and one that declares a version this plugin cannot
+## read are different authoring situations, and a single `.get("schemaVersion", "")` would answer
+## the same thing for both and collapse them.
+func _test_localization_degraded_ladder() -> void:
+	var no_version := _localization_payload()
+	no_version.erase("schemaVersion")
+	_assert_localization_refused("a MISSING schemaVersion", no_version)
+
+	var bad_version := _localization_payload()
+	bad_version["schemaVersion"] = "2"
+	_assert_localization_refused("an UNSUPPORTED schemaVersion", bad_version)
+
+	var empty_version := _localization_payload()
+	empty_version["schemaVersion"] = ""
+	_assert_localization_refused("a present-but-EMPTY schemaVersion", empty_version)
+
+	var no_strings := _localization_payload()
+	no_strings.erase("strings")
+	_assert_localization_refused("no strings object", no_strings)
+
+	# AN UNQUOTED 1 IS REFUSED, AND THIS IS A VERSION-INDEPENDENCE PIN, not a formatting one.
+	# Godot's JSON parses every number as a float, and the PRINTED form of a whole-valued float
+	# differs across engine builds (4.3 renders 1.0 as "1", 4.6 as "1.0"). A gate that compared
+	# str(value) would therefore accept this document on one Godot and refuse it on another - the
+	# degraded ladder answering differently depending on which engine a game shipped on. The
+	# reader requires a genuine String instead, so this case must fail identically everywhere.
+	# The exporter always writes the quoted "1", so an unquoted one only ever reaches a
+	# hand-edited sidecar, and refusing it degrades to source text rather than mis-reading a
+	# version.
+	var numeric_version := _localization_payload()
+	numeric_version["schemaVersion"] = 1
+	_assert_localization_refused("an UNQUOTED numeric schemaVersion", numeric_version)
+
+	# The same rule one step further out: a schemaVersion that is not a scalar at all.
+	var array_version := _localization_payload()
+	array_version["schemaVersion"] = ["1"]
+	_assert_localization_refused("a NON-SCALAR schemaVersion", array_version)
+
+	# And the type rule on the fields the reader keeps: a non-string code is dropped from the
+	# registry, a non-string label falls back to its code, and a non-string sourceLanguage leaves
+	# the default in place - none of them coerced through str(), for the version reason above.
+	var typed := _localization_payload()
+	typed["sourceLanguage"] = 7
+	typed["languages"] = [{"code": 1, "name": "Numeric"}, {"code": "fr", "name": 2}]
+	var mistyped := _import_with_localization("loc_mistyped", typed)
+	_check("a non-string sourceLanguage leaves the default in place",
+		mistyped != null and mistyped.source_language == "en")
+	_check("a non-string language code is dropped from the registry",
+		mistyped != null and mistyped.languages.size() == 1
+			and mistyped.languages[0].get("code") == "fr")
+	_check("a non-string label falls back to its own code",
+		mistyped != null and mistyped.languages[0].get("name") == "fr")
+
+	# THE ABSENT-VS-EMPTY CONVERGENCE, and why the marker is a bool: a sidecar carrying NO tables
+	# at all is still a LOCALIZED project. An author who registered nothing yet has not shipped a
+	# pre-localization export, and a key count cannot tell the two apart.
+	var empty_tables := _localization_payload()
+	empty_tables["languages"] = []
+	empty_tables["strings"] = {}
+	var empty := _import_with_localization("loc_empty", empty_tables)
+	_check("a present-but-EMPTY sidecar is still a localized project",
+		empty != null and empty.has_localization)
+	_check("and it registers no tables, exactly like the absent one",
+		empty != null and empty.language_strings.is_empty())
+
+
+## One refused rung: the document imports, the project stays source-only.
+func _assert_localization_refused(label: String, payload: Dictionary) -> void:
+	var project := _import_with_localization("loc_%d" % _checks, payload)
+	_check("%s leaves the project source-only" % label,
+		project != null and not project.has_localization)
+	_check("%s registers no tables" % label,
+		project != null and project.language_strings.is_empty())
+
+
+func _import_with_localization(label: String, payload: Dictionary) -> StoryFlowProject:
+	var build := _temp("%s/build" % label)
+	var out := _temp("%s/out" % label)
+	_write_build(build, "")
+	_write_text(build.path_join("localization.json"), JSON.stringify(payload, "\t"))
+	return ImporterScript.new().import_project(build, out)
+
+
+## import_project_from_json is public API and must carry the sidecar too — the parallel inline
+## importer silently dropping it would leave a synced project reading only source text, with no
+## sign anything was missed.
+func _test_inline_import_carries_localization() -> void:
+	var importer := ImporterScript.new()
+
+	var flat := importer.import_project_from_json({
+		"version": "1.0",
+		"scripts": {"Main": {"nodes": {"0": {"type": "start"}}, "connections": []}},
+		"localization": _localization_payload(),
+	})
+	_check("inline import returns a project", flat != null)
+	_check("inline import carries the presence marker", flat != null and flat.has_localization)
+	_check("inline import carries both tables",
+		flat != null and flat.language_strings.size() == 2)
+
+	# The wrapper nesting is accepted too, matching how the characters and dataAssets blocks
+	# accept either shape.
+	var wrapped := importer.import_project_from_json({
+		"version": "1.0",
+		"localization": {"localization": _localization_payload()},
+	})
+	_check("inline import accepts the wrapper shape",
+		wrapped != null and wrapped.has_localization and wrapped.language_strings.size() == 2)
+
+	# No key at all is a pre-localization payload — the inline arm's form of the file-presence
+	# marker.
+	var none := importer.import_project_from_json({"version": "1.0"})
+	_check("an inline payload with no localization key is a source-only project",
+		none != null and not none.has_localization)
+
+	# A refused rung degrades the same way here as on the disk arm (one shared parse).
+	var refused := importer.import_project_from_json({
+		"version": "1.0",
+		"localization": {"sourceLanguage": "en", "strings": {"fr": {}}},
+	})
+	_check("the inline arm runs the same degraded ladder",
+		refused != null and not refused.has_localization)
+
+
+## A two-language sidecar in the shipped shape: full, PRE-RESOLVED tables (no status, no hash),
+## one row deliberately non-string to exercise the trusted-seed skip, and one registry entry with
+## no label. Small on purpose — the resolution goldens live in the character-contract package.
+func _localization_payload() -> Dictionary:
+	return {
+		"schemaVersion": "1",
+		"sourceLanguage": "en",
+		"languages": [
+			{"code": "fr", "name": "French"},
+			{"code": "es"},
+		],
+		"strings": {
+			"fr": {
+				"1.text": "Bien le bonjour.",
+				"bad.row": 7,
+			},
+			"es": {
+				"1.text": "Otra vez tu.",
+			},
+		},
+	}
+
+
+## A two-level .sfd family: a base with scalars and a category row, and a child overriding an
+## inherited id. Small on purpose — the resolver's own goldens live in test_data_asset_store.gd.
+## A .sfd image value resolves to a real imported resource (contract 2.1's 2026-09-04 amendment).
+##
+## The value ships as an asset KEY and data-assets.json carries its own "assets" registry; this
+## pins the engine half of that bargain - the registry is imported into the PROJECT pool, which is
+## the shared final fallback both image and audio resolution end at. Before it, a .sfd image value
+## was a path to a file the import had never copied.
+func _test_data_asset_media_reaches_the_project_pool() -> void:
+	print("-- .sfd media into the project pool --")
+	var build := _temp("da_media/build")
+	var out := _temp("da_media/out")
+	# _write_build plants a real 2x2 png at this path and wires it as a SCRIPT asset; the .sfd
+	# registry below names the same file, which is what an export does when a script and a Data
+	# Asset both point at one image.
+	_write_build(build, "images/pic.png")
+
+	var payload := _data_assets_payload()
+	payload["dataAssets"]["base"]["variables"].append(
+		{"id": "icon", "name": "icon", "type": "image", "value": "asset_image_900"})
+	payload["assets"] = {"asset_image_900": {"id": "asset_image_900", "type": "image", "path": "images/pic.png"}}
+	_write_text(build.path_join("data-assets.json"), JSON.stringify(payload, "	"))
+
+	var project := ImporterScript.new().import_project(build, out)
+	_check("import with .sfd media returns a project", project != null)
+	if project == null:
+		return
+
+	# The value stays the KEY - the .sfd surface learns nothing about assets.
+	var icon_decl: Dictionary = {}
+	for decl in project.data_assets.get("base", {}).get("variables", []):
+		if str(decl.get("id", "")) == "icon":
+			icon_decl = decl
+	# The declaration's value is TYPED at import (StoryFlowDataAssetStore.type_value), so it is read
+	# through the variant rather than compared as a bare string.
+	var icon_value = icon_decl.get("value", null)
+	var icon_text: String = icon_value.get_string("") if icon_value != null and icon_value.has_method("get_string") else str(icon_value)
+	_check("the image value is the asset key, not a path (got '%s')" % icon_text,
+		icon_text == "asset_image_900")
+
+	# THE HALF THAT WAS BROKEN: the key has to resolve to something the build contains.
+	_check("the .sfd registry landed in the project pool",
+		project.resolved_assets.get("asset_image_900") is Resource)
+
+	# And it survives the re-sweep an exported game performs on every launch.
+	var reloaded := ImporterScript.new().load_project_local(out)
+	_check("and still resolves after the launch-time reload",
+		reloaded != null and reloaded.resolved_assets.get("asset_image_900") is Resource)
+
+
+func _data_assets_payload() -> Dictionary:
+	return {
+		"dataAssets": {
+			"base": {
+				"id": "base",
+				"name": "CreatureBase",
+				"parent": null,
+				"variables": [
+					{"id": "hp", "name": "hp", "type": "integer", "value": 100},
+					{"id": "alive", "name": "alive", "type": "boolean", "value": true},
+					{"id": "lore", "name": "lore", "type": "category"},
+				],
+				"overrides": {},
+			},
+			"child": {
+				"id": "child",
+				"name": "Goblin",
+				"parent": "base",
+				"variables": [],
+				"overrides": {"hp": 150},
+			},
+		},
+	}
 
 
 # =============================================================================

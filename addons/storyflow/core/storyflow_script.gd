@@ -111,6 +111,12 @@ func find_input_edge(node_id: String, target_suffix: String) -> Dictionary:
 	return {}
 
 
+## A RAW, EXACT-KEY probe into this script's own table: it builds `language.key` and no language
+## tier runs. It is NOT the localized door - StoryFlowLocalization.look_up is, and it owns the
+## whole ladder (spec §9). A caller that builds its own prefixed key here bypasses the translation
+## overlay and the source-table fall-through, which is the silent defect the shared ladder exists
+## to make impossible. Kept as public API for hosts that genuinely want one table row; nothing
+## inside this plugin resolves strings through it.
 func get_localized_string(key: String, language: String = "en") -> String:
 	var full_key := language + "." + key
 	return strings.get(full_key, key)

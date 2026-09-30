@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "1",
+  "characters": {
+    "da_villain00000000000000000000000": "characters\\villain.sfc",
+    "da_hero0000000000000000000000000a": "characters\\hero.sfc",
+    "da_archetype000000000000000000000": "characters\\archetype.sfc"
+  }
+}

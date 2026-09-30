@@ -7,11 +7,14 @@ const StoryFlowAudioController = preload("res://addons/storyflow/core/storyflow_
 const StoryFlowCallFrame = preload("res://addons/storyflow/core/storyflow_call_frame.gd")
 const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
 const StoryFlowCharacterData = preload("res://addons/storyflow/core/storyflow_character_data.gd")
+const StoryFlowDataAssetAccess = preload("res://addons/storyflow/core/storyflow_data_asset_access.gd")
+const StoryFlowDataAssetStore = preload("res://addons/storyflow/core/storyflow_data_asset_store.gd")
 const StoryFlowDialogueOption = preload("res://addons/storyflow/core/storyflow_dialogue_option.gd")
 const StoryFlowDialogueState = preload("res://addons/storyflow/core/storyflow_dialogue_state.gd")
 const StoryFlowEvaluator = preload("res://addons/storyflow/core/storyflow_evaluator.gd")
 const StoryFlowExecutionContext = preload("res://addons/storyflow/core/storyflow_execution_context.gd")
 const StoryFlowHandles = preload("res://addons/storyflow/core/storyflow_handles.gd")
+const StoryFlowLocalization = preload("res://addons/storyflow/core/storyflow_localization.gd")
 const StoryFlowLoopFrame = preload("res://addons/storyflow/core/storyflow_loop_frame.gd")
 const StoryFlowNodeRuntimeState = preload("res://addons/storyflow/core/storyflow_node_runtime_state.gd")
 const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
@@ -94,6 +97,22 @@ var _dialogue_dirty: bool = false
 var _waiting_for_audio_advance: bool = false
 var _audio_advance_allow_skip: bool = false
 
+# Presentation hooks: a redraw keeps its entry, while revisiting even the same node gets a new one.
+var _dialogue_entry_serial: int = 0
+var _current_speaker_path: String = ""
+
+## Whether THIS component currently holds a registration on the manager's active-dialogue count.
+##
+## That count gates save loading - StoryFlowManager.load_from_slot refuses while it is above zero
+## - so a registration that is never given back disables .sfd persistence for the rest of the
+## session, silently and with no way back short of restarting the game. _exit_tree was exactly
+## that hole: a component freed mid-dialogue (a scene change, a queue_free) tore its state down
+## without ever unregistering.
+##
+## One witness, set beside the increment and honoured by BOTH teardown paths, is what makes the
+## count balance by construction instead of by every exit remembering to.
+var _counted_dialogue_start: bool = false
+
 ## NodeType enum value -> Callable
 var _node_handlers: Dictionary = {}
 
@@ -102,6 +121,7 @@ var _node_handlers: Dictionary = {}
 # =============================================================================
 
 func _ready() -> void:
+	add_to_group("storyflow_components")
 	_context = StoryFlowExecutionContext.new()
 	_text = StoryFlowTextInterpolator.new()
 	_text.set_context(_context)
@@ -115,14 +135,37 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	if _audio:
 		_audio.stop()
-	# Silently clean up without emitting signals or accessing the manager,
-	# which may already be freed during tree teardown.
+	# Silently clean up without emitting signals - listeners are being torn down too and a
+	# script_ended fired from here reaches nobody useful. The manager registration is the one
+	# thing that must still be given back: it gates save loading, so a component freed
+	# mid-dialogue would otherwise hold it for the rest of the session.
 	if _context and _context.is_executing:
 		_context.reset()
-		_evaluator = null
 		if _dialogue_ui_instance and is_instance_valid(_dialogue_ui_instance):
 			_dialogue_ui_instance.queue_free()
 			_dialogue_ui_instance = null
+	_end_dialogue_registration()
+
+
+## Drop this component's evaluator AND give back its active-dialogue registration, together.
+##
+## THE TWO BELONG ON ONE PATH. StoryFlowManager.load_from_slot refuses to load while the count is
+## above zero and clears no evaluator cache when it does load, and that is only sound because a
+## count reaching zero means every component that was counted has already dropped its evaluator.
+## Splitting them would turn that invariant into a coincidence maintained by two call sites.
+##
+## IDEMPOTENT, which is the whole point of the witness: a redundant stop_dialogue, or a
+## stop_dialogue followed by _exit_tree, decrements once. get_node_or_null (through get_manager)
+## keeps a teardown where the autoload is already freed a no-op rather than an error.
+func _end_dialogue_registration() -> void:
+	_evaluator = null
+	_current_speaker_path = ""
+	if not _counted_dialogue_start:
+		return
+	_counted_dialogue_start = false
+	var mgr := get_manager()
+	if mgr:
+		mgr.register_dialogue_end()
 
 # =============================================================================
 # Control Functions
@@ -157,6 +200,20 @@ func start_dialogue_with_script(path: String) -> void:
 		_report_error("Script not found: %s" % path)
 		return
 
+	# RESTART WITHOUT A STOP is a supported call: nothing above requires the caller to have
+	# stopped first, and a host chaining one script into another does exactly this. Give the
+	# previous run's registration back BEFORE taking a new one, or the count climbs by one per
+	# restart and never comes down - _end_dialogue_registration is idempotent by design, so the
+	# single release on the eventual stop cannot pay off two acquisitions. That leaves the
+	# manager reporting a dialogue active forever, which disables every save load: the exact
+	# failure the witness exists to prevent, reached through the other door.
+	#
+	# It nulls _evaluator on the way, which is harmless here - the new evaluator below replaces
+	# it a few lines later, so the "a count reaching zero means no live evaluator" invariant
+	# survives the restart rather than being suspended across it.
+	if _counted_dialogue_start:
+		_end_dialogue_registration()
+
 	# Initialize execution context
 	_context.reset()
 	_context.current_script = script_asset
@@ -170,17 +227,33 @@ func start_dialogue_with_script(path: String) -> void:
 	# Build global variable name index
 	_context.build_variable_name_index(mgr.get_global_variables(), true)
 
+	# .sfd Data Assets: NON-OWNING references to the manager's seed and session overlay,
+	# taken the same way the globals and characters above are. The manager mutates both in
+	# place forever, so they stay valid for the life of this dialogue.
+	_context.data_asset_seed = mgr.get_data_asset_seed()
+	_context.data_asset_overlay = mgr.get_data_asset_overlay()
+	_context.data_asset_revision = mgr.get_data_asset_revision()
+
+	# P4 character id bridge: the same non-owning handover (characters engine contract §3).
+	_context.character_id_bridge = mgr.get_character_id_bridge()
+
+	# Localization state: the same non-owning handover (localization spec §9). The manager mutates
+	# it in place, so a set_language mid-dialogue reaches this running graph's very next lookup
+	# instead of a language copied at dialogue start.
+	_context.localization = mgr.get_localization()
+
 	# Create evaluator
 	_evaluator = StoryFlowEvaluator.new()
-	_evaluator.initialize(_context, mgr.get_global_variables(), mgr.get_runtime_characters(), language_code, project.global_strings)
+	_evaluator.initialize(_context, mgr.get_global_variables(), mgr.get_runtime_characters(), language_code, project.global_strings, mgr)
 	_evaluator.set_trace(_sf_trace)
 
 	# Wire up text interpolator with manager reference
 	_text.set_manager(mgr)
 	_text.set_language_code(language_code)
 
-	# Register with manager
+	# Register with manager, and witness it so both teardown paths can give it back exactly once.
 	mgr.register_dialogue_start()
+	_counted_dialogue_start = true
 
 	# Create dialogue UI (use built-in default if none assigned)
 	var ui_scene: PackedScene = dialogue_ui_scene
@@ -286,6 +359,12 @@ func select_option(option_id: String) -> void:
 	# Clear cached node outputs
 	_context.clear_cached_outputs()
 
+	# ...but not the loop element of an enclosing array forEach, which lives in exactly the
+	# field that clear just nulled. A dialogue inside a loop body is a chain boundary for the
+	# chain, not for the loop: the iteration continues through the selected option, and every
+	# node after this one still reads the element. See restore_live_loop_outputs' header.
+	_context.restore_live_loop_outputs()
+
 	# Begin processing chain — defer variable-change re-renders
 	_is_processing_chain = true
 	_dialogue_dirty = false
@@ -347,6 +426,10 @@ func advance_dialogue() -> void:
 	if _evaluator:
 		_evaluator.clear_cache()
 
+	# Same boundary, same carve-out as select_option: advancing a narrative dialogue inside a
+	# forEach body must not cost the rest of the iteration its element.
+	_context.restore_live_loop_outputs()
+
 	_is_processing_chain = true
 	_dialogue_dirty = false
 	_process_next_node(header_handle)
@@ -370,11 +453,7 @@ func stop_dialogue() -> void:
 		current_script_path = _context.current_script.script_path
 
 	_context.reset()
-	_evaluator = null
-
-	var mgr := get_manager()
-	if mgr:
-		mgr.register_dialogue_end()
+	_end_dialogue_registration()
 
 	script_ended.emit(current_script_path)
 	dialogue_ended.emit()
@@ -397,6 +476,26 @@ func resume_dialogue() -> void:
 	_context.is_paused = false
 	if _context.is_waiting_for_input:
 		dialogue_updated.emit(_context.current_dialogue_state)
+
+
+## Resolved speaker identity, independent of the localized display name. Empty for narration.
+func get_current_speaker_path() -> String:
+	return _current_speaker_path
+
+
+## Monotonic line-entry identity. UI refreshes keep this value, new entries increment it.
+func get_dialogue_entry_serial() -> int:
+	return _dialogue_entry_serial
+
+
+## The actual player, including a paused line or audio retained after dialogue ends.
+func get_current_dialogue_audio_player() -> AudioStreamPlayer:
+	return _audio.get_player() if _audio else null
+
+
+## Distinguishes playback of the same stream on a reused player from an old line's audio tail.
+func get_dialogue_audio_playback_serial() -> int:
+	return _audio.get_playback_serial() if _audio else 0
 
 # =============================================================================
 # State Access
@@ -541,12 +640,16 @@ func get_character_variable(character_path: String, variable_name: String) -> St
 	if not character:
 		return StoryFlowVariant.new()
 
-	# Handle built-in "Name" field (stored as string-table key, resolve it)
-	if variable_name.to_lower() == "name":
-		return StoryFlowVariant.from_string(_resolve_string(character.character_name))
+	# Handle built-in "Name" field (stored as string-table key, resolve it). FIRST TIER of
+	# the A2(a) aliases: already case-insensitive pre-P4, so the shared predicate folds
+	# cf_name in (the cf_-only second tier lives on set_character_variable below). A5:
+	# this lane RESOLVES — it owns language state via _resolve_string — unlike the
+	# evaluator arm and the DA-surface branch, which answer the stored key.
+	if StoryFlowCharacter.is_name_token(variable_name):
+		return StoryFlowVariant.from_string(character.character_name if character.name_is_literal else _resolve_string(character.character_name))
 
-	# Handle built-in "Image" field (current portrait asset key)
-	if variable_name.to_lower() == "image":
+	# Handle built-in "Image" field (current portrait asset key; first tier, as above)
+	if StoryFlowCharacter.is_image_token(variable_name):
 		return StoryFlowVariant.from_string(character.image_key)
 
 	var v: Dictionary = character.variables.get(variable_name, {})
@@ -560,10 +663,39 @@ func set_character_variable(character_path: String, variable_name: String, value
 	var mgr := get_manager()
 	if not mgr:
 		return
-	var character: StoryFlowCharacter = mgr.get_runtime_character(character_path)
-	if not character or not character.variables.has(variable_name):
-		return
+	# The landed/refused answer is deliberately DISCARDED: this lane's pre-P4 posture is a
+	# SILENT VOID no-op on a character or variable miss (A3(b) — never a create), pinned
+	# first-class in tests/test_character_by_id_saves.gd. Only the ById setter below reports.
+	_apply_character_variable(mgr.get_runtime_character(character_path), variable_name, value)
+
+
+## The ONE write core behind the void path setter above and the bool ById setter below,
+## reporting whether the write landed — so the new surface can be honest without the pre-P4
+## lane changing shape.
+##
+## SECOND TIER of the A2(a) aliases: this lane has NO builtin arms and a
+## case-sensitive dict, so ONLY the reserved cf_ tokens divert to the builtin fields —
+## matched CASE-INSENSITIVELY per A6(a), since the reserved names can shadow nothing —
+## while the native spellings stay byte-untouched (a custom variable named "Name"
+## or "Image" still writes exactly as pre-P4, and a name that matches nothing is still
+## the same silent no-op, never a create).
+func _apply_character_variable(character: StoryFlowCharacter, variable_name: String, value: StoryFlowVariant) -> bool:
+	if not character:
+		return false
+	var lower := variable_name.to_lower()
+	if lower == StoryFlowCharacter.CF_NAME_ID:
+		character.character_name = value.get_string("")
+		character.name_is_literal = true
+		return true
+	if lower == StoryFlowCharacter.CF_IMAGE_ID:
+		character.image_key = value.get_string("")
+		return true
+	if not character.variables.has(variable_name):
+		return false
+	if value is StoryFlowVariant:
+		value.string_is_literal = true
 	character.variables[variable_name]["value"] = value
+	return true
 
 
 ## Return the live runtime character object for a path.
@@ -613,8 +745,312 @@ func get_character_portrait(character_path: String, asset_key: String = "") -> T
 
 
 # =============================================================================
-# Array Variable Access
+# P4 Character Access by FILE id (characters engine contract §4 + A3/A4/A5)
 # =============================================================================
+#
+# The id-taking doors beside the path APIs above. ON THE COMPONENT ONLY — Godot's mirror
+# weight: this engine's V2 host surface lives on the component with its latch on the manager
+# (the .sfd accessors below), and the manager carries NO per-variable surface of any kind to
+# mirror onto — growing one for characters would be a new manager posture, not a mirror.
+# (Cross-engine, for the record: Unreal is component-only for the same reason; Unity mirrors
+# onto both because its V2 surface already lived on both.)
+#
+# NEW SURFACE, NEW IDIOM — the same divergence note as the .sfd host API below
+# (_warn_data_asset_once: only the new surface changes shape): default params and bool
+# returns rather than the pre-P4 sentinel-and-void shapes, and degraded resolutions warn
+# LATCHED on the manager's character pair (should_warn_character_id_access), because these
+# are host lanes a rebuilt or reparented component must not re-arm.
+#
+# THE VOCABULARY RULING (GP3): a dangling id on these lanes warns in the CHARACTER
+# vocabulary — the resolver's own "dangling" rung, on the manager pair. These are new
+# character surfaces with NO pre-P4 wording to protect. The DA-surface character branch
+# below is the deliberate opposite: its dangling ids fall through to the DA ladder's
+# pre-P4 "noasset" wording, byte-identical, because that surface predates characters.
+#
+# A2(b): none of these emit character_variable_changed — the signal is node-lane only,
+# a contract property.
+
+
+## HOST-LANE resolution of one character FILE id: the loaded record key, or "" with the
+## dangling/unloaded warn already emitted at most once on the MANAGER pair. Each ById door
+## resolves exactly ONCE and then delegates — never a second resolution (the drift the
+## id-and-path-reach-one-record pin exists to catch). The getters route through here; the
+## setter carries the same shape inline to reuse its own manager guard.
+##
+## A non-id-shaped value passes the resolver's verbatim non-id rung untouched and lands in
+## the path delegate behind each door, so a record key from [method get_character_paths] is
+## valid input to every ById door — the sibling ports' pure-delegate parity.
+func _resolve_character_id_host(character_id: String) -> String:
+	var mgr := get_manager()
+	if not mgr:
+		return ""
+	return StoryFlowCharacter.resolve_character_key(
+		mgr.get_character_id_bridge(), mgr.get_runtime_characters(), character_id, mgr)
+
+
+## The live runtime character a character FILE id resolves to, or null for a not-found of
+## either kind: a DANGLING id (no bridge entry) and an UNLOADED one (a bridge hit whose
+## record is missing from the loaded set) — each warned once on the manager pair, in the
+## character vocabulary (the ruling above). [method get_character_path_by_id] can still
+## answer in the unloaded case, because the bridge itself is import state — the A3(a) split.
+##
+## A5: the record's character_name field is the STORED string-table key;
+## [method get_character_variable_by_id] is this surface's resolving door.
+func get_character_by_id(character_id: String) -> StoryFlowCharacter:
+	var record_key := _resolve_character_id_host(character_id)
+	if record_key.is_empty():
+		return null
+	return get_character(record_key)
+
+
+## The record key (the runtime table's key) a character FILE id is indexed to, or "" for an
+## id this build's character index never carried — "" is unambiguous, since record keys are
+## never empty. A PURE bridge lookup, deliberately NOT routed through resolve_character_key,
+## for the two recorded reasons (A3(a)): an existence query is not a degraded resolution, so
+## it answers for an indexed id whether or not its record is loaded and NEVER warns — the
+## resolver warns every miss; and the resolver's verbatim non-id rung would hand any non-id
+## input straight back as a fake hit.
+##
+## The key comes back VERBATIM (the bridge's byte-identity guarantee: lowercase,
+## backslashes) and is valid input to every path-taking character API above.
+func get_character_path_by_id(character_id: String) -> String:
+	var mgr := get_manager()
+	if not mgr:
+		return ""
+	return str(mgr.get_character_id_bridge().get(character_id, ""))
+
+
+## Record keys of every LOADED character, in the runtime table's insertion order — the A4
+## enumeration surface, and the whole of it: by-id enumeration is deliberately not provided
+## (ids serve stable BINDING; record keys serve enumeration and the path APIs). NO SORT
+## PROMISE, kept weak on purpose for cross-engine uniformity — every engine answers its own
+## map order.
+##
+## Engine-true doc (A5's merge-vs-wholesale inheritance note): the list reflects what the
+## RUNTIME holds, and in this engine that always equals the project's character set —
+## load_from_slot MERGES values onto the records the project declares and never adds or
+## removes one (the four-sections doctrine on the manager), and reset refills from the
+## project. The unloaded rung above is reachable only via ghost index entries, which have
+## no record to enumerate either way.
+func get_character_paths() -> Array[String]:
+	var out: Array[String] = []
+	var mgr := get_manager()
+	if mgr:
+		out.assign(mgr.get_runtime_characters().keys())
+	return out
+
+
+## Id twin of [method get_character_variable]: resolve the id ONCE through the host lane,
+## then delegate. [param default] answers ONLY the RESOLUTION misses (dangling, unloaded,
+## no manager) — the rungs the delegate never sees; once the id resolves, the variable
+## access is the path API verbatim, including its own pre-P4 miss posture (an undeclared
+## variable answers an EMPTY variant, never the default), so the two surfaces cannot drift.
+##
+## The FIRST-TIER aliases ride the delegate's builtin arms (cf_name/cf_image,
+## case-insensitive), and so does A5's scope: this door RESOLVES the Name key to display
+## text via _resolve_string, like the path getter it extends — the DA-surface branch below
+## is the stored-key door, and saves write the STORED key regardless.
+func get_character_variable_by_id(character_id: String, variable_name: String, default: StoryFlowVariant = null) -> StoryFlowVariant:
+	var record_key := _resolve_character_id_host(character_id)
+	if record_key.is_empty():
+		return default
+	return get_character_variable(record_key, variable_name)
+
+
+## Id twin of [method set_character_variable], reporting whether the write landed — false
+## for a resolution miss (warned once on the manager pair) AND for the A3(b) refusal: a
+## write naming a variable the record does not declare NEVER creates it. The refusal itself
+## stays as silent as the void path lane this extends (the shared _apply_character_variable
+## core) — the bool is the new idiom's reporting channel, not a new warning.
+##
+## The SECOND-TIER aliases ride the shared core: only the cf_ tokens divert to the builtins
+## (case-insensitive per A6(a)); native spellings keep the case-sensitive dict
+## byte-identical. A2(b): emits nothing.
+func set_character_variable_by_id(character_id: String, variable_name: String, value: StoryFlowVariant) -> bool:
+	var mgr := get_manager()
+	if not mgr:
+		return false
+	var record_key := StoryFlowCharacter.resolve_character_key(
+		mgr.get_character_id_bridge(), mgr.get_runtime_characters(), character_id, mgr)
+	if record_key.is_empty():
+		return false
+	return _apply_character_variable(mgr.get_runtime_character(record_key), variable_name, value)
+
+
+# =============================================================================
+# Data Asset Access (.sfd)
+# =============================================================================
+#
+# The HOST-side door onto the .sfd store — the counterpart to the three node types, for game code
+# that wants to read or write a Data Asset variable without going through a graph.
+#
+# [param asset] takes an asset's ID or its display NAME, because both audiences exist: the
+# exporter keys everything by id (ids survive a rename) while a programmer holds the name they
+# typed in the editor. The ID is tried first and exactly; a name must match exactly ONE asset.
+#
+# TWO NAMING DECISIONS, both departures from their nearest neighbours in this file:
+#
+#  - NO _variable SUFFIX. get_bool_variable reads a script or global variable and the suffix is
+#    what separates it from get_character_variable; here the get_data_asset_ prefix already says
+#    what is being read, and get_data_asset_bool_variable would be saying it twice.
+#  - TYPED, WHERE THE CHARACTER ACCESSORS ARE UNTYPED. get_character_variable hands back a
+#    StoryFlowVariant and lets the caller pick a getter, which works because a character variable
+#    has no declaration to refuse against - the built-in Name and Image fields are not declared
+#    anywhere. A .sfd variable does have one, and the whole value of the strict gate above is
+#    refusing a mistyped read instead of quietly answering the wrong thing, which needs one
+#    accessor per type to have something to refuse. get_data_asset_variant is the untyped door
+#    for callers that want the character-accessor shape.
+#
+# CROSS-PORT: this matches Unity's GetDataAssetBool. Unreal spells the same call
+# GetDataAssetBoolVariable - two of the three ports agree, and the contract does not pin API
+# naming (section 1 is about node semantics, not host surfaces), so the divergence is recorded
+# rather than resolved.
+#
+# Reads and writes go through the MANAGER's seed and overlay rather than the execution context's,
+# so they work outside a dialogue too. Inside one they are the same two dictionaries — the
+# context holds non-owning references to these very objects — so there is no second store and no
+# staleness to reason about.
+#
+# THE TYPE GATE IS STRICT and lives on the DECLARATION, never on the stored value: within the
+# string family a value carries no evidence of its declared type, which is the same reason the
+# degraded ladder's declMatches check is on the declaration. So get_data_asset_string answers for
+# a string, image, audio or character declaration (all of which store as bare strings in this
+# engine) but NOT for an enum — an enum has its own accessor, and letting the string door read
+# one would make a typo'd variable name that happened to hit an enum look like it worked.
+#
+# The typed accessors are SCALAR-ONLY. Arrays and maps come out through get_data_asset_variant,
+# which is read-only: a write needs a declaration to mint the right element tags against, and the
+# graph's Set node is what does that.
+#
+# WARNINGS ARE LATCHED, once per (asset, variable, kind) - a departure from the per-call idiom
+# the character accessors above keep. Game code does not own its call rate the way that idiom
+# assumes: a stale name read from _process warns every frame forever, and the first line already
+# named the fix. The REFUSAL ITSELF is never latched - every call still answers its default or
+# false. See _warn_data_asset_once.
+#
+# .sfd STRINGS RESOLVE AT THIS DOOR, and only where their PROVENANCE says they are content: a
+# DECLARED string value localizes, an override and a session write are handed back verbatim. That
+# is localization spec §2's amendment of 2026-08-27, which SUPERSEDES engine-contract 2.1's
+# literal-value posture; the rule itself lives once, in StoryFlowDataAssetStore.try_read, and
+# these accessors reach it by calling that door instead of try_resolve. Unlike
+# get_string_variable above, the running script's strings table is NOT consulted - see
+# _data_asset_locale.
+
+const _DATA_ASSET_STRING_TYPES := [
+	StoryFlowTypes.VariableType.STRING, StoryFlowTypes.VariableType.IMAGE,
+	StoryFlowTypes.VariableType.AUDIO, StoryFlowTypes.VariableType.CHARACTER,
+]
+
+
+## The `.sfd` host ladder, minted per call — see storyflow_data_asset_access.gd for why it lives
+## there rather than here. `language_code` is this component's PRE-LOCALIZATION fallback and can be
+## changed at runtime, so it is read now rather than captured once.
+func _da() -> StoryFlowDataAssetAccess:
+	return StoryFlowDataAssetAccess.new(get_manager(), language_code)
+
+
+## The boolean-memo clear every `.sfd` writer owes (StoryFlowDataAssetStore.try_set's header): the
+## accessor's own read is carved out of the memo, but a memoized PARENT above it is not, so an
+## option gated through andBool(accessor, true) keeps answering the pre-write value until this runs.
+## It stays on this surface because the access layer owns no execution context.
+func _da_written(ok: bool) -> bool:
+	# _context is created in _ready, so a component that was never added to the tree has none -
+	# and a host write from such a component has no dialogue memo to clear anyway.
+	if ok and _context != null:
+		_context.clear_boolean_memo()
+	return ok
+
+
+## Read a boolean-declared Data Asset variable. Returns [param default] on any miss.
+func get_data_asset_bool(asset: String, variable_name: String, default := false) -> bool:
+	var value := _da().read_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.BOOLEAN])
+	return default if value == null else value.get_bool(default)
+
+
+## Write a boolean-declared Data Asset variable into the session overlay.
+## Returns false (having warned) when the asset, the variable or the type does not check out.
+func set_data_asset_bool(asset: String, variable_name: String, value: bool) -> bool:
+	return _da_written(_da().write_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.BOOLEAN], value))
+
+
+func get_data_asset_int(asset: String, variable_name: String, default := 0) -> int:
+	var value := _da().read_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.INTEGER])
+	return default if value == null else value.get_int(default)
+
+
+func set_data_asset_int(asset: String, variable_name: String, value: int) -> bool:
+	return _da_written(_da().write_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.INTEGER], value))
+
+
+func get_data_asset_float(asset: String, variable_name: String, default := 0.0) -> float:
+	var value := _da().read_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.FLOAT])
+	return default if value == null else value.get_float(default)
+
+
+func set_data_asset_float(asset: String, variable_name: String, value: float) -> bool:
+	return _da_written(_da().write_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.FLOAT], value))
+
+
+## Read a string-family Data Asset variable: string, image, audio or character, all of which
+## store as bare strings here. ENUM IS EXCLUDED — see [method get_data_asset_enum].
+##
+## The value is the LITERAL from the .sfd, never routed through the strings table.
+func get_data_asset_string(asset: String, variable_name: String, default := "") -> String:
+	var value := _da().read_data_asset_scalar(asset, variable_name, _DATA_ASSET_STRING_TYPES)
+	return default if value == null else value.get_string(default)
+
+
+func set_data_asset_string(asset: String, variable_name: String, value: String) -> bool:
+	return _da_written(_da().write_data_asset_scalar(asset, variable_name, _DATA_ASSET_STRING_TYPES, value))
+
+
+func get_data_asset_enum(asset: String, variable_name: String, default := "") -> String:
+	var value := _da().read_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.ENUM])
+	return default if value == null else value.get_string(default)
+
+
+func set_data_asset_enum(asset: String, variable_name: String, value: String) -> bool:
+	return _da_written(_da().write_data_asset_scalar(asset, variable_name, [StoryFlowTypes.VariableType.ENUM], value))
+
+
+## Replace a Data Asset's ARRAY variable with [param elements]. True when the write landed.
+## The ladder and its shape gate live in storyflow_data_asset_access.gd, shared with the manager.
+func set_data_asset_array(asset: String, variable_name: String, elements: Array) -> bool:
+	return _da_written(_da().set_array(asset, variable_name, elements))
+
+
+## Replace a Data Asset's MAP variable with these entries, with RAW keys. The map twin of
+## [method set_data_asset_array].
+func set_data_asset_map(asset: String, variable_name: String, keys: Array, values: Array) -> bool:
+	return _da_written(_da().set_map(asset, variable_name, keys, values))
+
+
+## Every variable name the asset's chain DECLARES, root-most ancestor first (contract §11.1).
+##
+## The accessors above all need a name the caller already knew. This is how a game learns the
+## names - an inventory row per variable, a debug readout, a data-driven UI - and it is the SAME
+## answer the Get Variable Names graph node gives, because both forward to
+## StoryFlowDataAssetStore.variable_names, which owns every rule: root-first order, declarations
+## only (an override shadows a name, it never adds one), dedupe by id then by name.
+##
+## Walking `parent` yourself is the thing this exists to prevent: that walk re-implements those
+## rules, and a re-implementation that disagrees produces a plausible list nobody notices is
+## wrong. [param asset] takes an id or a display name, like every accessor here. Empty when the
+## asset cannot be resolved, there is no manager, or the seed does not carry it.
+func get_data_asset_variable_names(asset: String) -> Array[String]:
+	var empty: Array[String] = []
+	var mgr := get_manager()
+	if not mgr:
+		return empty
+	var asset_id := _da().resolve_data_asset_id(asset)
+	if asset_id.is_empty():
+		return empty
+	return StoryFlowDataAssetStore.variable_names(mgr.get_data_asset_seed(), asset_id)
+
+
+func get_data_asset_variant(asset: String, variable_name: String) -> StoryFlowVariant:
+	return _da().read_data_asset_variant(asset, variable_name)
+
 
 ## Read a script or global variable of type character-array.
 ##
@@ -673,11 +1109,107 @@ func get_array_variable(variable_name: String) -> Array[StoryFlowVariant]:
 		if not (elem is StoryFlowVariant):
 			continue
 		var copy: StoryFlowVariant = elem.duplicate_variant()
-		if copy.type == StoryFlowTypes.VariableType.STRING:
-			copy.set_string(_resolve_string(copy.get_string("")))
+		if copy.type == StoryFlowTypes.VariableType.STRING and not copy.string_key.is_empty():
+			copy.set_string(_resolve_string(copy.string_key))
 		elif copy.type == StoryFlowTypes.VariableType.ENUM:
 			copy.set_enum(_resolve_string(copy.get_string("")))
 		out.append(copy)
+	return out
+
+
+## THE GATE THE TYPED ARRAY GETTERS SHARE: [method get_array_variable]'s list, but only for a
+## variable whose DECLARED element type is one this caller asked for.
+##
+## The typed getters exist because every typed SETTER already did, so a game could write an
+## Array[bool] and then had to read it back as variants and unpack by hand. Unpacking is the
+## whole job, so the gate is what makes them more than a loop: a missing, non-array or
+## wrong-typed variable warns and answers empty rather than coercing, matching the Unreal
+## plugin's Get*ArrayVariable contract.
+##
+## The gate runs BEFORE [method get_array_variable] rather than filtering after it, so the
+## not-an-array warning is emitted once, here, and never twice for one call.
+func _typed_array_elements(variable_name: String, expected: Array, type_label: String) -> Array[StoryFlowVariant]:
+	var empty: Array[StoryFlowVariant] = []
+	var result := _find_variable_by_display_name(variable_name)
+	if result.is_empty():
+		push_warning("StoryFlow: Variable '%s' not found" % variable_name)
+		return empty
+	var v: Dictionary = result["variable"]
+	if not v.get("is_array", false):
+		push_warning("StoryFlow: Variable '%s' is not an array" % variable_name)
+		return empty
+	if not expected.has(v.get("type", StoryFlowTypes.VariableType.NONE)):
+		push_warning("StoryFlow: Variable '%s' is not a %s array" % [variable_name, type_label])
+		return empty
+	return get_array_variable(variable_name)
+
+
+## Read a boolean array variable by display name as a native typed array.
+##
+## Mirrors [method get_array_variable]'s scoping (locals during dialogue, then globals) but
+## unpacks each element, so a caller never handles a variant. A missing, non-array or
+## wrong-typed variable warns and returns an empty array. Counterpart to
+## [method set_bool_array_variable].
+func get_bool_array_variable(variable_name: String) -> Array[bool]:
+	var out: Array[bool] = []
+	for elem in _typed_array_elements(variable_name, [StoryFlowTypes.VariableType.BOOLEAN], "boolean"):
+		out.append(elem.get_bool())
+	return out
+
+
+## Read an integer array variable as a native typed array. See
+## [method get_bool_array_variable] for the shared rules.
+func get_int_array_variable(variable_name: String) -> Array[int]:
+	var out: Array[int] = []
+	for elem in _typed_array_elements(variable_name, [StoryFlowTypes.VariableType.INTEGER], "integer"):
+		out.append(elem.get_int())
+	return out
+
+
+## Read a float array variable as a native typed array. See
+## [method get_bool_array_variable] for the shared rules.
+func get_float_array_variable(variable_name: String) -> Array[float]:
+	var out: Array[float] = []
+	for elem in _typed_array_elements(variable_name, [StoryFlowTypes.VariableType.FLOAT], "float"):
+		out.append(elem.get_float())
+	return out
+
+
+## Read a string array variable as a native typed array. Elements are resolved through the
+## string table, so callers receive LOCALIZED text — [method get_array_variable] does that
+## resolution and this inherits it. See [method get_bool_array_variable] for the shared rules.
+func get_string_array_variable(variable_name: String) -> Array[String]:
+	var out: Array[String] = []
+	for elem in _typed_array_elements(variable_name, [StoryFlowTypes.VariableType.STRING], "string"):
+		out.append(elem.get_string(""))
+	return out
+
+
+## Read an enum array variable as native option strings, resolved through the string table like
+## the string array above. See [method get_bool_array_variable] for the shared rules.
+func get_enum_array_variable(variable_name: String) -> Array[String]:
+	var out: Array[String] = []
+	for elem in _typed_array_elements(variable_name, [StoryFlowTypes.VariableType.ENUM], "enum"):
+		out.append(elem.get_string(""))
+	return out
+
+
+## Read an image array variable as native asset-key strings. Keys come back RAW, never string
+## table resolved, matching how image elements are stored. See [method get_bool_array_variable]
+## for the shared rules.
+func get_image_array_variable(variable_name: String) -> Array[String]:
+	var out: Array[String] = []
+	for elem in _typed_array_elements(variable_name, [StoryFlowTypes.VariableType.IMAGE], "image"):
+		out.append(elem.get_string(""))
+	return out
+
+
+## Read an audio array variable as native asset-key strings, raw like the image array above.
+## See [method get_bool_array_variable] for the shared rules.
+func get_audio_array_variable(variable_name: String) -> Array[String]:
+	var out: Array[String] = []
+	for elem in _typed_array_elements(variable_name, [StoryFlowTypes.VariableType.AUDIO], "audio"):
+		out.append(elem.get_string(""))
 	return out
 
 
@@ -1075,6 +1607,19 @@ func reset_variables() -> void:
 
 
 ## Get a localized string by key from the current script or global strings.
+##
+## THIS IS THE PUBLIC LOCALIZED DOOR, and it does resolve localized: it delegates to
+## [method _resolve_string], which runs the one shared ladder (StoryFlowLocalization.look_up) -
+## the translation overlay for the language StoryFlowManager.set_language selected, then the
+## keying artifact's own table, then the raw key. Unlike its same-named siblings
+## StoryFlowProject.get_localized_string and StoryFlowScript.get_localized_string, which are RAW
+## exact-key probes that build `language.key` and run no language tier at all, this one is the
+## method to call - a game that resolves a string by hand through those two silently bypasses
+## every translation.
+##
+## Inside an active dialogue the current script's table joins the probe; outside one there is no
+## script and the project globals (which characters.json merges into) are the only source tier.
+## THE LOOKUP RUNS ON THE AUTHORED TEMPLATE (spec §9): interpolate the RESULT, never the input.
 func get_localized_string(key: String) -> String:
 	return _resolve_string(key)
 
@@ -1146,10 +1691,10 @@ func _build_dispatch_table() -> void:
 	var array_set_handler := _handle_array_set
 	for t in [
 		NT.SET_BOOL_ARRAY, NT.SET_INT_ARRAY, NT.SET_FLOAT_ARRAY, NT.SET_STRING_ARRAY,
-		NT.SET_IMAGE_ARRAY, NT.SET_CHARACTER_ARRAY, NT.SET_AUDIO_ARRAY,
+		NT.SET_IMAGE_ARRAY, NT.SET_CHARACTER_ARRAY, NT.SET_DATA_ARRAY, NT.SET_AUDIO_ARRAY,
 		NT.SET_BOOL_ARRAY_ELEMENT, NT.SET_INT_ARRAY_ELEMENT, NT.SET_FLOAT_ARRAY_ELEMENT,
 		NT.SET_STRING_ARRAY_ELEMENT, NT.SET_IMAGE_ARRAY_ELEMENT,
-		NT.SET_CHARACTER_ARRAY_ELEMENT, NT.SET_AUDIO_ARRAY_ELEMENT,
+		NT.SET_CHARACTER_ARRAY_ELEMENT, NT.SET_DATA_ARRAY_ELEMENT, NT.SET_AUDIO_ARRAY_ELEMENT,
 	]:
 		_node_handlers[t] = array_set_handler
 
@@ -1158,13 +1703,13 @@ func _build_dispatch_table() -> void:
 	for t in [
 		NT.ADD_TO_BOOL_ARRAY, NT.ADD_TO_INT_ARRAY, NT.ADD_TO_FLOAT_ARRAY,
 		NT.ADD_TO_STRING_ARRAY, NT.ADD_TO_IMAGE_ARRAY,
-		NT.ADD_TO_CHARACTER_ARRAY, NT.ADD_TO_AUDIO_ARRAY,
+		NT.ADD_TO_CHARACTER_ARRAY, NT.ADD_TO_DATA_ARRAY, NT.ADD_TO_AUDIO_ARRAY,
 		NT.REMOVE_FROM_BOOL_ARRAY, NT.REMOVE_FROM_INT_ARRAY, NT.REMOVE_FROM_FLOAT_ARRAY,
 		NT.REMOVE_FROM_STRING_ARRAY, NT.REMOVE_FROM_IMAGE_ARRAY,
-		NT.REMOVE_FROM_CHARACTER_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY,
+		NT.REMOVE_FROM_CHARACTER_ARRAY, NT.REMOVE_FROM_DATA_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY,
 		NT.CLEAR_BOOL_ARRAY, NT.CLEAR_INT_ARRAY, NT.CLEAR_FLOAT_ARRAY,
 		NT.CLEAR_STRING_ARRAY, NT.CLEAR_IMAGE_ARRAY,
-		NT.CLEAR_CHARACTER_ARRAY, NT.CLEAR_AUDIO_ARRAY,
+		NT.CLEAR_CHARACTER_ARRAY, NT.CLEAR_DATA_ARRAY, NT.CLEAR_AUDIO_ARRAY,
 	]:
 		_node_handlers[t] = array_modify_handler
 
@@ -1172,23 +1717,23 @@ func _build_dispatch_table() -> void:
 	for t in [
 		NT.GET_BOOL_ARRAY, NT.GET_INT_ARRAY, NT.GET_FLOAT_ARRAY,
 		NT.GET_STRING_ARRAY, NT.GET_IMAGE_ARRAY,
-		NT.GET_CHARACTER_ARRAY, NT.GET_AUDIO_ARRAY,
+		NT.GET_CHARACTER_ARRAY, NT.GET_DATA_ARRAY, NT.GET_AUDIO_ARRAY,
 		NT.GET_BOOL_ARRAY_ELEMENT, NT.GET_INT_ARRAY_ELEMENT, NT.GET_FLOAT_ARRAY_ELEMENT,
 		NT.GET_STRING_ARRAY_ELEMENT, NT.GET_IMAGE_ARRAY_ELEMENT,
-		NT.GET_CHARACTER_ARRAY_ELEMENT, NT.GET_AUDIO_ARRAY_ELEMENT,
+		NT.GET_CHARACTER_ARRAY_ELEMENT, NT.GET_DATA_ARRAY_ELEMENT, NT.GET_AUDIO_ARRAY_ELEMENT,
 		NT.GET_RANDOM_BOOL_ARRAY_ELEMENT, NT.GET_RANDOM_INT_ARRAY_ELEMENT,
 		NT.GET_RANDOM_FLOAT_ARRAY_ELEMENT, NT.GET_RANDOM_STRING_ARRAY_ELEMENT,
-		NT.GET_RANDOM_IMAGE_ARRAY_ELEMENT, NT.GET_RANDOM_CHARACTER_ARRAY_ELEMENT,
+		NT.GET_RANDOM_IMAGE_ARRAY_ELEMENT, NT.GET_RANDOM_CHARACTER_ARRAY_ELEMENT, NT.GET_RANDOM_DATA_ARRAY_ELEMENT,
 		NT.GET_RANDOM_AUDIO_ARRAY_ELEMENT,
 		NT.ARRAY_LENGTH_BOOL, NT.ARRAY_LENGTH_INT, NT.ARRAY_LENGTH_FLOAT,
 		NT.ARRAY_LENGTH_STRING, NT.ARRAY_LENGTH_IMAGE,
-		NT.ARRAY_LENGTH_CHARACTER, NT.ARRAY_LENGTH_AUDIO,
+		NT.ARRAY_LENGTH_CHARACTER, NT.ARRAY_LENGTH_DATA, NT.ARRAY_LENGTH_AUDIO,
 		NT.ARRAY_CONTAINS_BOOL, NT.ARRAY_CONTAINS_INT, NT.ARRAY_CONTAINS_FLOAT,
 		NT.ARRAY_CONTAINS_STRING, NT.ARRAY_CONTAINS_IMAGE,
-		NT.ARRAY_CONTAINS_CHARACTER, NT.ARRAY_CONTAINS_AUDIO,
+		NT.ARRAY_CONTAINS_CHARACTER, NT.ARRAY_CONTAINS_DATA, NT.ARRAY_CONTAINS_AUDIO,
 		NT.FIND_IN_BOOL_ARRAY, NT.FIND_IN_INT_ARRAY, NT.FIND_IN_FLOAT_ARRAY,
 		NT.FIND_IN_STRING_ARRAY, NT.FIND_IN_IMAGE_ARRAY,
-		NT.FIND_IN_CHARACTER_ARRAY, NT.FIND_IN_AUDIO_ARRAY,
+		NT.FIND_IN_CHARACTER_ARRAY, NT.FIND_IN_DATA_ARRAY, NT.FIND_IN_AUDIO_ARRAY,
 	]:
 		_node_handlers[t] = logic_handler
 
@@ -1197,7 +1742,7 @@ func _build_dispatch_table() -> void:
 	for t in [
 		NT.FOR_EACH_BOOL_LOOP, NT.FOR_EACH_INT_LOOP, NT.FOR_EACH_FLOAT_LOOP,
 		NT.FOR_EACH_STRING_LOOP, NT.FOR_EACH_IMAGE_LOOP,
-		NT.FOR_EACH_CHARACTER_LOOP, NT.FOR_EACH_AUDIO_LOOP,
+		NT.FOR_EACH_CHARACTER_LOOP, NT.FOR_EACH_DATA_LOOP, NT.FOR_EACH_AUDIO_LOOP,
 	]:
 		_node_handlers[t] = for_each_handler
 
@@ -1205,6 +1750,11 @@ func _build_dispatch_table() -> void:
 	_node_handlers[NT.GET_IMAGE] = logic_handler
 	_node_handlers[NT.GET_AUDIO] = logic_handler
 	_node_handlers[NT.GET_CHARACTER] = logic_handler
+	for t in [NT.GET_DATA, NT.GET_DATA_ARRAY, NT.GET_DATA_ARRAY_ELEMENT,
+		NT.GET_RANDOM_DATA_ARRAY_ELEMENT, NT.ARRAY_LENGTH_DATA,
+		NT.ARRAY_CONTAINS_DATA, NT.FIND_IN_DATA_ARRAY]:
+		_node_handlers[t] = _handle_data_read
+	_node_handlers[NT.SET_DATA] = _handle_set_data
 
 	# Media set handlers
 	_node_handlers[NT.SET_IMAGE] = _handle_set_image
@@ -1230,6 +1780,14 @@ func _build_dispatch_table() -> void:
 
 	# Map entry iteration (snapshot-at-init semantics — see _handle_for_each_map)
 	_node_handlers[NT.FOR_EACH_MAP] = _handle_for_each_map
+
+	# Data Asset (.sfd) handlers. The reference pill and the Get accessor are pure data
+	# nodes — they produce nothing at exec time and are read lazily by the evaluators, so
+	# they route exec straight through like every other Get. The Set is a flow node.
+	_node_handlers[NT.GET_DATA_ASSET] = logic_handler
+	_node_handlers[NT.GET_DATA_ASSET_VARIABLE] = logic_handler
+	_node_handlers[NT.GET_DATA_ASSET_VARIABLE_NAMES] = logic_handler
+	_node_handlers[NT.SET_DATA_ASSET_VARIABLE] = _handle_set_data_asset_var
 
 # =============================================================================
 # Core Processing
@@ -1345,6 +1903,8 @@ func _handle_end(node: Dictionary) -> void:
 		# HTML runtime converts _outputValues entry arrays to a fresh Map at the
 		# read site — the call boundary is observably a snapshot both ways.
 		var output_by_name: Dictionary = {}
+		var output_arrays_by_name: Dictionary = {}
+		var output_types_by_name: Dictionary = {}
 		for var_id in _context.local_variables:
 			var v: Dictionary = _context.local_variables[var_id]
 			if v.get("is_output", false):
@@ -1354,6 +1914,8 @@ func _handle_end(node: Dictionary) -> void:
 					if out_val is StoryFlowVariant and out_val.is_map():
 						out_val = out_val.duplicate_variant()
 					output_by_name[var_name] = out_val
+					output_arrays_by_name[var_name] = bool(v.get("is_array", false))
+					output_types_by_name[var_name] = v.get("type", StoryFlowTypes.VariableType.NONE)
 
 		# Pop call stack
 		var frame: StoryFlowCallFrame = _context.call_stack.pop_back()
@@ -1375,6 +1937,8 @@ func _handle_end(node: Dictionary) -> void:
 			# Edge handles use scriptInterface output IDs, not variable IDs.
 			# We match by name: scriptOutputs entry name ↔ variable name.
 			var output_values: Dictionary = {}
+			var output_arrays: Dictionary = {}
+			var output_types: Dictionary = {}
 			if output_by_name.size() > 0:
 				var rs_node: Dictionary = _context.current_script.get_node(frame.return_node_id)
 				var rs_data: Dictionary = rs_node.get("data", {})
@@ -1385,14 +1949,20 @@ func _handle_end(node: Dictionary) -> void:
 						var out_name: String = out_entry.get("name", "")
 						if not out_id.is_empty() and output_by_name.has(out_name):
 							output_values[out_id] = output_by_name[out_name]
+							output_arrays[out_id] = output_arrays_by_name[out_name]
+							output_types[out_id] = output_types_by_name[out_name]
 				# Also store by variable name as fallback
 				for var_name in output_by_name:
 					output_values[var_name] = output_by_name[var_name]
+					output_arrays[var_name] = output_arrays_by_name[var_name]
+					output_types[var_name] = output_types_by_name[var_name]
 
 			# Store output values on the RunScript node's runtime state
 			if output_values.size() > 0:
 				var rs_state: StoryFlowNodeRuntimeState = _context.get_node_state(frame.return_node_id)
 				rs_state.output_values = output_values
+				rs_state.output_arrays = output_arrays
+				rs_state.output_types = output_types
 				rs_state.has_output_values = true
 
 			# Route: exit handle if exit flow, otherwise default output
@@ -1449,10 +2019,18 @@ func _handle_dialogue(node: Dictionary) -> void:
 	# Check if this is a fresh entry or returning from a Set* node
 	var is_fresh_entry := _context.entering_dialogue_via_edge
 	_context.entering_dialogue_via_edge = false
+	if is_fresh_entry:
+		_dialogue_entry_serial += 1
 
 	# Clear evaluation cache for fresh option visibility evaluation
 	if _evaluator:
 		_evaluator.clear_cache()
+
+	# The clear above is what makes the option gates re-evaluate; this is what leaves them
+	# something to read. An array forEach publishes its current element through cached_output,
+	# so without the restore a dialogue in a loop body renders its very first frame against the
+	# type default — the one render the gate was authored for.
+	_context.restore_live_loop_outputs()
 
 	# Build dialogue state
 	_context.current_dialogue_state = _build_dialogue_state(node)
@@ -1520,6 +2098,12 @@ func _handle_dialogue(node: Dictionary) -> void:
 # =============================================================================
 
 func _handle_run_script(node: Dictionary) -> void:
+	# A prior completed call cannot supply outputs while the next call is unfinished.
+	var pending_state := _context.get_node_state(node["id"])
+	pending_state.has_output_values = false
+	pending_state.output_values = {}
+	pending_state.output_arrays = {}
+	pending_state.output_types = {}
 	if _context.call_stack.size() >= StoryFlowExecutionContext.MAX_SCRIPT_DEPTH:
 		_report_error("Max script nesting depth exceeded (%d)" % StoryFlowExecutionContext.MAX_SCRIPT_DEPTH)
 		return
@@ -1566,6 +2150,7 @@ func _handle_run_script(node: Dictionary) -> void:
 					"string": arr = _evaluator.evaluate_string_array_input(node.get("id", ""), handle_suffix)
 					"image": arr = _evaluator.evaluate_image_array_input(node.get("id", ""), handle_suffix)
 					"character": arr = _evaluator.evaluate_character_array_input(node.get("id", ""), handle_suffix)
+					"dataAsset": arr = _evaluator.evaluate_data_array_input(node.get("id", ""), handle_suffix)
 					"audio": arr = _evaluator.evaluate_audio_array_input(node.get("id", ""), handle_suffix)
 				var variant := StoryFlowVariant.new()
 				variant.set_array(arr)
@@ -1591,6 +2176,8 @@ func _handle_run_script(node: Dictionary) -> void:
 					if source_map is Dictionary:
 						entries = _snapshot_map_entries(source_map)
 					param_values[param_name] = StoryFlowVariant.from_map(entries)
+				elif param_type == "dataAsset":
+					param_values[param_name] = StoryFlowVariant.from_string(_evaluator.evaluate_data_input(node.get("id", ""), handle_suffix, ""))
 				elif param_type == "boolean":
 					param_values[param_name] = StoryFlowVariant.from_bool(
 						_evaluator.evaluate_boolean_input(node.get("id", ""), handle_suffix, false)
@@ -1921,6 +2508,9 @@ func _handle_random_branch(node: Dictionary) -> void:
 # =============================================================================
 
 func _handle_array_set(node: Dictionary) -> void:
+	if node.get("type") == StoryFlowTypes.NodeType.SET_DATA_ARRAY_ELEMENT:
+		_handle_set_data_array_element(node)
+		return
 	var data: Dictionary = node.get("data", {})
 	var var_id: String = data.get("variable", "")
 	var is_global: bool = data.get("isGlobal", false)
@@ -2002,6 +2592,8 @@ func _handle_array_set(node: Dictionary) -> void:
 				new_array = _evaluator.evaluate_image_array_input(node.get("id", ""), StoryFlowHandles.IN_IMAGE_ARRAY)
 			NT.SET_CHARACTER_ARRAY:
 				new_array = _evaluator.evaluate_character_array_input(node.get("id", ""), StoryFlowHandles.IN_CHARACTER_ARRAY)
+			NT.SET_DATA_ARRAY:
+				new_array = _evaluator.evaluate_data_array_input(node.get("id", ""), StoryFlowHandles.IN_DATA_ARRAY)
 			NT.SET_AUDIO_ARRAY:
 				new_array = _evaluator.evaluate_audio_array_input(node.get("id", ""), StoryFlowHandles.IN_AUDIO_ARRAY)
 		variant.set_array(new_array)
@@ -2027,7 +2619,8 @@ func _handle_array_modify(node: Dictionary) -> void:
 	# Get the array via the input edge (same as HTML's getArrayInput)
 	var arr: Array = []
 	if _evaluator and not array_handle_suffix.is_empty():
-		arr = _evaluator.evaluate_string_array_input(node_id, array_handle_suffix)
+		if node_type not in [NT.ADD_TO_DATA_ARRAY, NT.REMOVE_FROM_DATA_ARRAY, NT.CLEAR_DATA_ARRAY]:
+			arr = _evaluator.evaluate_string_array_input(node_id, array_handle_suffix)
 		# Use type-specific evaluator based on element type
 		match node_type:
 			NT.ADD_TO_BOOL_ARRAY, NT.REMOVE_FROM_BOOL_ARRAY, NT.CLEAR_BOOL_ARRAY:
@@ -2042,6 +2635,10 @@ func _handle_array_modify(node: Dictionary) -> void:
 				arr = _evaluator.evaluate_image_array_input(node_id, StoryFlowHandles.IN_IMAGE_ARRAY)
 			NT.ADD_TO_CHARACTER_ARRAY, NT.REMOVE_FROM_CHARACTER_ARRAY, NT.CLEAR_CHARACTER_ARRAY:
 				arr = _evaluator.evaluate_character_array_input(node_id, StoryFlowHandles.IN_CHARACTER_ARRAY)
+			NT.ADD_TO_DATA_ARRAY, NT.REMOVE_FROM_DATA_ARRAY, NT.CLEAR_DATA_ARRAY:
+				# HTML getArrayInput returns a copy. A chained modifier must not mutate
+				# its input node's cached output or the original variable through an alias.
+				arr = _evaluator.evaluate_data_array_input(node_id, StoryFlowHandles.IN_DATA_ARRAY).duplicate()
 			NT.ADD_TO_AUDIO_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY, NT.CLEAR_AUDIO_ARRAY:
 				arr = _evaluator.evaluate_audio_array_input(node_id, StoryFlowHandles.IN_AUDIO_ARRAY)
 
@@ -2091,6 +2688,9 @@ func _handle_array_modify(node: Dictionary) -> void:
 			var elem := StoryFlowVariant.new()
 			elem.set_string(eval_result)
 			arr.append(elem)
+		NT.ADD_TO_DATA_ARRAY:
+			var dv: String = inline_value.get_string() if inline_value is StoryFlowVariant else str(inline_value) if inline_value is String else ""
+			arr.append(StoryFlowVariant.from_string(_evaluator.evaluate_data_input(node_id, StoryFlowHandles.IN_DATA, dv) if _evaluator else dv))
 		NT.ADD_TO_IMAGE_ARRAY, NT.ADD_TO_CHARACTER_ARRAY, NT.ADD_TO_AUDIO_ARRAY:
 			var dv := ""
 			if inline_value is StoryFlowVariant:
@@ -2104,7 +2704,7 @@ func _handle_array_modify(node: Dictionary) -> void:
 		# Remove operations
 		NT.REMOVE_FROM_BOOL_ARRAY, NT.REMOVE_FROM_INT_ARRAY, NT.REMOVE_FROM_FLOAT_ARRAY, \
 		NT.REMOVE_FROM_STRING_ARRAY, NT.REMOVE_FROM_IMAGE_ARRAY, \
-		NT.REMOVE_FROM_CHARACTER_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY:
+		NT.REMOVE_FROM_CHARACTER_ARRAY, NT.REMOVE_FROM_DATA_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY:
 			var dv := 0
 			if inline_value is StoryFlowVariant:
 				dv = inline_value.get_int(0)
@@ -2115,7 +2715,7 @@ func _handle_array_modify(node: Dictionary) -> void:
 		# Clear operations
 		NT.CLEAR_BOOL_ARRAY, NT.CLEAR_INT_ARRAY, NT.CLEAR_FLOAT_ARRAY, \
 		NT.CLEAR_STRING_ARRAY, NT.CLEAR_IMAGE_ARRAY, \
-		NT.CLEAR_CHARACTER_ARRAY, NT.CLEAR_AUDIO_ARRAY:
+		NT.CLEAR_CHARACTER_ARRAY, NT.CLEAR_DATA_ARRAY, NT.CLEAR_AUDIO_ARRAY:
 			arr.clear()
 
 	# Store the result array on this node's cached output (matches HTML's setNodeOutputValue).
@@ -2135,6 +2735,11 @@ func _handle_array_modify(node: Dictionary) -> void:
 ## Trace the array input edge back to the source node to find and update the variable.
 ## Matches HTML runtime's updateConnectedArrayVariable(node, handleSuffix, newArray).
 func _update_connected_array_variable(node: Dictionary, array_handle_suffix: String, new_array: Array) -> void:
+	# Store Data arrays independently of the modifier's cached output. Their elements
+	# are mutable variant objects here, while the HTML runtime stores primitive IDs.
+	var is_data_array := array_handle_suffix.begins_with("dataAsset-array")
+	if is_data_array:
+		new_array = StoryFlowVariant.from_array(new_array).duplicate_variant().get_array()
 	if not _context or not _context.current_script:
 		return
 	var node_id: String = node.get("id", "")
@@ -2150,11 +2755,92 @@ func _update_connected_array_variable(node: Dictionary, array_handle_suffix: Str
 	var source_data: Dictionary = source_node.get("data", {})
 	var source_type: StoryFlowTypes.NodeType = source_node.get("type", StoryFlowTypes.NodeType.UNKNOWN)
 
+	# A .sfd accessor routes the write into the Data Asset OVERLAY — the array twin of
+	# _handle_set_data_asset_var: the same write ladder (a degraded binding warns through the
+	# same latch and writes nothing) and the same deep-copy-on-write try_set.
+	#
+	# ACCESSOR FIRST, before the character branch and before the name lookup below. An accessor
+	# carries no isGlobal and its "variable" field is a display-NAME snapshot, so falling
+	# through would make it clobber a same-named LOCAL script array instead — the decoy case
+	# in tests/test_data_asset_nodes.gd.
+	#
+	# A bound-but-not-array accessor keeps its own warn-once refusal: its pins could not have
+	# fed the op an array, and writing one over a scalar the declaration promises is exactly
+	# what a .sfd write must never do.
+	#
+	# This single site covers add / remove / clear alike: unlike the HTML runtime, which gives
+	# clearArray its own copy of this branch, Godot routes all three through
+	# _handle_array_modify and lands here.
+	if source_type == StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE \
+		or source_type == StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+		if not bool(source_data.get("isArray", false)):
+			if _context.should_warn_data_asset(source_id, "arrayop"):
+				push_warning("StoryFlow: Data Asset array op refused - node %s is not bound to an array variable" % source_id)
+			return
+		if not _evaluator:
+			return
+		var da_asset_id: String = _evaluator.resolve_data_asset_write_target(source_data, source_id)
+		if da_asset_id.is_empty():
+			return
+		var da_variable_id := str(source_data.get("variableId", ""))
+		var da_declared: StoryFlowTypes.VariableType = StoryFlowTypes.parse_variable_type(str(source_data.get("variableType", "")))
+		var da_elements: Array = []
+		for element in new_array:
+			da_elements.append(_type_data_asset_element(da_declared, element))
+		var da_value := StoryFlowVariant.new()
+		da_value.set_array(da_elements)
+		# set_array reads the tag off element zero, so an emptied array would come back
+		# untagged — stamp the declaration's storage type, exactly as the Set handler does.
+		da_value.type = StoryFlowDataAssetStore.storage_type(da_declared)
+		_sf_trace('DA SET "%s.%s" value=[%d elements]' % [da_asset_id, da_variable_id, da_elements.size()])
+		StoryFlowDataAssetStore.try_set(_context.data_asset_seed, _context.data_asset_overlay, da_asset_id, da_variable_id, da_value, _context.data_asset_revision)
+
+		# The same required invalidation as _handle_set_data_asset_var (arrayLength /
+		# arrayContains feed boolean chains, so a memoized parent above one of them goes stale
+		# in exactly the same way) — but ORDERED, because this site has a hazard that one does
+		# not: _handle_array_modify already stamped THIS op's result onto its own node state
+		# before calling us, and a downstream array read pulls that cached output. Clearing
+		# without restoring it would break array chaining, so the stamp is re-applied here.
+		#
+		# It is re-applied from da_elements and re-TAGGED, not copied from new_array: what this
+		# op hands downstream must be what it stored. An enum-declared array fed plain strings
+		# would otherwise show STRING-tagged elements on the output pin and ENUM-tagged ones in
+		# the overlay, and an op that emptied the array would hand out an untagged one — the
+		# exact hole the write's own stamp two lines up exists to close. The restamp survives the
+		# switch to a selective clear because its job was always the TAG; not being wiped was
+		# only ever the other half of it.
+		_context.clear_boolean_memo()
+		var restamp := StoryFlowVariant.new()
+		restamp.set_array(da_elements)
+		restamp.type = StoryFlowDataAssetStore.storage_type(da_declared)
+		_context.get_node_state(node_id).cached_output = restamp
+		return
+
 	# Handle character variable arrays
 	if source_type == StoryFlowTypes.NodeType.GET_CHARACTER_VAR or source_type == StoryFlowTypes.NodeType.SET_CHARACTER_VAR:
 		var char_path: String = source_data.get("characterPath", "")
 		var var_name: String = source_data.get("variableName", "")
 		var mgr := get_manager()
+		# Id-first here too (characters engine contract §4): this write-back binds to the
+		# SAME node fields the array READ resolved through — left path-keyed, an id-bound
+		# array chain would read one character and write the modification back to whatever
+		# stale record the path field names. NODE lane -> the context latch pair.
+		var wired := false
+		if is_data_array and _evaluator:
+			var char_edge := _context.current_script.find_input_edge(source_id, StoryFlowHandles.IN_CHARACTER_INPUT)
+			if not char_edge.is_empty():
+				var char_source := _context.current_script.get_node(char_edge.get("source", ""))
+				if not char_source.is_empty():
+					char_path = _evaluator.evaluate_string_from_node(char_source.get("id", ""), char_edge.get("source_handle", ""))
+					wired = true
+		if mgr:
+			if wired:
+				char_path = StoryFlowCharacter.resolve_character_key(
+					_context.character_id_bridge, mgr.get_runtime_characters(), char_path, _context)
+			else:
+				char_path = StoryFlowCharacter.resolve_character_ref(
+					_context.character_id_bridge, mgr.get_runtime_characters(),
+					str(source_data.get("characterId", "")), char_path, _context)
 		if mgr and not char_path.is_empty() and not var_name.is_empty():
 			var character: StoryFlowCharacter = mgr.get_runtime_character(char_path)
 			if character and character.variables.has(var_name):
@@ -2170,6 +2856,13 @@ func _update_connected_array_variable(node: Dictionary, array_handle_suffix: Str
 	var var_name: String = source_data.get("variableName", "")
 	if var_name.is_empty():
 		var_name = source_data.get("variable", "")
+
+	# Exported variable nodes bind by ID; retain the name fallback for legacy graphs.
+	var bound := _find_variable(str(source_data.get("variable", "")), is_global)
+	if not bound.is_empty() and bound.get("is_array", false) and bound.get("value") is StoryFlowVariant:
+		bound["value"].set_array(new_array)
+		_notify_variable_changed(bound, is_global)
+		return
 
 	# Find the variable by name in the appropriate scope
 	if is_global:
@@ -2213,6 +2906,8 @@ func _get_array_handle_suffix(node_type: StoryFlowTypes.NodeType) -> String:
 			return StoryFlowHandles.IN_IMAGE_ARRAY
 		NT.ADD_TO_CHARACTER_ARRAY, NT.REMOVE_FROM_CHARACTER_ARRAY, NT.CLEAR_CHARACTER_ARRAY:
 			return StoryFlowHandles.IN_CHARACTER_ARRAY
+		NT.ADD_TO_DATA_ARRAY, NT.REMOVE_FROM_DATA_ARRAY, NT.CLEAR_DATA_ARRAY:
+			return StoryFlowHandles.IN_DATA_ARRAY
 		NT.ADD_TO_AUDIO_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY, NT.CLEAR_AUDIO_ARRAY:
 			return StoryFlowHandles.IN_AUDIO_ARRAY
 	return ""
@@ -2244,6 +2939,8 @@ func _handle_for_each_loop(node: Dictionary) -> void:
 					loop_array = _evaluator.evaluate_image_array_input(node.get("id", ""), StoryFlowHandles.IN_IMAGE_ARRAY)
 				NT.FOR_EACH_CHARACTER_LOOP:
 					loop_array = _evaluator.evaluate_character_array_input(node.get("id", ""), StoryFlowHandles.IN_CHARACTER_ARRAY)
+				NT.FOR_EACH_DATA_LOOP:
+					loop_array = _evaluator.evaluate_data_array_input(node.get("id", ""), StoryFlowHandles.IN_DATA_ARRAY)
 				NT.FOR_EACH_AUDIO_LOOP:
 					loop_array = _evaluator.evaluate_audio_array_input(node.get("id", ""), StoryFlowHandles.IN_AUDIO_ARRAY)
 
@@ -2255,11 +2952,11 @@ func _handle_for_each_loop(node: Dictionary) -> void:
 		# Clear evaluation caches from previous iteration so boolean chains re-evaluate
 		_context.clear_cached_outputs()
 
-		# Restore cached outputs for all active outer loops (nested forEach support)
-		for frame in _context.loop_stack:
-			var outer_state := _context.get_node_state(frame.node_id)
-			if outer_state.loop_initialized and outer_state.loop_index < outer_state.loop_array.size():
-				outer_state.cached_output = outer_state.loop_array[outer_state.loop_index]
+		# Restore cached outputs for all active outer loops (nested forEach support). THIS
+		# node's frame is not on the stack yet — it is pushed further down, and
+		# _continue_for_each_loop pops it before re-entering — so the stamp below is the only
+		# thing that publishes the current element.
+		_context.restore_live_loop_outputs()
 
 		# Set current element as cached output
 		node_state.cached_output = node_state.loop_array[node_state.loop_index]
@@ -2347,8 +3044,9 @@ func _handle_set_map(node: Dictionary) -> void:
 			var kind: String = map_result.get("kind", "")
 			var source_map = map_result.get("map")
 			if source_map is Dictionary:
-				if kind == StoryFlowEvaluator.MAP_SOURCE_CHARACTER_VAR or kind == StoryFlowEvaluator.MAP_SOURCE_RUN_SCRIPT:
-					# Read-only-terminal chain (charvar or runScript output):
+				if kind == StoryFlowEvaluator.MAP_SOURCE_CHARACTER_VAR or kind == StoryFlowEvaluator.MAP_SOURCE_RUN_SCRIPT \
+					or kind == StoryFlowEvaluator.MAP_SOURCE_DATA_ASSET:
+					# Read-only-terminal chain (charvar, runScript output or .sfd accessor):
 					# HTML's setMap SNAPSHOTS the entries into a fresh Map —
 					# never aliases live charvar/runScript storage. Entry
 					# values are deep-duplicated to fully detach the copy.
@@ -2408,11 +3106,22 @@ func _handle_map_modify(node: Dictionary) -> void:
 		_handle_set_node_end(node, flow_handle)
 		return
 
+	var detached := kind == StoryFlowEvaluator.MAP_SOURCE_DATA_ASSET
+	if detached:
+		var copy := {}
+		for entry_key in map:
+			copy[entry_key] = map[entry_key].duplicate_variant()
+		map = copy
+		# Detached results retain display text. Wired strings have already been evaluated;
+		# only an unwired inline value still holds its originating script's authored key.
+		if new_value != null and str(data.get("valueType", "")) == "string":
+			if _context.current_script.find_input_edge(node["id"], "string-4").is_empty():
+				new_value.set_string(_evaluator._resolve_string_key(new_value.get_string()))
 	if kind == StoryFlowEvaluator.MAP_SOURCE_CHARACTER_VAR or kind == StoryFlowEvaluator.MAP_SOURCE_RUN_SCRIPT:
-		# Read-only-terminal chain (charvar or runScript output): HTML hands the
-		# mutator a THROWAWAY fresh Map — the stored variable is observably
+		# Read-only-terminal chain (charvar or runScript output): HTML
+		# hands the mutator a THROWAWAY fresh Map — the stored variable is observably
 		# unchanged and no variable-change dispatch fires. Skip mutation AND
-		# notify (observable no-op): use setCharacterVar to write charvars.
+		# notify (observable no-op): use setCharacterVar to write character variables.
 		print_verbose("StoryFlow: Map mutator node %s resolves to a read-only map source (character variable or runScript output) - mutation skipped" % node.get("id", ""))
 		_handle_set_node_end(node, flow_handle)
 		return
@@ -2430,8 +3139,12 @@ func _handle_map_modify(node: Dictionary) -> void:
 			# clearMap(inv) emptying the aliased inv2). Do NOT reassign here.
 			map.clear()
 
+	if detached:
+		var output := map_result.duplicate()
+		output["map"] = map
+		_context.get_node_state(node.get("id", "")).detached_map_output = output
 	var origin_variable: Dictionary = map_result.get("variable", {})
-	if not origin_variable.is_empty():
+	if not detached and not origin_variable.is_empty():
 		_notify_variable_changed(origin_variable, map_result.get("is_global", false))
 	_handle_set_node_end(node, flow_handle)
 
@@ -2483,10 +3196,12 @@ func _handle_for_each_map(node: Dictionary) -> void:
 	if not node_state.loop_initialized:
 		var keys: Array = []
 		var values: Array = []
+		node_state.loop_text_is_resolved = false
 		if _evaluator:
 			var map_result: Dictionary = _evaluator.resolve_map_input(node, "map")
 			var map = map_result.get("map")
 			if map is Dictionary:
+				node_state.loop_text_is_resolved = map_result.get("kind", "") == StoryFlowEvaluator.MAP_SOURCE_DATA_ASSET
 				for k in map:
 					keys.append(k)
 					values.append(map[k])
@@ -2502,11 +3217,9 @@ func _handle_for_each_map(node: Dictionary) -> void:
 
 		# Restore cached outputs for all active outer ARRAY loops (nested
 		# forEach support — mirrors _handle_for_each_loop). Outer MAP loops need
-		# no restore: their loop_key/loop_value are not wiped by the cache clear.
-		for frame in _context.loop_stack:
-			var outer_state := _context.get_node_state(frame.node_id)
-			if outer_state.loop_initialized and outer_state.loop_index < outer_state.loop_array.size():
-				outer_state.cached_output = outer_state.loop_array[outer_state.loop_index]
+		# no restore: their loop_key/loop_value are not wiped by the cache clear,
+		# and the helper's bounds check skips their empty loop_array anyway.
+		_context.restore_live_loop_outputs()
 
 		# Expose the current entry's key/value (read by the typed evaluators
 		# via the "-key"/"-value" source handle suffixes)
@@ -2532,6 +3245,7 @@ func _handle_for_each_map(node: Dictionary) -> void:
 		node_state.loop_values = []
 		node_state.loop_key = null
 		node_state.loop_value = null
+		node_state.loop_text_is_resolved = false
 		node_state.cached_output = null
 
 		if _context.loop_stack.size() > 0 and _context.loop_stack.back().node_id == node_id:
@@ -2686,10 +3400,27 @@ func _handle_set_character_var(node: Dictionary) -> void:
 
 	# Check for connected character input
 	var char_edge: Dictionary = _context.current_script.find_input_edge(node["id"], StoryFlowHandles.IN_CHARACTER_INPUT)
+	var char_wired := false
 	if not char_edge.is_empty() and _evaluator:
 		var char_node: Dictionary = _context.current_script.get_node(char_edge.get("source", ""))
 		if not char_node.is_empty():
 			character_path = _evaluator.evaluate_string_from_node(char_node.get("id", ""), char_edge.get("source_handle", ""))
+			char_wired = true
+
+	# Id-first resolution (characters engine contract §4), NODE lane -> the context latch
+	# pair. Wired override wins outright (a dangling inline id under a healthy wire never
+	# warns); every fall-back returns the path VERBATIM, so the trace, the writes and the
+	# signal below behave byte-identically pre-P4. On an id hit character_path becomes the
+	# resolved record key, which is what the trace prints and the signal carries.
+	var res_mgr := get_manager()
+	if res_mgr:
+		if char_wired:
+			character_path = StoryFlowCharacter.resolve_character_key(
+				_context.character_id_bridge, res_mgr.get_runtime_characters(), character_path, _context)
+		else:
+			character_path = StoryFlowCharacter.resolve_character_ref(
+				_context.character_id_bridge, res_mgr.get_runtime_characters(),
+				str(data.get("characterId", "")), character_path, _context)
 
 	if character_path.is_empty():
 		_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
@@ -2754,7 +3485,9 @@ func _handle_set_character_var(node: Dictionary) -> void:
 		var source_node: Dictionary = _context.current_script.get_node(input_edge.get("source", ""))
 		if not source_node.is_empty():
 			var source_handle: String = input_edge.get("source_handle", "")
-			if variable_type == "boolean":
+			if variable_type == "dataAsset":
+				new_value.set_string(_evaluator.evaluate_data_from_node(source_node.get("id", ""), source_handle))
+			elif variable_type == "boolean":
 				new_value.set_bool(_evaluator.evaluate_boolean_from_node(source_node.get("id", ""), source_handle))
 			elif variable_type == "integer":
 				new_value.set_int(_evaluator.evaluate_integer_from_node(source_node.get("id", ""), source_handle))
@@ -2793,18 +3526,30 @@ func _handle_set_character_var(node: Dictionary) -> void:
 	if mgr:
 		var character: StoryFlowCharacter = mgr.get_runtime_character(character_path)
 		if character:
-			# Handle built-in "Name" field
-			if variable_name.to_lower() == "name":
+			# Handle built-in "Name" field. FIRST TIER of the A2(a) aliases: already
+			# case-insensitive pre-P4, so the shared predicate folds cf_name in (the
+			# cf_-only second tier lives on public set_character_variable).
+			if StoryFlowCharacter.is_name_token(variable_name):
 				character.character_name = new_value.get_string("")
+				character.name_is_literal = true
 				mutated = true
-			# Handle built-in "Image" field
-			elif variable_name.to_lower() == "image":
+			# Handle built-in "Image" field (first tier, same as Name above)
+			elif StoryFlowCharacter.is_image_token(variable_name):
 				character.image_key = new_value.get_string("")
 				mutated = true
-			# Custom variable
+			# Custom variable. Write only when the declared row matches the node's own type
+			# snapshot (HTML's setCharacterVariableValue type-mismatch -> no write, the same
+			# gate the map path above already keeps): a mismatched write is REFUSED - nothing
+			# lands, no signal fires, exec still continues. Contract SS5's
+			# type-mismatch-write-refused pin, tests/test_character_contract.gd.
 			elif character.variables.has(variable_name):
-				character.variables[variable_name]["value"] = new_value
-				mutated = true
+				var char_var: Dictionary = character.variables[variable_name]
+				if char_var.get("type", -1) == StoryFlowTypes.parse_variable_type(variable_type) \
+						and bool(char_var.get("is_array", false)) == is_array:
+					char_var["value"] = new_value
+					mutated = true
+				else:
+					print_verbose("StoryFlow: SetCharacterVar write skipped - variable '%s' on '%s' does not match the node's declared type" % [variable_name, character_path])
 
 	if mutated:
 		character_variable_changed.emit(character_path, variable_name, new_value)
@@ -2828,11 +3573,234 @@ func _evaluate_character_var_array_input(node_id: String, variable_type: String,
 			return _evaluator.evaluate_image_array_input(node_id, handle_suffix).duplicate()
 		"character":
 			return _evaluator.evaluate_character_array_input(node_id, handle_suffix).duplicate()
+		"dataAsset":
+			return _evaluator.evaluate_data_array_input(node_id, handle_suffix).duplicate()
 		"audio":
 			return _evaluator.evaluate_audio_array_input(node_id, handle_suffix).duplicate()
 		_:
 			# string / enum — string-keyed storage (matches the HTML default branch)
 			return _evaluator.evaluate_string_array_input(node_id, handle_suffix).duplicate()
+
+# =============================================================================
+# Node Handlers - Data Asset Variables (.sfd)
+# =============================================================================
+
+## Execute a setDataAssetVariable node: record the wired value in the session overlay.
+##
+## Shaped like [method _handle_set_character_var] — resolve the target, read the value, trace,
+## write, then [method _handle_set_node_end] — with two deliberate differences:
+##
+## 1. THE LADDER RUNS FIRST. Every degraded case (engine contract 6) is a NO-OP with a
+##    once-per-node warning, because writing anything would be worse than doing nothing: an
+##    overlay entry SHADOWS the declared default for the rest of the session, and cascades to
+##    every descendant when it lands on a base.
+## 2. THERE IS NO INLINE FALLBACK. setCharacterVar keeps an editable value on its face and
+##    writes it when its pin is unwired; this node's face is the BINDING, so it persists no
+##    value and an unwired pin has nothing to offer. Every value branch below does its own
+##    explicit find_input_edge and REFUSES — never writes the type's zero over the declared
+##    default (contract 5, the getTypedInput trap).
+##
+## _handle_set_node_end runs on EVERY path, including the refusals: a Set that declines to
+## write still has to let the exec chain continue, or a wiring mistake freezes the dialogue.
+func _handle_set_data_asset_var(node: Dictionary) -> void:
+	var node_id: String = node.get("id", "")
+	var data: Dictionary = node.get("data", {})
+	var flow_handle := StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_FLOW)
+
+	if not _evaluator:
+		_handle_set_node_end(node, flow_handle)
+		return
+
+	# All five ladder rungs, warned once each. "" for every degraded case.
+	var asset_id: String = _evaluator.resolve_data_asset_write_target(data, node_id)
+	if asset_id.is_empty():
+		_handle_set_node_end(node, flow_handle)
+		return
+
+	var variable_id := str(data.get("variableId", ""))
+	var value := _read_data_asset_set_input(node, data)
+	if value == null:
+		# NOT latched, unlike the ladder above (contract 6, last row): this one names a wiring
+		# mistake on an EXEC node the author just ran, and an exec node fires far less often
+		# than an option condition re-evaluates.
+		push_warning("StoryFlow: Set Data Asset Variable refused an unwired or unresolved value pin: node %s (%s.%s)" % [node_id, asset_id, variable_id])
+		_handle_set_node_end(node, flow_handle)
+		return
+
+	# Trace BEFORE the write, matching every other setter in this file.
+	_sf_trace('DA SET "%s.%s" value=%s' % [asset_id, variable_id, _data_asset_trace_value(value, data)])
+	StoryFlowDataAssetStore.try_set(_context.data_asset_seed, _context.data_asset_overlay, asset_id, variable_id, value, _context.data_asset_revision)
+
+	# Drop the memoized boolean outputs so option conditions re-evaluate against the new value
+	# (contract 5), the analog of the reference runtime's clearNotBoolCache.
+	#
+	# THIS IS REQUIRED, and the pull-write-pull triple in tests/test_data_asset_nodes.gd is what
+	# proved it rather than a guess. The accessor's OWN read is already carved out of the memo
+	# (is_data_asset_read in storyflow_evaluator.gd), so a direct read does see the write without
+	# any help — but a memoized PARENT does not. process_boolean_chain recurses into an
+	# andBool/orBool/equalBool's inputs WITHOUT recomputing the node itself, so the following
+	# evaluate_boolean_from_node answers from that node's stale cache: an option gated through
+	# andBool(accessor, true) stayed VISIBLE across a write to false until this line existed.
+	#
+	# SELECTIVE, and it has to be: clear_cached_outputs nulls EVERY node output, and mid-chain
+	# that takes an array forEach's current element and every array op's result pin down with the
+	# booleans. clear_boolean_memo touches only the derived booleans the memo actually serves,
+	# which is both the whole of what needs invalidating here and the whole of what may be.
+	_context.clear_boolean_memo()
+
+	_handle_set_node_end(node, flow_handle)
+
+
+## The value a setDataAssetVariable node is writing, or [code]null[/code] when its value pin is
+## UNWIRED (which is a refusal, not an empty write).
+##
+## The pin suffixes are the editor's, from SetDataAssetVariableNode.tsx's value pin at optionId
+## "2": "{type}-2" for a scalar, "{type}-array-2" for an array, "map-{K}-{V}-2" for a map.
+##
+## Wired-but-unresolvable is NOT a refusal — it writes the empty container, matching the
+## reference's getArrayInput/getMapInput ("wired to something that resolves to nothing" is how
+## an author clears a .sfd array or map). Only the ABSENT EDGE refuses.
+##
+## Values are re-minted against the DECLARED type rather than passed through: an enum array
+## wired from a plain string array must land ENUM-tagged, and an empty array must still carry
+## its element type (set_array infers the tag from element zero, which leaves an empty array
+## untagged — the same stamp StoryFlowDataAssetStore.type_value applies at import).
+func _read_data_asset_set_input(node: Dictionary, data: Dictionary) -> StoryFlowVariant:
+	_context.clear_boolean_memo()
+	var failures := _context.resolution_failures
+	var value := _read_data_asset_set_input_core(node, data)
+	return value if failures == _context.resolution_failures else null
+
+
+func _read_data_asset_set_input_core(node: Dictionary, data: Dictionary) -> StoryFlowVariant:
+	var node_id: String = node.get("id", "")
+	var variable_type := str(data.get("variableType", ""))
+	var declared: StoryFlowTypes.VariableType = StoryFlowTypes.parse_variable_type(variable_type)
+
+	if declared == StoryFlowTypes.VariableType.MAP:
+		var key_type := str(data.get("keyType", ""))
+		var value_type := str(data.get("valueType", ""))
+		# Without K/V the map handle id cannot be built at all, so there is no pin to read.
+		if key_type.is_empty() or value_type.is_empty():
+			return null
+		var map_suffix := StoryFlowHandles.in_map(key_type, value_type, StoryFlowHandles.DATA_ASSET_VALUE_OPTION)
+		if _context.current_script.find_input_edge(node_id, map_suffix).is_empty():
+			return null
+		var snapshot: Dictionary = {}
+		var map_result: Dictionary = _evaluator.resolve_map_input_by_handle(node, map_suffix)
+		var source_map = map_result.get("map")
+		if map_result.has("source_key_type") and (map_result.source_key_type != StoryFlowTypes.parse_variable_type(key_type) or map_result.source_value_type != StoryFlowTypes.parse_variable_type(value_type)):
+			return null
+		if source_map is Dictionary:
+			# Snapshot into fresh storage — never alias the source (the setCharacterVar map
+			# precedent). try_set duplicates again on the way in; this one keeps the value the
+			# trace prints and the value stored identical even if the source mutates between.
+			#
+			# Entry VALUES are re-minted against the declared valueType, exactly as the array
+			# branch below re-mints elements, and for the same reason: the wired pin's K/V tokens
+			# match the declaration (the ladder's decl_matches sees to that) but the variants
+			# INSIDE the source map carry whatever tag their producer gave them. An enum-valued
+			# map fed plain strings would otherwise sit STRING-tagged in the overlay and come
+			# back ENUM-tagged after a save round trip, since the load types from the declaration
+			# — a tag flip visible through get_data_asset_variant and in nothing else.
+			var declared_value_type := StoryFlowTypes.parse_variable_type(value_type)
+			for key in source_map:
+				if (key_type == "integer" and not key is int) or (key_type != "integer" and not key is String) or not _data_asset_element_matches(declared_value_type, source_map[key]):
+					return null
+				snapshot[key] = _type_data_asset_element(declared_value_type, source_map[key])
+		return StoryFlowVariant.from_map(snapshot)
+
+	if bool(data.get("isArray", false)):
+		var array_suffix := StoryFlowHandles.in_data_asset_array_value(variable_type)
+		if _context.current_script.find_input_edge(node_id, array_suffix).is_empty():
+			return null
+		# Reuses the character path's typed-array dispatcher — it is generic, only its name is
+		# not. Its container .duplicate() is redundant here (every element is re-minted below),
+		# which is also what keeps .sfd arrays clear of that shallow copy.
+		var source_elements := _evaluate_character_var_array_input(node_id, variable_type, array_suffix)
+		var elements: Array = []
+		for element in source_elements:
+			if not _data_asset_element_matches(declared, element):
+				return null
+			elements.append(_type_data_asset_element(declared, element))
+		var array_variant := StoryFlowVariant.new()
+		array_variant.set_array(elements)
+		array_variant.type = StoryFlowDataAssetStore.storage_type(declared)
+		return array_variant
+
+	var scalar_suffix := StoryFlowHandles.in_data_asset_value(variable_type)
+	var edge: Dictionary = _context.current_script.find_input_edge(node_id, scalar_suffix)
+	if edge.is_empty():
+		return null
+	var source_id: String = edge.get("source", "")
+	var source_handle: String = edge.get("source_handle", "")
+	var value := StoryFlowVariant.new()
+	match declared:
+		StoryFlowTypes.VariableType.BOOLEAN:
+			value.set_bool(_evaluator.evaluate_boolean_from_node(source_id, source_handle))
+		StoryFlowTypes.VariableType.INTEGER:
+			value.set_int(_evaluator.evaluate_integer_from_node(source_id, source_handle))
+		StoryFlowTypes.VariableType.FLOAT:
+			value.set_float(_evaluator.evaluate_float_from_node(source_id, source_handle))
+		StoryFlowTypes.VariableType.DATA_ASSET:
+			value.set_string(_evaluator.evaluate_data_from_node(source_id, source_handle))
+		StoryFlowTypes.VariableType.ENUM:
+			value.set_enum(_evaluator.evaluate_string_from_node(source_id, source_handle))
+		StoryFlowTypes.VariableType.STRING, \
+		StoryFlowTypes.VariableType.IMAGE, \
+		StoryFlowTypes.VariableType.AUDIO, \
+		StoryFlowTypes.VariableType.CHARACTER:
+			value.set_string(_evaluator.evaluate_string_from_node(source_id, source_handle))
+		_:
+			# Unreachable past the ladder — decl_matches refuses a wire type the shared parse
+			# table does not know — but a write with no type to give it is refused, not guessed.
+			return null
+	return value
+
+
+## Validate evaluated entries before reminting them; no mismatched value becomes a type zero.
+func _data_asset_element_matches(declared: int, source) -> bool:
+	if not source is StoryFlowVariant:
+		return false
+	var storage := StoryFlowDataAssetStore.storage_type(declared)
+	if storage in [StoryFlowTypes.VariableType.STRING, StoryFlowTypes.VariableType.ENUM]:
+		return source.type in [StoryFlowTypes.VariableType.STRING, StoryFlowTypes.VariableType.ENUM]
+	return source.type == storage
+
+
+func _type_data_asset_element(declared: StoryFlowTypes.VariableType, source) -> StoryFlowVariant:
+	var element := StoryFlowVariant.new()
+	if not source is StoryFlowVariant:
+		element.type = StoryFlowDataAssetStore.storage_type(declared)
+		return element
+	match declared:
+		StoryFlowTypes.VariableType.BOOLEAN:
+			element.set_bool(source.get_bool())
+		StoryFlowTypes.VariableType.INTEGER:
+			element.set_int(source.get_int())
+		StoryFlowTypes.VariableType.FLOAT:
+			element.set_float(source.get_float())
+		StoryFlowTypes.VariableType.ENUM:
+			element.set_enum(source.get_string())
+		StoryFlowTypes.VariableType.STRING:
+			# A session write captures displayed text, not the source array's authored key.
+			element.set_string(_evaluator._array_string(source))
+		_:
+			element.set_string(source.get_string())
+	return element
+
+
+## A .sfd value rendered for the DA SET trace line, told apart by the accessor's own snapshot
+## rather than by the variant: to_display_string answers "" for a map, an array AND an empty
+## string alike, so an empty array would otherwise be indistinguishable from an empty string.
+## Containers trace their SIZE — printing a large map's contents would make the trace unusable.
+func _data_asset_trace_value(value: StoryFlowVariant, data: Dictionary) -> String:
+	if str(data.get("variableType", "")) == "map":
+		return "{%d entries}" % value.get_map().size()
+	if bool(data.get("isArray", false)):
+		return "[%d elements]" % value.get_array().size()
+	return value.to_display_string()
+
 
 # =============================================================================
 # Set Node End Handling (special no-outgoing-edge behavior)
@@ -2871,6 +3839,7 @@ func _handle_set_node_end(node: Dictionary, source_handle: String) -> void:
 # =============================================================================
 
 func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
+	_current_speaker_path = ""
 	var state := StoryFlowDialogueState.new()
 	state.is_valid = true
 	state.node_id = dialogue_node.get("id", "")
@@ -2881,11 +3850,21 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 
 	# IMPORTANT: Resolve character FIRST so {Character.Name} interpolation works
 	var character_path: String = data.get("character", "")
+	# Id-first speaker resolution (characters engine contract §4): characterRefId through
+	# the bridge — NODE lane, so the context's latch pair — with the path field as the
+	# fall-back, returned verbatim so the pre-P4 lines below behave byte-identically.
+	if mgr:
+		character_path = StoryFlowCharacter.resolve_character_ref(
+			_context.character_id_bridge, mgr.get_runtime_characters(),
+			str(data.get("characterRefId", "")), character_path, _context)
 	if character_path != "" and mgr:
 		var character: StoryFlowCharacter = mgr.get_runtime_character(character_path)
 		if character:
+			_current_speaker_path = StoryFlowCharacter.normalize_path(character_path)
 			var char_data := StoryFlowCharacterData.new()
-			char_data.name = _text.get_string(character.character_name, language_code)
+			# Authored names resolve at read time; player-written names remain literal.
+			char_data.character_path = character_path
+			char_data.name = character.character_name if character.name_is_literal else _text.get_string(character.character_name, language_code)
 
 			# Resolve character portrait to actual Texture2D (reads from mutable
 			# runtime character, so SetCharacterVar "Image" changes are reflected)
@@ -2908,7 +3887,15 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 		_context.current_dialogue_state = StoryFlowDialogueState.new()
 	_context.current_dialogue_state.character = state.character
 
-	# Get title and text from string table, then interpolate variables
+	# Get title and text from string table, then interpolate variables.
+	#
+	# THE AUTHORED-TEMPLATE INVARIANT (localization spec §9) governs this field and every one
+	# below it - the text blocks and the option labels: the table lookup runs FIRST and interpolate
+	# runs on its RESULT. A translated line is authored with the same {Variable} tokens as the
+	# source line, so interpolating first would hand the lookup a string no table was ever keyed
+	# by, and the failure is invisible - the text still renders, in the source language, only for
+	# lines that happen to carry a token. get_string IS the whole ladder; never build a
+	# `language_code + "." + key` probe here.
 	var title_key: String = data.get("title", "")
 	var text_key: String = data.get("text", "")
 
@@ -3001,6 +3988,20 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 # String Resolution
 # =============================================================================
 
+## The component's string door, on both sides of a dialogue.
+##
+## DURING dialogue it delegates to the text interpolator (whose lookup adds the current script's
+## own strings table); OUTSIDE dialogue there is no script and the project globals - which
+## characters.json merges into - are the only source tier. That split is the pre-localization
+## behavior kept exactly as it was; both sides now run the SAME shared ladder
+## (StoryFlowLocalization.look_up), so a string cannot resolve one way inside dialogue and another
+## way outside it.
+##
+## [member language_code] is the PRE-LOCALIZATION language and only the fallback; once the project
+## ships a localization.json the manager owns the language (see StoryFlowManager.set_language).
+##
+## THE LOOKUP RUNS ON THE AUTHORED TEMPLATE (§9): any caller that interpolates `{Variable}` tokens
+## does it on this RESULT, never before the call.
 func _resolve_string(key: String) -> String:
 	if key.is_empty():
 		return key
@@ -3012,7 +4013,9 @@ func _resolve_string(key: String) -> String:
 	if mgr:
 		var project: StoryFlowProject = mgr.get_project()
 		if project:
-			return project.get_localized_string(key, language_code)
+			var resolved = StoryFlowLocalization.look_up(
+				mgr.get_localization(), null, project.global_strings, key, language_code)
+			return key if resolved == null else resolved
 	return key
 
 
@@ -3242,3 +4245,46 @@ func _load_audio_direct(file_path: String) -> AudioStream:
 	var stream := AudioStreamMP3.new()
 	stream.data = buffer
 	return stream
+
+
+func _handle_set_data(node: Dictionary) -> void:
+	var data: Dictionary = node.get("data", {})
+	var variable := _find_variable(str(data.get("variable", "")), bool(data.get("isGlobal", false)))
+	if variable.get("type", -1) == StoryFlowTypes.VariableType.DATA_ASSET and not variable.get("is_array", false):
+		var inline_value = data.get("value")
+		var current = variable.get("value")
+		var fallback: String = current.get_string() if current is StoryFlowVariant else ""
+		if inline_value is StoryFlowVariant:
+			fallback = inline_value.get_string()
+		elif inline_value is String:
+			fallback = inline_value
+		var value := _evaluator.evaluate_data_input(node.get("id", ""), "dataAsset-2", fallback) if _evaluator else fallback
+		_set_variable_on_node(node, StoryFlowVariant.from_string(value))
+		_sf_trace('VAR SET "%s" global=%s value=%s' % [variable.get("name", ""), str(data.get("isGlobal", false)).to_lower(), value])
+	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
+
+
+func _handle_data_read(node: Dictionary) -> void:
+	var suffix := "dataAsset-"
+	match node.get("type"):
+		StoryFlowTypes.NodeType.ARRAY_LENGTH_DATA, StoryFlowTypes.NodeType.FIND_IN_DATA_ARRAY:
+			suffix = StoryFlowHandles.OUT_INTEGER
+		StoryFlowTypes.NodeType.ARRAY_CONTAINS_DATA:
+			suffix = StoryFlowHandles.OUT_BOOLEAN
+	_process_next_node(StoryFlowHandles.source(node["id"], suffix))
+
+
+func _handle_set_data_array_element(node: Dictionary) -> void:
+	var node_id: String = node["id"]
+	var data: Dictionary = node.get("data", {})
+	var suffix := "dataAsset-array-2"
+	if _evaluator:
+		var failures_before := _context.resolution_failures
+		var arr := _evaluator.evaluate_data_array_input(node_id, suffix).duplicate()
+		var index := _evaluator.evaluate_integer_input(node_id, "integer-3", _evaluator._get_data_int(data, "value1", 0))
+		var value := _evaluator.evaluate_data_input(node_id, "dataAsset-4", _evaluator._get_data_string(data, "value2"))
+		if _context.resolution_failures == failures_before and index >= 0 and index < arr.size():
+			arr[index] = StoryFlowVariant.from_string(value)
+			_context.get_node_state(node_id).cached_output = StoryFlowVariant.from_array(arr)
+			_update_connected_array_variable(node, suffix, arr)
+	_handle_set_node_end(node, StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_FLOW))

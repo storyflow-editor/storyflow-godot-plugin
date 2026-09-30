@@ -4,8 +4,10 @@ extends RefCounted
 # Preloaded by path so parsing never depends on the global class name cache,
 # which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
 const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
+const StoryFlowDataAssetStore = preload("res://addons/storyflow/core/storyflow_data_asset_store.gd")
 const StoryFlowExecutionContext = preload("res://addons/storyflow/core/storyflow_execution_context.gd")
 const StoryFlowHandles = preload("res://addons/storyflow/core/storyflow_handles.gd")
+const StoryFlowLocalization = preload("res://addons/storyflow/core/storyflow_localization.gd")
 const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
 const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.gd")
 
@@ -22,6 +24,13 @@ var _context: StoryFlowExecutionContext = null
 var _global_variables: Dictionary = {} # id -> variable Dictionary
 var _characters: Dictionary = {} # normalized_path -> StoryFlowCharacter
 var _global_strings: Dictionary = {} # flattened "lang.key" -> value
+var _manager: Node = null
+
+## PRE-LOCALIZATION ONLY (localization spec §9): the prefix into an artifact strings block that
+## carries more than one language block, still honored for a project exported before localization
+## existed. Once the project ships a localization.json the language is the PLAYER'S and game-wide,
+## StoryFlowManager.set_language owns it, and this is only the fallback - see
+## StoryFlowLocalization.language_for.
 var _language_code: String = "en"
 
 ## Callable for trace logging, set by the component. Signature: func(msg: String) -> void
@@ -32,12 +41,20 @@ var _trace_fn: Callable = Callable()
 # Initialization
 # =============================================================================
 
-func initialize(context: StoryFlowExecutionContext, global_variables: Dictionary, characters: Dictionary = {}, language_code: String = "en", global_strings: Dictionary = {}) -> void:
+func initialize(context: StoryFlowExecutionContext, global_variables: Dictionary, characters: Dictionary = {}, language_code: String = "en", global_strings: Dictionary = {}, manager: Node = null) -> void:
 	_context = context
 	_global_variables = global_variables
 	_characters = characters
 	_global_strings = global_strings
 	_language_code = language_code
+	_manager = manager
+
+
+func _current_global_strings() -> Dictionary:
+	if is_instance_valid(_manager):
+		var project = _manager.get_project()
+		return project.global_strings if project != null else {}
+	return _global_strings
 
 
 ## Set the trace logging callable. Called by StoryFlowComponent to wire up trace output.
@@ -62,7 +79,7 @@ func evaluate_boolean_input(node_id: String, handle_suffix: String, fallback: bo
 	if edge.is_empty():
 		return fallback
 
-	var source_node := _context.current_script.get_node(edge.get("source", ""))
+	var source_node := _evaluation_node(edge.get("source", ""))
 	if source_node.is_empty():
 		return fallback
 
@@ -75,13 +92,14 @@ func evaluate_boolean_from_node(node_id: String, source_handle: String = "") -> 
 
 	# Depth guard
 	if _context.evaluation_depth >= StoryFlowExecutionContext.MAX_EVALUATION_DEPTH:
+		_context.resolution_failures += 1
 		push_error("StoryFlow: Max evaluation depth exceeded")
 		return false
 	_context.evaluation_depth += 1
 
 	var result := false
 
-	var node := _context.current_script.get_node(node_id)
+	var node := _evaluation_node(node_id)
 	if node.is_empty():
 		_context.evaluation_depth -= 1
 		return false
@@ -95,9 +113,18 @@ func evaluate_boolean_from_node(node_id: String, source_handle: String = "") -> 
 	var is_map_read := node_type == StoryFlowTypes.NodeType.GET_MAP_VALUE \
 		or node_type == StoryFlowTypes.NodeType.HAS_MAP_KEY
 
-	# Check cache first (map reads excluded — see is_map_read above)
+	# .sfd and character accessor reads are never memoized; both expose live shared state:
+	# they resolve against LIVE store state (the session overlay a setDataAssetVariable node
+	# writes into), so a value cached before a write must not answer the read after it. Both
+	# accessor types, because a Set's pass-through output answers what its Get twin would.
+	var is_live_variable_read := node_type == StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE \
+		or node_type == StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE \
+		or node_type == StoryFlowTypes.NodeType.GET_CHARACTER_VAR \
+		or node_type == StoryFlowTypes.NodeType.SET_CHARACTER_VAR
+
+	# Check cache first (map + .sfd reads excluded — see the two flags above)
 	var node_state := _context.get_node_state(node_id)
-	if not is_map_read and node_state.cached_output != null:
+	if not is_map_read and not is_live_variable_read and node_state.cached_output != null:
 		var cached: StoryFlowVariant = node_state.cached_output
 		if cached.type == StoryFlowTypes.VariableType.BOOLEAN:
 			_context.evaluation_depth -= 1
@@ -106,10 +133,11 @@ func evaluate_boolean_from_node(node_id: String, source_handle: String = "") -> 
 	if node_type == StoryFlowTypes.NodeType.UNKNOWN:
 		_warn_unknown_evaluator_source(node)
 
+	var failures_before := _context.resolution_failures
 	match node_type:
 		StoryFlowTypes.NodeType.GET_BOOL, \
 		StoryFlowTypes.NodeType.SET_BOOL:
-			var variable := _find_variable(data)
+			var variable := _find_variable(data, StoryFlowTypes.VariableType.BOOLEAN, false)
 			if not variable.is_empty():
 				var value = variable.get("value")
 				if value is StoryFlowVariant:
@@ -203,7 +231,7 @@ func evaluate_boolean_from_node(node_id: String, source_handle: String = "") -> 
 			var arr := evaluate_string_array_input(node_id, StoryFlowHandles.IN_STRING_ARRAY)
 			var value := evaluate_string_input(node_id, StoryFlowHandles.IN_STRING, _get_localized_data_string(data, "value"))
 			for element: StoryFlowVariant in arr:
-				if element.get_string() == value:
+				if _array_string(element) == value:
 					result = true
 					break
 
@@ -218,6 +246,14 @@ func evaluate_boolean_from_node(node_id: String, source_handle: String = "") -> 
 		StoryFlowTypes.NodeType.ARRAY_CONTAINS_CHARACTER:
 			var arr := evaluate_character_array_input(node_id, StoryFlowHandles.IN_CHARACTER_ARRAY)
 			var value := evaluate_string_input(node_id, StoryFlowHandles.IN_CHARACTER, _get_data_string(data, "value"))
+			for element: StoryFlowVariant in arr:
+				if element.get_string() == value:
+					result = true
+					break
+
+		StoryFlowTypes.NodeType.ARRAY_CONTAINS_DATA:
+			var arr := evaluate_data_array_input(node_id, StoryFlowHandles.IN_DATA_ARRAY)
+			var value := evaluate_data_input(node_id, StoryFlowHandles.IN_DATA, _get_data_string(data, "value"))
 			for element: StoryFlowVariant in arr:
 				if element.get_string() == value:
 					result = true
@@ -290,9 +326,19 @@ func evaluate_boolean_from_node(node_id: String, source_handle: String = "") -> 
 
 		StoryFlowTypes.NodeType.GET_CHARACTER_VAR, \
 		StoryFlowTypes.NodeType.SET_CHARACTER_VAR:
-			var char_result := _evaluate_character_variable(data, node_id)
+			var char_result := _evaluate_character_variable(data, node_id, StoryFlowTypes.VariableType.BOOLEAN)
 			if char_result is StoryFlowVariant:
 				result = char_result.get_bool()
+
+		# The .sfd accessors. THIS ARM IS THE BOOLEAN-PRODUCER REGISTRATION (contract 6.2):
+		# the match's terminal `_:` answers false, so a node type with no case here is
+		# invisible to option conditions — fail-closed, and silently. That is why the arm and
+		# the node types land in the SAME commit.
+		StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, \
+		StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+			var da_result := _evaluate_data_asset_variable(data, node_id, StoryFlowTypes.VariableType.BOOLEAN)
+			if da_result != null:
+				result = da_result.get_bool()
 
 		StoryFlowTypes.NodeType.FOR_EACH_BOOL_LOOP:
 			var ns := _context.get_node_state(node_id)
@@ -300,10 +346,12 @@ func evaluate_boolean_from_node(node_id: String, source_handle: String = "") -> 
 				result = ns.cached_output.get_bool()
 
 		_:
+			_context.resolution_failures += 1
 			result = false
 
-	# Cache result (map reads excluded — see is_map_read above)
-	if not is_map_read:
+	# A failed read's display fallback is not a resolved value. Reevaluate it on the next
+	# pull so a Data Asset Set observes the failure instead of accepting a cached false.
+	if not is_map_read and not is_live_variable_read and failures_before == _context.resolution_failures:
 		node_state.cached_output = StoryFlowVariant.from_bool(result)
 
 	# Trace the wire-name (type_string), not the SCREAMING enum key — the
@@ -326,7 +374,7 @@ func evaluate_integer_input(node_id: String, handle_suffix: String, fallback: in
 	if edge.is_empty():
 		return fallback
 
-	var source_node := _context.current_script.get_node(edge.get("source", ""))
+	var source_node := _evaluation_node(edge.get("source", ""))
 	if source_node.is_empty():
 		return fallback
 
@@ -339,13 +387,14 @@ func evaluate_integer_from_node(node_id: String, source_handle: String = "") -> 
 
 	# Depth guard
 	if _context.evaluation_depth >= StoryFlowExecutionContext.MAX_EVALUATION_DEPTH:
+		_context.resolution_failures += 1
 		push_error("StoryFlow: Max evaluation depth exceeded")
 		return 0
 	_context.evaluation_depth += 1
 
 	var result: int = 0
 
-	var node := _context.current_script.get_node(node_id)
+	var node := _evaluation_node(node_id)
 	if node.is_empty():
 		_context.evaluation_depth -= 1
 		return 0
@@ -359,7 +408,7 @@ func evaluate_integer_from_node(node_id: String, source_handle: String = "") -> 
 	match node_type:
 		StoryFlowTypes.NodeType.GET_INT, \
 		StoryFlowTypes.NodeType.SET_INT:
-			var variable := _find_variable(data)
+			var variable := _find_variable(data, StoryFlowTypes.VariableType.INTEGER, false)
 			if not variable.is_empty():
 				var value = variable.get("value")
 				if value is StoryFlowVariant:
@@ -442,6 +491,10 @@ func evaluate_integer_from_node(node_id: String, source_handle: String = "") -> 
 			var arr := evaluate_character_array_input(node_id, StoryFlowHandles.IN_CHARACTER_ARRAY)
 			result = arr.size()
 
+		StoryFlowTypes.NodeType.ARRAY_LENGTH_DATA:
+			var arr := evaluate_data_array_input(node_id, StoryFlowHandles.IN_DATA_ARRAY)
+			result = arr.size()
+
 		StoryFlowTypes.NodeType.ARRAY_LENGTH_AUDIO:
 			var arr := evaluate_audio_array_input(node_id, StoryFlowHandles.IN_AUDIO_ARRAY)
 			result = arr.size()
@@ -478,7 +531,7 @@ func evaluate_integer_from_node(node_id: String, source_handle: String = "") -> 
 			var value := evaluate_string_input(node_id, StoryFlowHandles.IN_STRING, _get_localized_data_string(data, "value"))
 			result = -1
 			for i in range(arr.size()):
-				if arr[i].get_string() == value:
+				if _array_string(arr[i]) == value:
 					result = i
 					break
 
@@ -494,6 +547,15 @@ func evaluate_integer_from_node(node_id: String, source_handle: String = "") -> 
 		StoryFlowTypes.NodeType.FIND_IN_CHARACTER_ARRAY:
 			var arr := evaluate_character_array_input(node_id, StoryFlowHandles.IN_CHARACTER_ARRAY)
 			var value := evaluate_string_input(node_id, StoryFlowHandles.IN_CHARACTER, _get_data_string(data, "value"))
+			result = -1
+			for i in range(arr.size()):
+				if arr[i].get_string() == value:
+					result = i
+					break
+
+		StoryFlowTypes.NodeType.FIND_IN_DATA_ARRAY:
+			var arr := evaluate_data_array_input(node_id, StoryFlowHandles.IN_DATA_ARRAY)
+			var value := evaluate_data_input(node_id, StoryFlowHandles.IN_DATA, _get_data_string(data, "value"))
 			result = -1
 			for i in range(arr.size()):
 				if arr[i].get_string() == value:
@@ -553,7 +615,7 @@ func evaluate_integer_from_node(node_id: String, source_handle: String = "") -> 
 		StoryFlowTypes.NodeType.FOR_EACH_FLOAT_LOOP, \
 		StoryFlowTypes.NodeType.FOR_EACH_STRING_LOOP, \
 		StoryFlowTypes.NodeType.FOR_EACH_IMAGE_LOOP, \
-		StoryFlowTypes.NodeType.FOR_EACH_CHARACTER_LOOP, \
+		StoryFlowTypes.NodeType.FOR_EACH_CHARACTER_LOOP, StoryFlowTypes.NodeType.FOR_EACH_DATA_LOOP, \
 		StoryFlowTypes.NodeType.FOR_EACH_AUDIO_LOOP:
 			var loop_state := _context.get_node_state(node_id)
 			if source_handle.contains(StoryFlowHandles.IN_INTEGER_INDEX):
@@ -566,11 +628,18 @@ func evaluate_integer_from_node(node_id: String, source_handle: String = "") -> 
 
 		StoryFlowTypes.NodeType.GET_CHARACTER_VAR, \
 		StoryFlowTypes.NodeType.SET_CHARACTER_VAR:
-			var char_result := _evaluate_character_variable(data, node_id)
+			var char_result := _evaluate_character_variable(data, node_id, StoryFlowTypes.VariableType.INTEGER)
 			if char_result is StoryFlowVariant:
 				result = char_result.get_int()
 
+		StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, \
+		StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+			var da_result := _evaluate_data_asset_variable(data, node_id, StoryFlowTypes.VariableType.INTEGER)
+			if da_result != null:
+				result = da_result.get_int()
+
 		_:
+			_context.resolution_failures += 1
 			result = 0
 
 	_sf_trace("EVAL %s %s result=%s" % [node_id, node.get("type_string", ""), str(result)])
@@ -591,7 +660,7 @@ func evaluate_float_input(node_id: String, handle_suffix: String, fallback: floa
 	if edge.is_empty():
 		return fallback
 
-	var source_node := _context.current_script.get_node(edge.get("source", ""))
+	var source_node := _evaluation_node(edge.get("source", ""))
 	if source_node.is_empty():
 		return fallback
 
@@ -604,13 +673,14 @@ func evaluate_float_from_node(node_id: String, source_handle: String = "") -> fl
 
 	# Depth guard
 	if _context.evaluation_depth >= StoryFlowExecutionContext.MAX_EVALUATION_DEPTH:
+		_context.resolution_failures += 1
 		push_error("StoryFlow: Max evaluation depth exceeded")
 		return 0.0
 	_context.evaluation_depth += 1
 
 	var result: float = 0.0
 
-	var node := _context.current_script.get_node(node_id)
+	var node := _evaluation_node(node_id)
 	if node.is_empty():
 		_context.evaluation_depth -= 1
 		return 0.0
@@ -624,7 +694,7 @@ func evaluate_float_from_node(node_id: String, source_handle: String = "") -> fl
 	match node_type:
 		StoryFlowTypes.NodeType.GET_FLOAT, \
 		StoryFlowTypes.NodeType.SET_FLOAT:
-			var variable := _find_variable(data)
+			var variable := _find_variable(data, StoryFlowTypes.VariableType.FLOAT, false)
 			if not variable.is_empty():
 				var value = variable.get("value")
 				if value is StoryFlowVariant:
@@ -718,11 +788,18 @@ func evaluate_float_from_node(node_id: String, source_handle: String = "") -> fl
 
 		StoryFlowTypes.NodeType.GET_CHARACTER_VAR, \
 		StoryFlowTypes.NodeType.SET_CHARACTER_VAR:
-			var char_result := _evaluate_character_variable(data, node_id)
+			var char_result := _evaluate_character_variable(data, node_id, StoryFlowTypes.VariableType.FLOAT)
 			if char_result is StoryFlowVariant:
 				result = char_result.get_float()
 
+		StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, \
+		StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+			var da_result := _evaluate_data_asset_variable(data, node_id, StoryFlowTypes.VariableType.FLOAT)
+			if da_result != null:
+				result = da_result.get_float()
+
 		_:
+			_context.resolution_failures += 1
 			result = 0.0
 
 	_sf_trace("EVAL %s %s result=%s" % [node_id, node.get("type_string", ""), str(result)])
@@ -743,7 +820,7 @@ func evaluate_string_input(node_id: String, handle_suffix: String, fallback: Str
 	if edge.is_empty():
 		return fallback
 
-	var source_node := _context.current_script.get_node(edge.get("source", ""))
+	var source_node := _evaluation_node(edge.get("source", ""))
 	if source_node.is_empty():
 		return fallback
 
@@ -756,13 +833,15 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 
 	# Depth guard
 	if _context.evaluation_depth >= StoryFlowExecutionContext.MAX_EVALUATION_DEPTH:
+		_context.resolution_failures += 1
 		push_error("StoryFlow: Max evaluation depth exceeded")
 		return ""
 	_context.evaluation_depth += 1
 
 	var result: String = ""
+	var result_is_resolved := false
 
-	var node := _context.current_script.get_node(node_id)
+	var node := _evaluation_node(node_id)
 	if node.is_empty():
 		_context.evaluation_depth -= 1
 		return ""
@@ -776,7 +855,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 	match node_type:
 		StoryFlowTypes.NodeType.GET_STRING, \
 		StoryFlowTypes.NodeType.SET_STRING:
-			var variable := _find_variable(data)
+			var variable := _find_variable(data, StoryFlowTypes.VariableType.STRING, false)
 			if not variable.is_empty():
 				var value = variable.get("value")
 				if value is StoryFlowVariant:
@@ -809,7 +888,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 
 		StoryFlowTypes.NodeType.GET_ENUM, \
 		StoryFlowTypes.NodeType.SET_ENUM:
-			var variable := _find_variable(data)
+			var variable := _find_variable(data, StoryFlowTypes.VariableType.ENUM, false)
 			if not variable.is_empty():
 				var value = variable.get("value")
 				if value is StoryFlowVariant:
@@ -829,7 +908,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 
 		StoryFlowTypes.NodeType.GET_IMAGE, \
 		StoryFlowTypes.NodeType.SET_IMAGE:
-			var variable := _find_variable(data)
+			var variable := _find_variable(data, StoryFlowTypes.VariableType.IMAGE, false)
 			if not variable.is_empty():
 				var value = variable.get("value")
 				if value is StoryFlowVariant:
@@ -844,7 +923,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 
 		StoryFlowTypes.NodeType.GET_AUDIO, \
 		StoryFlowTypes.NodeType.SET_AUDIO:
-			var variable := _find_variable(data)
+			var variable := _find_variable(data, StoryFlowTypes.VariableType.AUDIO, false)
 			if not variable.is_empty():
 				var value = variable.get("value")
 				if value is StoryFlowVariant:
@@ -854,7 +933,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 
 		StoryFlowTypes.NodeType.GET_CHARACTER, \
 		StoryFlowTypes.NodeType.SET_CHARACTER:
-			var variable := _find_variable(data)
+			var variable := _find_variable(data, StoryFlowTypes.VariableType.CHARACTER, false)
 			if not variable.is_empty():
 				var value = variable.get("value")
 				if value is StoryFlowVariant:
@@ -866,12 +945,14 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 			var arr := evaluate_string_array_input(node_id, StoryFlowHandles.IN_STRING_ARRAY)
 			var index := evaluate_integer_input(node_id, StoryFlowHandles.IN_INTEGER, _get_data_int(data, "value", 0))
 			if index >= 0 and index < arr.size():
-				result = arr[index].get_string()
+				result = _array_string(arr[index])
+			result_is_resolved = true
 
 		StoryFlowTypes.NodeType.GET_RANDOM_STRING_ARRAY_ELEMENT:
 			var arr := evaluate_string_array_input(node_id, StoryFlowHandles.IN_STRING_ARRAY)
 			if arr.size() > 0:
-				result = arr[randi_range(0, arr.size() - 1)].get_string()
+				result = _array_string(arr[randi_range(0, arr.size() - 1)])
+			result_is_resolved = true
 
 		StoryFlowTypes.NodeType.GET_IMAGE_ARRAY_ELEMENT:
 			var arr := evaluate_image_array_input(node_id, StoryFlowHandles.IN_IMAGE_ARRAY)
@@ -910,8 +991,8 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 		# evaluator's map arms for the pattern note). All string-family value
 		# types (string/enum/image/character/audio) read through this evaluator
 		# — enums included, mirroring scalar enum reads (evaluate_enum_input
-		# delegates here). String results flow through _resolve_string_key below,
-		# matching how scalar string variables resolve their stored table keys.
+		# delegates here). Ordinary map strings use _resolve_string_key below;
+		# Data Asset maps already contain finished text.
 		StoryFlowTypes.NodeType.GET_MAP_VALUE:
 			var map_value_type := str(data.get("valueType", ""))
 			if map_value_type in ["string", "enum", "image", "character", "audio"]:
@@ -919,6 +1000,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 				var found_value = computed["value"]
 				if found_value is StoryFlowVariant:
 					result = found_value.get_string()
+					result_is_resolved = computed.get("text_is_resolved", false)
 
 		# forEachMap Key/Value (string-family) — discriminate by source handle
 		# suffix; reads come from the iteration snapshot, see the boolean
@@ -928,6 +1010,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 			var map_loop_state := _context.get_node_state(node_id)
 			var map_key_type := str(data.get("keyType", ""))
 			var map_value_type := str(data.get("valueType", ""))
+			result_is_resolved = map_loop_state.loop_text_is_resolved
 			if source_handle.ends_with("-key") and (map_key_type == "string" or map_key_type == "enum"):
 				if map_loop_state.loop_key != null:
 					result = str(map_loop_state.loop_key)
@@ -942,20 +1025,70 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 			var loop_state := _context.get_node_state(node_id)
 			if loop_state.cached_output != null:
 				result = loop_state.cached_output.get_string()
+				if node_type == StoryFlowTypes.NodeType.FOR_EACH_STRING_LOOP:
+					result = _array_string(loop_state.cached_output)
+					result_is_resolved = true
 
 		StoryFlowTypes.NodeType.RUN_SCRIPT:
 			result = _evaluate_run_script_output_string(node_id, source_handle, data)
 
 		StoryFlowTypes.NodeType.GET_CHARACTER_VAR, \
 		StoryFlowTypes.NodeType.SET_CHARACTER_VAR:
-			var char_result := _evaluate_character_variable(data, node_id)
+			var char_result := _evaluate_character_variable(data, node_id, StoryFlowTypes.VariableType.STRING)
 			if char_result is StoryFlowVariant:
 				result = char_result.get_string()
+				result_is_resolved = StoryFlowCharacter.is_name_token(str(data.get("variableName", "")))
+
+		# The .sfd accessors, and the ONE arm in this function that RETURNS EARLY.
+		#
+		# THE .sfd ACCESSORS ANSWER FINISHED TEXT and must not re-enter this ladder. Every other
+		# arm here hands back a value whose string IS a table key, which is why the tail's
+		# _resolve_string_key exists at all; a .sfd read has already been through the store's own
+		# door, which resolved it or deliberately did not, GATED ON PROVENANCE
+		# (StoryFlowDataAssetStore.try_read — declarations localize, overrides and session writes
+		# never do). Running this ladder over the answer would be a SECOND door gated on SHAPE,
+		# and it would undo exactly the case the gate exists for: a session write whose value
+		# happens to be a real key would come back as somebody else's prose, invisibly in the
+		# source language.
+		#
+		# The early return predates spec §2's amendment of 2026-08-27, when the reason was
+		# engine-contract 2.1's "data-assets.json carries no strings table, so a .sfd value is a
+		# literal" — over a literal this wrap was a harmless no-op. The amendment superseded the
+		# reason and made the exemption load-bearing. Pinned by the string-literal-vs-strings-table
+		# test in tests/test_data_asset_nodes.gd.
+		#
+		# The whole string FAMILY lands here — enum / image / character / audio scalars all
+		# read through this evaluator (evaluate_enum_input delegates to evaluate_string_input),
+		# so this one early return covers every one of them.
+		StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, \
+		StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+			var da_result := _evaluate_data_asset_variable(data, node_id, StoryFlowTypes.VariableType.STRING)
+			var da_literal := da_result.get_string() if da_result != null else ""
+			_sf_trace("EVAL %s %s result=%s" % [node_id, node.get("type_string", ""), da_literal])
+			_context.evaluation_depth -= 1
+			return da_literal
 
 		_:
+			_context.resolution_failures += 1
 			result = ""
 
-	var resolved_result := _resolve_string_key(result)
+	# NOT EVERY ARM REACHES THIS TAIL: the .sfd accessor arm above returns early, because a .sfd
+	# read already passed the store's own provenance-gated door and this one is shape-gated.
+	# Anything added here must be added there too, or the two paths silently diverge.
+	#
+	# String-array reads already resolved their authored key (or preserved a runtime literal).
+	# Do not run their finished text through another shape-based lookup. Data Asset map reads
+	# and their detached mutation outputs likewise carry finished text; ordinary maps use the tail.
+	#
+	# THE REACH DISCIPLINE (localization spec §9) lives here, and GDScript has no type that can
+	# enforce it: what gets looked up is THE KEY THE RECORD STORES, taken straight off the value
+	# the character arm above returned - never an id rebuilt from the character being read. An
+	# INHERITED-but-unoverridden character value stores the DECLARING ANCESTOR'S key (spec §3/§7b:
+	# one string, one translation, shared by every inheritor), so an implementation that composed
+	# `<characterBeingRead>.<variableId>.value` would key nothing anywhere, pass every
+	# non-inherited case, and silently show the raw id for the inherited ones. Pinned by the
+	# ancestor-key cases of the golden package (tests/test_character_contract.gd).
+	var resolved_result := result if result_is_resolved else _resolve_string_key(result)
 	_sf_trace("EVAL %s %s result=%s" % [node_id, node.get("type_string", ""), resolved_result])
 
 	_context.evaluation_depth -= 1
@@ -977,13 +1110,14 @@ func evaluate_enum_from_node(node_id: String, source_handle: String = "") -> Str
 
 	# Depth guard
 	if _context.evaluation_depth >= StoryFlowExecutionContext.MAX_EVALUATION_DEPTH:
+		_context.resolution_failures += 1
 		push_error("StoryFlow: Max evaluation depth exceeded")
 		return ""
 	_context.evaluation_depth += 1
 
 	var result: String = ""
 
-	var node := _context.current_script.get_node(node_id)
+	var node := _evaluation_node(node_id)
 	if node.is_empty():
 		_context.evaluation_depth -= 1
 		return ""
@@ -997,7 +1131,7 @@ func evaluate_enum_from_node(node_id: String, source_handle: String = "") -> Str
 	match node_type:
 		StoryFlowTypes.NodeType.GET_ENUM, \
 		StoryFlowTypes.NodeType.SET_ENUM:
-			var variable := _find_variable(data)
+			var variable := _find_variable(data, StoryFlowTypes.VariableType.ENUM, false)
 			if not variable.is_empty():
 				var value = variable.get("value")
 				if value is StoryFlowVariant:
@@ -1014,14 +1148,26 @@ func evaluate_enum_from_node(node_id: String, source_handle: String = "") -> Str
 
 		StoryFlowTypes.NodeType.GET_CHARACTER_VAR, \
 		StoryFlowTypes.NodeType.SET_CHARACTER_VAR:
-			var char_result := _evaluate_character_variable(data, node_id)
+			var char_result := _evaluate_character_variable(data, node_id, StoryFlowTypes.VariableType.ENUM)
 			if char_result is StoryFlowVariant:
 				result = char_result.get_string()
+
+		# The .sfd accessors. No _resolve_string_key tail in THIS evaluator, so no early
+		# return is needed here — and no gate either: an ENUM declaration never localizes
+		# (the type gate in StoryFlowDataAssetStore._localize_declared), so what arrives is
+		# already the value to answer. Enum reads that come over a wire land in the STRING
+		# evaluator anyway, since evaluate_enum_input delegates to evaluate_string_input.
+		StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, \
+		StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+			var da_result := _evaluate_data_asset_variable(data, node_id, StoryFlowTypes.VariableType.ENUM)
+			if da_result != null:
+				result = da_result.get_string()
 
 		StoryFlowTypes.NodeType.RUN_SCRIPT:
 			result = _evaluate_run_script_output_string(node_id, source_handle, data)
 
 		_:
+			_context.resolution_failures += 1
 			result = ""
 
 	_sf_trace("EVAL %s %s result=%s" % [node_id, node.get("type_string", ""), result])
@@ -1108,6 +1254,10 @@ func evaluate_image_array_input(node_id: String, handle_suffix: String) -> Array
 	return _evaluate_array_input_generic(node_id, handle_suffix, StoryFlowTypes.NodeType.GET_IMAGE_ARRAY)
 
 
+func evaluate_data_array_input(node_id: String, handle_suffix: String) -> Array:
+	return _evaluate_array_input_generic(node_id, handle_suffix, StoryFlowTypes.NodeType.GET_DATA_ARRAY)
+
+
 func evaluate_character_array_input(node_id: String, handle_suffix: String) -> Array:
 	return _evaluate_array_input_generic(node_id, handle_suffix, StoryFlowTypes.NodeType.GET_CHARACTER_ARRAY)
 
@@ -1125,9 +1275,20 @@ func _evaluate_array_input_generic(node_id: String, handle_suffix: String, expec
 		return []
 
 	var source_id: String = edge.get("source", "")
-	var source_node := _context.current_script.get_node(source_id)
+	var source_node := _evaluation_node(source_id)
 	if source_node.is_empty():
 		return []
+
+	var expected := {
+		StoryFlowTypes.NodeType.GET_BOOL_ARRAY: StoryFlowTypes.VariableType.BOOLEAN,
+		StoryFlowTypes.NodeType.GET_INT_ARRAY: StoryFlowTypes.VariableType.INTEGER,
+		StoryFlowTypes.NodeType.GET_FLOAT_ARRAY: StoryFlowTypes.VariableType.FLOAT,
+		StoryFlowTypes.NodeType.GET_STRING_ARRAY: StoryFlowTypes.VariableType.STRING,
+		StoryFlowTypes.NodeType.GET_IMAGE_ARRAY: StoryFlowTypes.VariableType.IMAGE,
+		StoryFlowTypes.NodeType.GET_AUDIO_ARRAY: StoryFlowTypes.VariableType.AUDIO,
+		StoryFlowTypes.NodeType.GET_CHARACTER_ARRAY: StoryFlowTypes.VariableType.CHARACTER,
+		StoryFlowTypes.NodeType.GET_DATA_ARRAY: StoryFlowTypes.VariableType.DATA_ASSET,
+	}.get(expected_get_array_type, -1)
 
 	var source_type: StoryFlowTypes.NodeType = source_node.get("type", StoryFlowTypes.NodeType.UNKNOWN)
 	var source_data: Dictionary = source_node.get("data", {})
@@ -1135,10 +1296,73 @@ func _evaluate_array_input_generic(node_id: String, handle_suffix: String, expec
 	if source_type == StoryFlowTypes.NodeType.UNKNOWN:
 		_warn_unknown_evaluator_source(source_node)
 
+	if source_type == StoryFlowTypes.NodeType.RUN_SCRIPT:
+		var state := _context.get_node_state(source_id)
+		var output_id := _extract_run_script_output_var_id(edge.get("source_handle", ""))
+		if expected == StoryFlowTypes.VariableType.DATA_ASSET:
+			var value := _run_script_data_output(state, output_id, source_data, true)
+			return value.get_array() if value != null else []
+		for output in source_data.get("scriptOutputs", []):
+			if output.get("id", "") == output_id and output.get("isArray", false) and StoryFlowTypes.parse_variable_type(output.get("type", "")) == expected:
+				var value = state.output_values.get(output_id)
+				return value.get_array() if value is StoryFlowVariant else []
+		_context.resolution_failures += 1
+		return []
+
+	if expected == StoryFlowTypes.VariableType.DATA_ASSET and source_type in [StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE] and source_data.get("variableType", "") != "dataAsset":
+		_context.resolution_failures += 1
+		return []
+
+	if expected == StoryFlowTypes.VariableType.DATA_ASSET:
+		var NT := StoryFlowTypes.NodeType
+		var valid_source := source_type in [NT.GET_DATA_ARRAY, NT.SET_DATA_ARRAY,
+			NT.ADD_TO_DATA_ARRAY, NT.REMOVE_FROM_DATA_ARRAY, NT.CLEAR_DATA_ARRAY, NT.SET_DATA_ARRAY_ELEMENT,
+			NT.FOR_EACH_DATA_LOOP, NT.GET_DATA_ASSET_VARIABLE, NT.SET_DATA_ASSET_VARIABLE,
+			NT.GET_CHARACTER_VAR, NT.SET_CHARACTER_VAR]
+		if source_type == NT.MAP_VALUES:
+			valid_source = source_data.get("valueType", "") == "dataAsset"
+		if not valid_source:
+			_context.resolution_failures += 1
+			return []
+
 	# Handle getCharacterVar/setCharacterVar nodes that can return arrays
 	if source_type == StoryFlowTypes.NodeType.GET_CHARACTER_VAR or source_type == StoryFlowTypes.NodeType.SET_CHARACTER_VAR:
-		var variant := _evaluate_character_variable(source_data, source_id)
+		var variant := _evaluate_character_variable(source_data, source_id, expected, true)
 		return variant.get_array()
+
+	# The .sfd accessors bound to an ARRAY variable. Handled BEFORE the
+	# expected_get_array_type gate below, which no accessor type could ever pass.
+	#
+	# NO extra .duplicate() here, unlike the character path: the store already hands out a
+	# DEEP copy (duplicate_variant duplicates the elements too), so this array is detached
+	# from both the seed and the overlay and a consumer mutating it reaches nothing.
+	if source_type == StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE \
+		or source_type == StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+		var da_variant := _evaluate_data_asset_variable(source_data, source_id)
+		if not bool(source_data.get("isArray", false)) or (da_variant != null and not _scalar_type_matches(da_variant.type, StoryFlowDataAssetStore.storage_type(expected))):
+			_context.resolution_failures += 1
+			return []
+		if da_variant == null:
+			return []
+		return da_variant.get_array()
+
+	# Get Variable Names: the names the wired asset's chain DECLARES, as a string array
+	# (engine contract 11.1). The asset arrives over the wire exactly as it does for the two
+	# accessors above (the same single hop), and the list is the STORE's own declaration walk
+	# — never a second walk that could disagree with what an accessor then resolves. Every
+	# degraded path — an unwired pin, a dead ref, an unbound pill, an absent store — answers
+	# an EMPTY array SILENTLY: variable_names walks no levels for an id the seed does not
+	# carry, and the family's warn tokens belong to the bound accessors, not to this node.
+	if source_type == StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE_NAMES:
+		var names_asset := _data_asset_id_from_wire(source_id)
+		if not StoryFlowDataAssetStore.has_asset(_context.data_asset_seed, names_asset):
+			_context.resolution_failures += 1
+		var declared_names := StoryFlowDataAssetStore.variable_names(
+			_context.data_asset_seed, names_asset)
+		var name_variants: Array = []
+		for declared_name in declared_names:
+			name_variants.append(StoryFlowVariant.from_string(declared_name))
+		return name_variants
 
 	# mapKeys / mapValues: pure ops that project a map into an array. Recomputed
 	# fresh on every pull — maps mutate in place, so a cached output would go
@@ -1170,30 +1394,34 @@ func _evaluate_array_input_generic(node_id: String, handle_suffix: String, expec
 	var NT := StoryFlowTypes.NodeType
 	if source_type in [
 		NT.ADD_TO_BOOL_ARRAY, NT.ADD_TO_INT_ARRAY, NT.ADD_TO_FLOAT_ARRAY,
-		NT.ADD_TO_STRING_ARRAY, NT.ADD_TO_IMAGE_ARRAY, NT.ADD_TO_CHARACTER_ARRAY, NT.ADD_TO_AUDIO_ARRAY,
+		NT.ADD_TO_STRING_ARRAY, NT.ADD_TO_IMAGE_ARRAY, NT.ADD_TO_CHARACTER_ARRAY, NT.ADD_TO_DATA_ARRAY, NT.ADD_TO_AUDIO_ARRAY,
 		NT.REMOVE_FROM_BOOL_ARRAY, NT.REMOVE_FROM_INT_ARRAY, NT.REMOVE_FROM_FLOAT_ARRAY,
-		NT.REMOVE_FROM_STRING_ARRAY, NT.REMOVE_FROM_IMAGE_ARRAY, NT.REMOVE_FROM_CHARACTER_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY,
+		NT.REMOVE_FROM_STRING_ARRAY, NT.REMOVE_FROM_IMAGE_ARRAY, NT.REMOVE_FROM_CHARACTER_ARRAY, NT.REMOVE_FROM_DATA_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY,
 		NT.CLEAR_BOOL_ARRAY, NT.CLEAR_INT_ARRAY, NT.CLEAR_FLOAT_ARRAY,
-		NT.CLEAR_STRING_ARRAY, NT.CLEAR_IMAGE_ARRAY, NT.CLEAR_CHARACTER_ARRAY, NT.CLEAR_AUDIO_ARRAY,
+		NT.CLEAR_STRING_ARRAY, NT.CLEAR_IMAGE_ARRAY, NT.CLEAR_CHARACTER_ARRAY, NT.CLEAR_DATA_ARRAY, NT.CLEAR_AUDIO_ARRAY,
 		NT.SET_BOOL_ARRAY, NT.SET_INT_ARRAY, NT.SET_FLOAT_ARRAY,
-		NT.SET_STRING_ARRAY, NT.SET_IMAGE_ARRAY, NT.SET_CHARACTER_ARRAY, NT.SET_AUDIO_ARRAY]:
+		NT.SET_STRING_ARRAY, NT.SET_IMAGE_ARRAY, NT.SET_CHARACTER_ARRAY, NT.SET_DATA_ARRAY, NT.SET_DATA_ARRAY_ELEMENT, NT.SET_AUDIO_ARRAY]:
 		var ns := _context.get_node_state(source_id)
 		if ns.cached_output != null and ns.cached_output is StoryFlowVariant:
 			return ns.cached_output.get_array()
+		_context.resolution_failures += 1
 		return []
 
 	# Handle forEach loop nodes that output their current element array
 	if source_type in [NT.FOR_EACH_BOOL_LOOP, NT.FOR_EACH_INT_LOOP, NT.FOR_EACH_FLOAT_LOOP,
-		NT.FOR_EACH_STRING_LOOP, NT.FOR_EACH_IMAGE_LOOP, NT.FOR_EACH_CHARACTER_LOOP, NT.FOR_EACH_AUDIO_LOOP]:
+		NT.FOR_EACH_STRING_LOOP, NT.FOR_EACH_IMAGE_LOOP, NT.FOR_EACH_CHARACTER_LOOP, NT.FOR_EACH_DATA_LOOP, NT.FOR_EACH_AUDIO_LOOP]:
 		var ns := _context.get_node_state(source_id)
 		if ns.cached_output != null and ns.cached_output is StoryFlowVariant:
 			return ns.cached_output.get_array()
+		_context.resolution_failures += 1
 		return []
 
 	if source_type != expected_get_array_type:
+		_context.resolution_failures += 1
 		return []
 
-	var variable := _find_variable(source_data)
+
+	var variable := _find_variable(source_data, expected, true)
 	if not variable.is_empty():
 		var is_array: bool = variable.get("is_array", false)
 		if is_array:
@@ -1201,6 +1429,7 @@ func _evaluate_array_input_generic(node_id: String, handle_suffix: String, expec
 			if value is StoryFlowVariant:
 				return value.get_array()
 
+	_context.resolution_failures += 1
 	return []
 
 
@@ -1219,6 +1448,9 @@ const MAP_SOURCE_SCRIPT_VAR := "script_variable"
 const MAP_SOURCE_GLOBAL_VAR := "global_variable"
 const MAP_SOURCE_CHARACTER_VAR := "character_variable"
 const MAP_SOURCE_RUN_SCRIPT := "run_script_output"
+## A map read through a .sfd accessor. READ-ONLY like the character-variable and runScript
+## kinds — see the arm in resolve_map_input_by_handle for why it has to be.
+const MAP_SOURCE_DATA_ASSET := "data_asset"
 
 
 ## Resolve the map wired into one of [param node]'s map inputs.
@@ -1276,7 +1508,7 @@ func resolve_map_input_by_handle(node: Dictionary, handle_suffix: String) -> Dic
 	if edge.is_empty():
 		return unresolved
 
-	var source_node := _context.current_script.get_node(edge.get("source", ""))
+	var source_node := _evaluation_node(edge.get("source", ""))
 
 	# Walk upstream through chained mutators to the origin variable.
 	var hops := 0
@@ -1285,25 +1517,32 @@ func resolve_map_input_by_handle(node: Dictionary, handle_suffix: String) -> Dic
 		StoryFlowTypes.NodeType.REMOVE_MAP_KEY,
 		StoryFlowTypes.NodeType.CLEAR_MAP,
 	]:
+		var output: Dictionary = _context.get_node_state(source_node.get("id", "")).detached_map_output
+		if not output.is_empty():
+			return output
 		hops += 1
 		if hops > StoryFlowExecutionContext.MAX_EVALUATION_DEPTH:
 			push_warning("StoryFlow: Map mutator chain too deep at node %s - possible cycle" % source_node.get("id", ""))
+			_context.resolution_failures += 1
 			return unresolved
 		var mutator_data: Dictionary = source_node.get("data", {})
 		var mutator_key_type: String = str(mutator_data.get("keyType", ""))
 		var mutator_value_type: String = str(mutator_data.get("valueType", ""))
 		if mutator_key_type.is_empty() or mutator_value_type.is_empty():
 			_warn_missing_map_types(source_node)
+			_context.resolution_failures += 1
 			return unresolved
 		var upstream_edge := _context.current_script.find_input_edge(source_node.get("id", ""), StoryFlowHandles.in_map(mutator_key_type, mutator_value_type, "2"))
 		if upstream_edge.is_empty():
+			_context.resolution_failures += 1
 			return unresolved
 		# Keep the terminal edge — its source_handle carries the runScript
 		# "-out-" UUID the RUN_SCRIPT arm below parses.
 		edge = upstream_edge
-		source_node = _context.current_script.get_node(upstream_edge.get("source", ""))
+		source_node = _evaluation_node(upstream_edge.get("source", ""))
 
 	if source_node.is_empty():
+		_context.resolution_failures += 1
 		return unresolved
 
 	var source_type: StoryFlowTypes.NodeType = source_node.get("type", StoryFlowTypes.NodeType.UNKNOWN)
@@ -1316,11 +1555,13 @@ func resolve_map_input_by_handle(node: Dictionary, handle_suffix: String) -> Dic
 		StoryFlowTypes.NodeType.GET_MAP, \
 		StoryFlowTypes.NodeType.SET_MAP:
 			# Resolve the bound variable and return its LIVE map Dictionary.
-			var variable := _find_variable(source_data)
+			var variable := _find_variable(source_data, StoryFlowTypes.VariableType.MAP, false)
 			if variable.is_empty() or variable.get("type", -1) != StoryFlowTypes.VariableType.MAP:
+				_context.resolution_failures += 1
 				return unresolved
 			var value = variable.get("value")
 			if not (value is StoryFlowVariant):
+				_context.resolution_failures += 1
 				return unresolved
 			if not value.is_map():
 				# Variable without established map storage — type it so the
@@ -1331,6 +1572,8 @@ func resolve_map_input_by_handle(node: Dictionary, handle_suffix: String) -> Dic
 			var is_global: bool = source_data.get("isGlobal", false)
 			return {
 				"map": value.get_map(),
+				"source_key_type": variable.get("key_type", -1),
+				"source_value_type": variable.get("value_type", -1),
 				"kind": MAP_SOURCE_GLOBAL_VAR if is_global else MAP_SOURCE_SCRIPT_VAR,
 				"is_global": is_global,
 				"variable": variable,
@@ -1345,33 +1588,74 @@ func resolve_map_input_by_handle(node: Dictionary, handle_suffix: String) -> Dic
 			# setMap must snapshot. Wired character input wins over the inline
 			# dropdown path, matching the scalar charvar evaluators.
 			if str(source_data.get("variableType", "")) != "map":
+				_context.resolution_failures += 1
 				return unresolved
 			var character_path: String = source_data.get("characterPath", "")
 			var char_edge := _context.current_script.find_input_edge(source_node.get("id", ""), StoryFlowHandles.IN_CHARACTER_INPUT)
+			var char_wired := false
 			if not char_edge.is_empty():
-				var char_source := _context.current_script.get_node(char_edge.get("source", ""))
+				var char_source := _evaluation_node(char_edge.get("source", ""))
 				if not char_source.is_empty():
 					character_path = evaluate_string_from_node(char_source.get("id", ""), char_edge.get("source_handle", ""))
+					char_wired = true
+			# Id-first, same shape as _evaluate_character_variable: NODE lane -> the
+			# context latch pair; the wired override wins outright; every fall-back keeps
+			# the pre-P4 path lane byte-identical (this arm stays silently unresolved on a
+			# path miss — only the id lanes warn, once, inside the resolver).
+			if char_wired:
+				character_path = StoryFlowCharacter.resolve_character_key(
+					_context.character_id_bridge, _characters, character_path, _context)
+			else:
+				character_path = StoryFlowCharacter.resolve_character_ref(
+					_context.character_id_bridge, _characters,
+					str(source_data.get("characterId", "")), character_path, _context)
 			if character_path.is_empty():
+				_context.resolution_failures += 1
 				return unresolved
 			var normalized_path := StoryFlowCharacter.normalize_path(character_path)
 			if not _characters.has(normalized_path):
+				_context.resolution_failures += 1
 				return unresolved
 			var character: StoryFlowCharacter = _characters[normalized_path]
 			var variable_name: String = source_data.get("variableName", "")
 			if variable_name.is_empty() or not character.variables.has(variable_name):
+				_context.resolution_failures += 1
 				return unresolved
 			var char_variable: Dictionary = character.variables[variable_name]
 			if char_variable.get("type", -1) != StoryFlowTypes.VariableType.MAP:
+				_context.resolution_failures += 1
 				return unresolved
 			var char_value = char_variable.get("value")
 			if not (char_value is StoryFlowVariant):
+				_context.resolution_failures += 1
 				return unresolved
 			if not char_value.is_map():
 				char_value.set_map({})
 			return {
 				"map": char_value.get_map(),
+				"source_key_type": char_variable.get("key_type", -1),
+				"source_value_type": char_variable.get("value_type", -1),
 				"kind": MAP_SOURCE_CHARACTER_VAR,
+				"is_global": false,
+				"variable": {},
+			}
+
+		StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, \
+		StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+			# The store returns a detached copy. Mutators retain their changed copy as
+			# an execution output; only an explicit Set Data Asset Variable writes it back.
+			if str(source_data.get("variableType", "")) != "map":
+				_context.resolution_failures += 1
+				return unresolved
+			var da_variant := _evaluate_data_asset_variable(source_data, source_node.get("id", ""))
+			if da_variant == null or not da_variant.is_map():
+				_context.resolution_failures += 1
+				return unresolved
+			return {
+				"map": da_variant.get_map(),
+				"source_key_type": StoryFlowTypes.parse_variable_type(str(source_data.get("keyType", ""))),
+				"source_value_type": StoryFlowTypes.parse_variable_type(str(source_data.get("valueType", ""))),
+				"kind": MAP_SOURCE_DATA_ASSET,
 				"is_global": false,
 				"variable": {},
 			}
@@ -1392,12 +1676,15 @@ func resolve_map_input_by_handle(node: Dictionary, handle_suffix: String) -> Dic
 			# empty Map" pin.
 			var rs_state := _context.get_node_state(source_node.get("id", ""))
 			if not rs_state.has_output_values:
+				_context.resolution_failures += 1
 				return unresolved
 			var out_var_id := _extract_run_script_output_var_id(edge.get("source_handle", ""))
 			if out_var_id.is_empty() or not rs_state.output_values.has(out_var_id):
+				_context.resolution_failures += 1
 				return unresolved
 			var out_val = rs_state.output_values[out_var_id]
 			if not (out_val is StoryFlowVariant) or not out_val.is_map():
+				_context.resolution_failures += 1
 				return unresolved
 			return {
 				"map": out_val.get_map(),
@@ -1407,6 +1694,7 @@ func resolve_map_input_by_handle(node: Dictionary, handle_suffix: String) -> Dic
 			}
 
 	# Any other terminal node type cannot bind a map variable.
+	_context.resolution_failures += 1
 	return unresolved
 
 
@@ -1455,6 +1743,8 @@ func evaluate_map_op_value_input(node: Dictionary, option_id: String) -> StoryFl
 			return StoryFlowVariant.from_int(evaluate_integer_input(node_id, handle_suffix, _get_data_int(data, "value", 0)))
 		"float":
 			return StoryFlowVariant.from_float(evaluate_float_input(node_id, handle_suffix, _get_data_float(data, "value", 0.0)))
+		"dataAsset":
+			return StoryFlowVariant.from_string(evaluate_data_input(node_id, handle_suffix, _get_data_string(data, "value")))
 		"enum":
 			return StoryFlowVariant.from_enum(evaluate_enum_input(node_id, handle_suffix, _get_data_string(data, "value")))
 		_:
@@ -1476,7 +1766,8 @@ func _compute_get_map_value(node: Dictionary) -> Dictionary:
 	var map_result := resolve_map_input(node, "1")
 	var map = map_result.get("map")
 	if map is Dictionary and map.has(key):
-		return {"found": true, "value": map[key]}
+		return {"found": true, "value": map[key],
+			"text_is_resolved": map_result.get("kind", "") == MAP_SOURCE_DATA_ASSET}
 	return {"found": false, "value": null}
 
 
@@ -1510,7 +1801,7 @@ func process_boolean_chain(node_id: String) -> void:
 		return
 	_context.evaluation_depth += 1
 
-	var node := _context.current_script.get_node(node_id)
+	var node := _evaluation_node(node_id)
 	if node.is_empty():
 		_context.evaluation_depth -= 1
 		return
@@ -1557,6 +1848,15 @@ func process_boolean_chain(node_id: String) -> void:
 		StoryFlowTypes.NodeType.RUN_SCRIPT:
 			# RunScript output depends on source handle to extract variable ID.
 			# Only clear the cache so the real evaluation (with correct handle) gets a fresh read.
+			node_state.cached_output = null
+
+		StoryFlowTypes.NodeType.GET_DATA_ASSET_VARIABLE, \
+		StoryFlowTypes.NodeType.SET_DATA_ASSET_VARIABLE:
+			# .sfd accessor reads are never memoized (they resolve against the live session
+			# overlay — see is_data_asset_read in evaluate_boolean_from_node), so there is
+			# nothing to pre-cache. Falling into the default arm below would run a full
+			# evaluation whose result is then thrown away; clear any stale entry instead and
+			# let the real read evaluate fresh. Same shape as the map-read arm below.
 			node_state.cached_output = null
 
 		StoryFlowTypes.NodeType.GET_MAP_VALUE, \
@@ -1609,7 +1909,7 @@ func evaluate_option_visibility(option_data: Dictionary, node_id: String) -> boo
 		return true # No visibility connection means always visible
 
 	var source_id: String = edge.get("source", "")
-	var source_node := _context.current_script.get_node(source_id)
+	var source_node := _evaluation_node(source_id)
 	if source_node.is_empty():
 		return true
 
@@ -1681,8 +1981,9 @@ func _evaluate_run_script_output_bool(node_id: String, source_handle: String, _d
 		var var_id := _extract_run_script_output_var_id(source_handle)
 		if not var_id.is_empty() and node_state.output_values.has(var_id):
 			var val = node_state.output_values[var_id]
-			if val is StoryFlowVariant:
+			if _run_script_scalar_output_matches(node_state, var_id, _data, val, StoryFlowTypes.VariableType.BOOLEAN):
 				return val.get_bool()
+	_context.resolution_failures += 1
 	return false
 
 
@@ -1692,8 +1993,9 @@ func _evaluate_run_script_output_int(node_id: String, source_handle: String, _da
 		var var_id := _extract_run_script_output_var_id(source_handle)
 		if not var_id.is_empty() and node_state.output_values.has(var_id):
 			var val = node_state.output_values[var_id]
-			if val is StoryFlowVariant:
+			if _run_script_scalar_output_matches(node_state, var_id, _data, val, StoryFlowTypes.VariableType.INTEGER):
 				return val.get_int()
+	_context.resolution_failures += 1
 	return 0
 
 
@@ -1703,8 +2005,9 @@ func _evaluate_run_script_output_float(node_id: String, source_handle: String, _
 		var var_id := _extract_run_script_output_var_id(source_handle)
 		if not var_id.is_empty() and node_state.output_values.has(var_id):
 			var val = node_state.output_values[var_id]
-			if val is StoryFlowVariant:
+			if _run_script_scalar_output_matches(node_state, var_id, _data, val, StoryFlowTypes.VariableType.FLOAT):
 				return val.get_float()
+	_context.resolution_failures += 1
 	return 0.0
 
 
@@ -1714,8 +2017,9 @@ func _evaluate_run_script_output_string(node_id: String, source_handle: String, 
 		var var_id := _extract_run_script_output_var_id(source_handle)
 		if not var_id.is_empty() and node_state.output_values.has(var_id):
 			var val = node_state.output_values[var_id]
-			if val is StoryFlowVariant:
+			if _run_script_scalar_output_matches(node_state, var_id, _data, val, StoryFlowTypes.VariableType.STRING):
 				return val.get_string()
+	_context.resolution_failures += 1
 	return ""
 
 
@@ -1734,48 +2038,234 @@ func _extract_run_script_output_var_id(source_handle: String) -> String:
 # =============================================================================
 
 ## Evaluate a getCharacterVar node: find the character and return the variable's value.
-func _evaluate_character_variable(data: Dictionary, node_id: String = "") -> StoryFlowVariant:
+func _evaluate_character_variable(data: Dictionary, node_id: String = "", expected: int = -1, array: bool = false) -> StoryFlowVariant:
 	var character_path: String = data.get("characterPath", "")
 
 	# Check for connected character input (override dropdown)
+	var wired := false
 	if not node_id.is_empty() and _context and _context.current_script:
 		var char_edge: Dictionary = _context.current_script.find_input_edge(node_id, StoryFlowHandles.IN_CHARACTER_INPUT)
 		if not char_edge.is_empty():
-			var source_node: Dictionary = _context.current_script.get_node(char_edge.get("source", ""))
+			var source_node: Dictionary = _evaluation_node(char_edge.get("source", ""))
 			if not source_node.is_empty():
 				character_path = evaluate_string_from_node(source_node.get("id", ""), char_edge.get("source_handle", ""))
+				wired = true
+
+	# Id-first resolution (characters engine contract §4), NODE lane -> the context's
+	# latch pair. The wired override WINS OUTRIGHT: neither inline field is consulted, so
+	# a dangling inline id under a healthy wire never warns. The wired value may itself be
+	# an id; anything non-id comes back verbatim for the pre-P4 lines below (their
+	# normalize + per-call not-found warn stay byte-identical, spellings included).
+	if _context:
+		if wired:
+			character_path = StoryFlowCharacter.resolve_character_key(
+				_context.character_id_bridge, _characters, character_path, _context)
+		else:
+			character_path = StoryFlowCharacter.resolve_character_ref(
+				_context.character_id_bridge, _characters,
+				str(data.get("characterId", "")), character_path, _context)
 
 	if character_path.is_empty():
+		_context.resolution_failures += 1
 		return StoryFlowVariant.new()
 
 	var normalized_path := StoryFlowCharacter.normalize_path(character_path)
 	if not _characters.has(normalized_path):
 		push_warning("StoryFlow: Character not found for GetCharacterVar: %s" % character_path)
+		_context.resolution_failures += 1
 		return StoryFlowVariant.new()
 
 	var character: StoryFlowCharacter = _characters[normalized_path]
 	var variable_name: String = data.get("variableName", "")
 
 	if variable_name.is_empty():
+		_context.resolution_failures += 1
 		return StoryFlowVariant.new()
 
-	# Handle built-in "Name" field
-	if variable_name.to_lower() == "name":
-		return StoryFlowVariant.from_string(character.character_name)
+	# Handle built-in "Name" field. FIRST TIER of the A2(a) aliases: this arm was already
+	# case-insensitive, so the shared predicate folds cf_name in (the second, cf_-only
+	# tier lives on public set_character_variable — see StoryFlowCharacter.CF_NAME_ID).
+	# Names are finished display text here; the string evaluator skips its generic
+	# lookup tail so a runtime name matching a real key cannot be translated again.
+	if StoryFlowCharacter.is_name_token(variable_name):
+		if expected >= 0 and (array or not _scalar_type_matches(StoryFlowTypes.VariableType.STRING, expected)):
+			_context.resolution_failures += 1
+		return StoryFlowVariant.from_string(character.character_name if character.name_is_literal else _resolve_string_key(character.character_name))
 
-	# Handle built-in "Image" field
-	if variable_name.to_lower() == "image":
+	# Handle built-in "Image" field (first tier, same as Name above)
+	if StoryFlowCharacter.is_image_token(variable_name):
+		if expected >= 0 and (array or not _scalar_type_matches(StoryFlowTypes.VariableType.STRING, expected)):
+			_context.resolution_failures += 1
 		return StoryFlowVariant.from_string(character.image_key)
 
 	# Find custom variable
 	if character.variables.has(variable_name):
 		var var_data: Dictionary = character.variables[variable_name]
+		if expected == StoryFlowTypes.VariableType.DATA_ASSET and var_data.get("type", -1) != expected:
+			_context.resolution_failures += 1
+			return StoryFlowVariant.new()
 		var value = var_data.get("value")
+		if expected >= 0 and (bool(var_data.get("is_array", false)) != array or not _scalar_type_matches(StoryFlowDataAssetStore.storage_type(var_data.get("type", -1)), StoryFlowDataAssetStore.storage_type(expected))):
+			_context.resolution_failures += 1
+			return StoryFlowVariant.new()
 		if value is StoryFlowVariant:
 			return value
 
 	push_warning("StoryFlow: Variable '%s' not found on character '%s'" % [variable_name, character_path])
+	_context.resolution_failures += 1
 	return StoryFlowVariant.new()
+
+
+# =============================================================================
+# Data Asset Accessor Helpers (the degraded ladder, engine contract 6)
+# =============================================================================
+#
+# THE LADDER, five rungs IN THIS ORDER, each warned once per node per reason:
+#   nodata   the accessor carries no variableId at all
+#   unwired  nothing usable on its dataAsset pin (no edge / not a pill / unbound pill)
+#   deadref  the pill names an asset this build's seed does not carry
+#   missing  no level of the asset's chain declares the variable id
+#   changed  it does, but the declaration no longer matches the spawn snapshot (6.1)
+#
+# ONE ladder for the Get and the Set, deliberately: the read path and the write path must
+# degrade on exactly the same rungs, or you get an accessor that reads its declared default
+# while its Set twin writes an overlay entry that SHADOWS that default for the rest of the
+# session (and cascades to every descendant, if it landed on a base).
+#
+# It is SPLIT across two functions only because the two paths want different answers past the
+# last rung — the Get wants the value, the Set wants nothing — and both halves are implemented
+# once: [method _resolve_data_asset_id] owns the three graph-side rungs, the store's shared
+# _bind owns the two chain-side ones.
+
+## The lookup context the node lane hands the store's .sfd read door, from the SAME three fields
+## [method _resolve_string_key] runs the shared ladder on - minus the current script.
+##
+## THE SCRIPT IS WITHHELD DELIBERATELY (localization spec §2's amendment): a .sfd id is keyed by
+## data-assets.json, which the importer merges into the project globals, so passing the running
+## script could only let its own strings table SHADOW a .sfd id - and which script happened to be
+## executing would then decide what an item is called. Every other string in this lane wants the
+## script tier; a .sfd value is the one that must not have it.
+func _data_asset_locale() -> Dictionary:
+	return StoryFlowLocalization.reading_locale(
+		_context.localization if _context else null, _current_global_strings(), _language_code)
+
+
+## The accessor's spawn-time snapshot as ONE Dictionary, pulled off node data in one place so
+## no call site has to remember which of the four wire keys goes where (the store's
+## read_bound_with_pins / check_bound take it verbatim).
+func data_asset_pins(data: Dictionary) -> Dictionary:
+	return {
+		"wire_type": str(data.get("variableType", "")),
+		"is_array": bool(data.get("isArray", false)),
+		"key_type": str(data.get("keyType", "")),
+		"value_type": str(data.get("valueType", "")),
+	}
+
+
+## The full ladder for a WRITE: all five rungs, warned once each, NO value read.
+## Returns the asset id to write through, or "" for every degraded case.
+func resolve_data_asset_write_target(data: Dictionary, node_id: String) -> String:
+	var asset_id := _resolve_data_asset_id(data, node_id)
+	if asset_id.is_empty():
+		return ""
+	var variable_id := str(data.get("variableId", ""))
+	var status := StoryFlowDataAssetStore.check_bound(
+		_context.data_asset_seed, _context.data_asset_overlay,
+		asset_id, variable_id, data_asset_pins(data))
+	if status != StoryFlowDataAssetStore.Binding.OK:
+		_warn_data_asset_status(node_id, asset_id, variable_id, status)
+		return ""
+	return asset_id
+
+
+## The full ladder for a READ, plus the value: the effective value of the .sfd variable this
+## accessor is bound to, or [code]null[/code] for every degraded case.
+##
+## Null rather than a default ON PURPOSE, mirroring how the character arms degrade: each typed
+## evaluator substitutes ITS OWN type default, which is the only way one shared helper can serve
+## bool / int / float / string / enum / array / map (contract 6's default column). The degraded
+## default comes from the node's SNAPSHOT type, never from the declaration — a `string` snapshot
+## over an integer declaration reads "" and not 0.
+##
+## The value is already a detached copy: the store duplicates on the way out, so graph code
+## cannot mutate the seed or the overlay through a read (contract 3).
+func _evaluate_data_asset_variable(data: Dictionary, node_id: String, expected: int = -1) -> StoryFlowVariant:
+	var asset_id := _resolve_data_asset_id(data, node_id)
+	if asset_id.is_empty():
+		_context.resolution_failures += 1
+		return null
+	var variable_id := str(data.get("variableId", ""))
+	var bound := StoryFlowDataAssetStore.read_bound_with_pins(
+		_context.data_asset_seed, _context.data_asset_overlay, _data_asset_locale(),
+		asset_id, variable_id, data_asset_pins(data))
+	var status: StoryFlowDataAssetStore.Binding = bound["status"]
+	if status != StoryFlowDataAssetStore.Binding.OK:
+		_warn_data_asset_status(node_id, asset_id, variable_id, status)
+		_context.resolution_failures += 1
+		return null
+	var value: StoryFlowVariant = bound["value"]
+	if expected >= 0 and (bool(data.get("isArray", false)) or not _scalar_type_matches(value.type, expected)):
+		_context.resolution_failures += 1
+		return null
+	return value
+
+
+## The three GRAPH-side rungs (nodata / unwired / deadref). "" = degraded, warned once.
+##
+## SINGLE HOP up the dataAsset pin is sufficient, not a limitation: the editor collapses every
+## reroute elbow out of the graph before export, so a wire that ran through elbows on the canvas
+## arrives here as a direct pill -> accessor edge. The GET_DATA_ASSET type check keeps that
+## honest either way — anything else on the far end degrades instead of having its "assetId"
+## speculatively read off it.
+func _resolve_data_asset_id(data: Dictionary, node_id: String) -> String:
+	if not _context or not _context.current_script:
+		return ""
+
+	if str(data.get("variableId", "")).is_empty():
+		if _context.should_warn_data_asset(node_id, "nodata"):
+			push_warning("StoryFlow: Data Asset accessor has no variable binding: node %s" % node_id)
+		return ""
+
+	var asset_id := _data_asset_id_from_wire(node_id)
+	if asset_id.is_empty():
+		if _context.should_warn_data_asset(node_id, "unwired"):
+			push_warning("StoryFlow: Data Asset accessor has no Data Asset connected: node %s" % node_id)
+		return ""
+
+	# DEAD REFERENCE vs stale BINDING: read_bound cannot tell them apart (a walk that visits no
+	# level declares nothing, so an unknown asset answers MISSING there), so the seed is asked
+	# here, where the two still have different fixes — rebind the PILL vs rebind the ACCESSOR.
+	# An execution context that was never handed a store carries an empty seed and lands here too,
+	# which is the right rung for it: nothing this node points at exists.
+	if not StoryFlowDataAssetStore.has_asset(_context.data_asset_seed, asset_id):
+		if _context.should_warn_data_asset(node_id, "deadref"):
+			push_warning("StoryFlow: Data Asset not found: %s (node %s)" % [asset_id, node_id])
+		return ""
+
+	return asset_id
+
+
+## The QUIET single hop up the dataAsset pin: the assetId of the getDataAsset pill wired into
+## [param node_id]'s dataAsset target pin, or "" when there is nothing usable upstream (no
+## edge / not a pill / an unbound pill). NO warnings here — [method _resolve_data_asset_id]
+## layers the accessor family's warn latch on top, while the Get Variable Names arm takes this
+## hop bare because its degraded paths are SILENT (contract 11.1: an empty array, no new
+## warning tokens — the ladder's tokens belong to the bound accessors).
+func _data_asset_id_from_wire(node_id: String) -> String:
+	var edge := _context.current_script.find_input_edge(node_id, StoryFlowHandles.IN_DATA_ASSET)
+	if edge.is_empty():
+		return ""
+	return evaluate_data_from_node(edge.get("source", ""), edge.get("source_handle", ""))
+
+
+## The two CHAIN-side rungs' warnings, latched the same way the graph-side ones are.
+func _warn_data_asset_status(node_id: String, asset_id: String, variable_id: String, status: StoryFlowDataAssetStore.Binding) -> void:
+	if status == StoryFlowDataAssetStore.Binding.MISSING:
+		if _context.should_warn_data_asset(node_id, "missing"):
+			push_warning("StoryFlow: Data Asset variable not found: %s.%s (node %s)" % [asset_id, variable_id, node_id])
+	elif status == StoryFlowDataAssetStore.Binding.CHANGED:
+		if _context.should_warn_data_asset(node_id, "changed"):
+			push_warning("StoryFlow: Data Asset variable type changed since this node was made: %s.%s (node %s)" % [asset_id, variable_id, node_id])
 
 
 # =============================================================================
@@ -1784,17 +2274,25 @@ func _evaluate_character_variable(data: Dictionary, node_id: String = "") -> Sto
 
 ## Find a variable from a node's data. Checks is_global to determine scope.
 ## Returns the variable dictionary or empty dictionary if not found.
-func _find_variable(data: Dictionary) -> Dictionary:
+func _evaluation_node(node_id: String) -> Dictionary:
+	var node := _context.current_script.get_node(node_id)
+	if node.is_empty():
+		_context.resolution_failures += 1
+	return node
+
+
+func _find_variable(data: Dictionary, expected: int = -1, array = null) -> Dictionary:
 	var variable_id: String = data.get("variable", "")
-	if variable_id.is_empty():
+	var variable: Dictionary = _global_variables.get(variable_id, {}) if data.get("isGlobal", false) else _context.local_variables.get(variable_id, {})
+	if expected == StoryFlowTypes.VariableType.DATA_ASSET and variable.get("type", -1) != expected:
+		_context.resolution_failures += 1
 		return {}
-
-	var is_global: bool = data.get("isGlobal", false)
-
-	if is_global:
-		return _global_variables.get(variable_id, {})
-	else:
-		return _context.local_variables.get(variable_id, {})
+	if variable.is_empty() or (expected >= 0 and variable.get("type", -1) != expected and not (array == true and _scalar_type_matches(StoryFlowDataAssetStore.storage_type(variable.get("type", -1)), StoryFlowDataAssetStore.storage_type(expected)))) or (array != null and variable.get("is_array", false) != array):
+		# Untyped lookups inspect enum metadata on downstream consumers; no value was read.
+		if expected >= 0:
+			_context.resolution_failures += 1
+		return {}
+	return variable
 
 
 # =============================================================================
@@ -1852,19 +2350,32 @@ func _get_data_string(data: Dictionary, key: String, fallback: String = "") -> S
 ## Resolves a string key through the localized strings dictionary.
 ## The JSON export stores all string-type values as keys into the strings table.
 ## Returns the resolved text, or the raw value if the key is not found.
+##
+## THE NODE-LANE DOOR onto the one shared ladder (StoryFlowLocalization.look_up) - the same ladder
+## the text interpolator and StoryFlowComponent's outside-dialogue arm run, never a copy of it.
+## The miss policy is this plugin's long-standing one: a value that keyed no table anywhere is its
+## own text.
+##
+## [member _language_code] is the PRE-LOCALIZATION language: it is only the fallback, honored for
+## a project exported before localization existed. Once the project ships a localization.json the
+## language is the player's and game-wide, and the manager's state (reached through the context)
+## owns it - which is why a mid-session set_language reaches a running dialogue here.
+##
+## THE LOOKUP RUNS ON THE AUTHORED TEMPLATE (§9): the interpolation of any `{Variable}` token
+## happens on the RESULT of this call, never before it. Interpolating first would hand the ladder
+## a string no table was ever keyed by, and the failure is invisible - the line still renders, in
+## the source language.
 func _resolve_string_key(value: String) -> String:
 	if value.is_empty():
 		return value
-	# Try script-local strings first
-	if _context and _context.current_script:
-		var result := _context.current_script.get_localized_string(value, _language_code)
-		if result != value:
-			return result
-	# Try global strings (includes character strings)
-	var full_key := _language_code + "." + value
-	if _global_strings.has(full_key):
-		return _global_strings[full_key]
-	return value
+	var script = _context.current_script if _context else null
+	var localization = _context.localization if _context else null
+	var resolved = StoryFlowLocalization.look_up(localization, script, _current_global_strings(), value, _language_code)
+	return value if resolved == null else resolved
+
+
+func _array_string(value: StoryFlowVariant) -> String:
+	return _resolve_string_key(value.string_key) if not value.string_key.is_empty() else value.get_string()
 
 
 ## Get a localized string from node data. The data value is used as a string
@@ -1893,3 +2404,113 @@ func _warn_unknown_evaluator_source(node: Dictionary) -> void:
 		return
 	_context.warned_unknown_nodes[id] = true
 	push_warning("StoryFlow: Unsupported node type '%s' at node %s, returning default value" % [node.get("type_string", ""), id])
+
+
+func _scalar_type_matches(actual: int, expected: int) -> bool:
+	if expected == StoryFlowTypes.VariableType.STRING:
+		return actual in [StoryFlowTypes.VariableType.ENUM, StoryFlowTypes.VariableType.STRING, StoryFlowTypes.VariableType.IMAGE, StoryFlowTypes.VariableType.AUDIO, StoryFlowTypes.VariableType.CHARACTER]
+	return actual == expected
+
+
+func _run_script_scalar_output_matches(state, variable_id: String, data: Dictionary, value, expected: int) -> bool:
+	if not value is StoryFlowVariant or not value.get_array().is_empty() or state.output_arrays.get(variable_id, false):
+		return false
+	for output in data.get("scriptOutputs", []):
+		if output is Dictionary and output.get("id", "") == variable_id and output.get("isArray", false):
+			return false
+	return _scalar_type_matches(value.type, expected)
+
+
+# Data references have their own evaluator: a string pin cannot masquerade as a reference.
+func evaluate_data_input(node_id: String, handle_suffix: String, fallback: String = "") -> String:
+	if not _context or not _context.current_script:
+		return fallback
+	var edge := _context.current_script.find_input_edge(node_id, handle_suffix)
+	if edge.is_empty():
+		return fallback
+	return evaluate_data_from_node(edge.get("source", ""), edge.get("source_handle", ""))
+
+
+func evaluate_data_from_node(node_id: String, source_handle: String = "") -> String:
+	if not _context or not _context.current_script:
+		return ""
+	if _context.evaluation_depth >= StoryFlowExecutionContext.MAX_EVALUATION_DEPTH:
+		_context.resolution_failures += 1
+		return ""
+	_context.evaluation_depth += 1
+	var result := _evaluate_data_reference(node_id, source_handle)
+	_context.evaluation_depth -= 1
+	return result
+
+
+func _evaluate_data_reference(node_id: String, source_handle: String) -> String:
+	var node := _evaluation_node(node_id)
+	var data: Dictionary = node.get("data", {})
+	var NT := StoryFlowTypes.NodeType
+	match node.get("type", NT.UNKNOWN):
+		NT.GET_DATA_ASSET:
+			return str(data.get("assetId", ""))
+		NT.GET_DATA, NT.SET_DATA:
+			var variable := _find_variable(data, StoryFlowTypes.VariableType.DATA_ASSET, false)
+			var value = variable.get("value")
+			return value.get_string() if value is StoryFlowVariant else ""
+		NT.GET_CHARACTER_VAR, NT.SET_CHARACTER_VAR:
+			if data.get("variableType", "") == "dataAsset" and not data.get("isArray", false):
+				var value := _evaluate_character_variable(data, node_id, StoryFlowTypes.VariableType.DATA_ASSET)
+				return value.get_string() if value else ""
+		NT.GET_DATA_ASSET_VARIABLE, NT.SET_DATA_ASSET_VARIABLE:
+			if data.get("variableType", "") == "dataAsset" and not data.get("isArray", false):
+				var value := _evaluate_data_asset_variable(data, node_id, StoryFlowTypes.VariableType.STRING)
+				return value.get_string() if value else ""
+		NT.GET_DATA_ARRAY_ELEMENT, NT.GET_RANDOM_DATA_ARRAY_ELEMENT:
+			var arr := evaluate_data_array_input(node_id, StoryFlowHandles.IN_DATA_ARRAY)
+			var index := evaluate_integer_input(node_id, StoryFlowHandles.IN_INTEGER, _get_data_int(data, "value", 0))
+			if node.get("type") == NT.GET_RANDOM_DATA_ARRAY_ELEMENT and not arr.is_empty():
+				index = randi_range(0, arr.size() - 1)
+			if index >= 0 and index < arr.size() and arr[index] is StoryFlowVariant:
+				return arr[index].get_string()
+		NT.GET_MAP_VALUE:
+			if data.get("valueType", "") == "dataAsset":
+				var value = _compute_get_map_value(node).get("value")
+				return value.get_string() if value is StoryFlowVariant else ""
+		NT.FOR_EACH_DATA_LOOP:
+			var value = _context.get_node_state(node_id).cached_output
+			return value.get_string() if value is StoryFlowVariant else ""
+		NT.FOR_EACH_MAP:
+			if source_handle.ends_with("-value") and data.get("valueType", "") == "dataAsset":
+				var value = _context.get_node_state(node_id).loop_value
+				return value.get_string() if value is StoryFlowVariant else ""
+		NT.RUN_SCRIPT:
+			var state := _context.get_node_state(node_id)
+			var id := _extract_run_script_output_var_id(source_handle)
+			var value := _run_script_data_output(state, id, data, false)
+			return value.get_string() if value != null else ""
+	_context.resolution_failures += 1
+	return ""
+
+
+func _run_script_data_output(state, id: String, data: Dictionary, is_array: bool) -> StoryFlowVariant:
+	var value = state.output_values.get(id)
+	var valid: bool = state.has_output_values and value is StoryFlowVariant \
+		and state.output_types.get(id, -1) == StoryFlowTypes.VariableType.DATA_ASSET \
+		and state.output_arrays.has(id) and state.output_arrays[id] == is_array
+	var declared := false
+	for output in data.get("scriptOutputs", []):
+		if output is Dictionary and output.get("id", "") == id:
+			declared = output.get("type", "") == "dataAsset" and output.get("isArray", false) == is_array
+			break
+	valid = valid and declared
+	if valid:
+		if is_array:
+			# Empty arrays still require the actual callee's Data element declaration.
+			valid = value.type == StoryFlowTypes.VariableType.STRING or (value.type == StoryFlowTypes.VariableType.NONE and value.get_array().is_empty())
+			for element in value.get_array():
+				if not element is StoryFlowVariant or element.type != StoryFlowTypes.VariableType.STRING or not element.get_array().is_empty():
+					valid = false
+					break
+		else:
+			valid = value.type == StoryFlowTypes.VariableType.STRING and value.get_array().is_empty()
+	if valid:
+		return value
+	_context.resolution_failures += 1
+	return null

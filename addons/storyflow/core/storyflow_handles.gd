@@ -74,6 +74,37 @@ const IN_IMAGE_ARRAY := "image-array"
 const IN_CHARACTER_ARRAY := "character-array"
 const IN_AUDIO_ARRAY := "audio-array"
 
+# Data Asset (.sfd) inputs
+#
+# The accessor's REFERENCE pin: the wire from a getDataAsset pill into this pin IS the
+# binding (engine contract 2.2 — the accessor stores no assetId of its own). "asset" is
+# the optionId the editor gives it (DATA_ASSET_TARGET_OPTION_ID in data-asset-binding.tsx).
+const IN_DATA := "dataAsset"
+const IN_DATA_ARRAY := "dataAsset-array"
+const IN_DATA_ASSET := "dataAsset-asset"
+
+## The optionId of the .sfd Set node's VALUE input pin. Placed by SetDataAssetVariableNode.tsx
+## (`<TypedVariablePin handleType={'target'} optionId={'2'}>`), which is the source of truth
+## for it; the "3" beside it there is the pass-through OUTPUT, which nothing reads.
+const DATA_ASSET_VALUE_OPTION := "2"
+
+
+## A .sfd Set node's value input suffix for a SCALAR binding: "{variable_type}-2".
+static func in_data_asset_value(variable_type: String) -> String:
+	return "%s-%s" % [variable_type, DATA_ASSET_VALUE_OPTION]
+
+
+## A .sfd Set node's value input suffix for an ARRAY binding: "{variable_type}-array-2".
+##
+## Its own function rather than a boolean flag on the scalar one: an array pin and a scalar
+## pin of the same type are DIFFERENT pins (the same distinction decl_matches draws), and
+## `in_data_asset_value(type, false)` at a call site says nothing about which it asked for.
+## Maps have no builder here — they use [method in_map] with
+## [constant DATA_ASSET_VALUE_OPTION], since their K/V types are baked into the handle id.
+static func in_data_asset_array_value(variable_type: String) -> String:
+	return "%s-array-%s" % [variable_type, DATA_ASSET_VALUE_OPTION]
+
+
 # Media node inputs
 const IN_IMAGE_INPUT := "image-image-input"
 const IN_AUDIO_INPUT := "audio-audio-input"
@@ -90,6 +121,12 @@ static var _data_type_suffixes: Array[String] = [
 	# entries above through their embedded K/V type names, but classify them
 	# explicitly so the rule does not depend on which types a map carries.
 	"map-",
+	# The .sfd reference wire (pill -> accessor). Its SOURCE handle is
+	# "source-{pillId}-dataAsset-" (SecondaryHandle builds an empty optionId as a
+	# trailing dash, like the OUT_* constants above) and its TARGET handle is
+	# "target-{accessorId}-dataAsset-asset". It carries no VALUE, but it is a data
+	# edge and not a flow edge, which is the only distinction is_data_handle draws.
+	"dataAsset-",
 ]
 
 
@@ -102,6 +139,10 @@ static func is_data_handle(source_handle: String) -> bool:
 
 ## Returns the VariableType for a data handle suffix, or NONE if not a data suffix.
 static func get_data_type_from_suffix(suffix: String) -> StoryFlowTypes.VariableType:
+	# Data reference values and the original .sfd pill share the dataAsset pin type.
+	# Accessors still take their field value type from the declaration snapshot.
+	if suffix.begins_with("dataAsset"):
+		return StoryFlowTypes.VariableType.DATA_ASSET
 	if suffix.begins_with("boolean"):
 		return StoryFlowTypes.VariableType.BOOLEAN
 	elif suffix.begins_with("integer"):

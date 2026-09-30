@@ -10,6 +10,10 @@ var _bool_value: bool = false
 var _int_value: int = 0
 var _float_value: float = 0.0
 var _string_value: String = ""
+## Authored string container value identity. Runtime writes clear it, even for key-shaped text.
+var string_key: String = ""
+## Scalar prose written during play must not be looked up as an authored key.
+var string_is_literal: bool = false
 var _array_value: Array = []
 # Map entries: key -> StoryFlowVariant value. Godot Dictionaries preserve
 # insertion order, which is contractual — entry order is observable through
@@ -77,6 +81,8 @@ func set_float(value: float) -> void:
 func set_string(value: String) -> void:
 	type = StoryFlowTypes.VariableType.STRING
 	_string_value = value
+	string_key = ""
+	string_is_literal = true
 
 
 func set_enum(value: String) -> void:
@@ -138,9 +144,18 @@ func duplicate_variant() -> StoryFlowVariant:
 	v._int_value = _int_value
 	v._float_value = _float_value
 	v._string_value = _string_value
-	v._array_value = _array_value.duplicate(true)
-	# duplicate(true) deep-copies nested containers but NOT Object values, so the
-	# StoryFlowVariant entries must be duplicated explicitly to detach the copy.
+	v.string_key = string_key
+	v.string_is_literal = string_is_literal
+	# duplicate(true) deep-copies nested containers but NOT Object values, and
+	# StoryFlowVariant is a RefCounted - so BOTH containers must duplicate their
+	# variant members explicitly or the copy keeps handing out the source's own
+	# element objects, and writing through one of them reaches the original.
+	v._array_value = []
+	for element in _array_value:
+		if element is StoryFlowVariant:
+			v._array_value.append(element.duplicate_variant())
+		else:
+			v._array_value.append(element)
 	for key in _map_value:
 		var entry_value = _map_value[key]
 		if entry_value is StoryFlowVariant:
@@ -156,6 +171,8 @@ func reset() -> void:
 	_int_value = 0
 	_float_value = 0.0
 	_string_value = ""
+	string_key = ""
+	string_is_literal = false
 	_array_value.clear()
 	_map_value.clear()
 
@@ -185,6 +202,7 @@ static func from_float(value: float) -> StoryFlowVariant:
 static func from_string(value: String) -> StoryFlowVariant:
 	var v := new()
 	v.set_string(value)
+	v.string_is_literal = false
 	return v
 
 
@@ -207,6 +225,11 @@ static func from_map(value: Dictionary) -> StoryFlowVariant:
 
 
 ## Deep-copy a variables dictionary (id -> { ..., "value": StoryFlowVariant }).
+##
+## "value" is the ONLY variant-bearing field in a variable dictionary — the rest is
+## declaration metadata (name, type flags, enum value lists) that nothing mutates at
+## runtime — so the shallow duplicate() plus the explicit value copy below is a full
+## detach, and this inherits whatever duplicate_variant guarantees.
 static func deep_copy_variables(source: Dictionary) -> Dictionary:
 	var result := {}
 	for var_id in source:

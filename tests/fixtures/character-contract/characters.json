@@ -1,0 +1,177 @@
+{
+  "characters": {
+    "characters\\villain.sfc": {
+      "name": "da_villain00000000000000000000000.cf_name",
+      "image": "asset_image_1",
+      "variables": {
+        "var_bd9f7c5d": {
+          "id": "var_bd9f7c5d",
+          "name": "Alive",
+          "type": "boolean",
+          "value": false
+        },
+        "var_a2aa6b4b": {
+          "id": "var_a2aa6b4b",
+          "name": "Coins",
+          "type": "integer",
+          "value": 66
+        },
+        "var_8c7fd568": {
+          "id": "var_8c7fd568",
+          "name": "Stride",
+          "type": "float",
+          "value": 3.5
+        },
+        "var_b78a3223": {
+          "id": "var_b78a3223",
+          "name": "Title",
+          "type": "string",
+          "value": "da_villain00000000000000000000000.v-vil-title.value"
+        },
+        "var_42dff6d9": {
+          "id": "var_42dff6d9",
+          "name": "Traits",
+          "type": "string",
+          "value": [
+            "da_villain00000000000000000000000.v-vil-traits.value.0",
+            "da_villain00000000000000000000000.v-vil-traits.value.1"
+          ],
+          "isArray": true
+        },
+        "var_d0889988": {
+          "id": "var_d0889988",
+          "name": "Loadout",
+          "type": "map",
+          "value": [
+            {
+              "key": "weapon",
+              "value": "da_villain00000000000000000000000.v-vil-loadout.value.weapon"
+            },
+            {
+              "key": "armor",
+              "value": "da_villain00000000000000000000000.v-vil-loadout.value.armor"
+            }
+          ],
+          "keyType": "string",
+          "valueType": "string"
+        }
+      }
+    },
+    "characters\\hero.sfc": {
+      "name": "da_hero0000000000000000000000000a.cf_name",
+      "image": "asset_image_2",
+      "variables": {
+        "var_a2aa6b4b": {
+          "id": "var_a2aa6b4b",
+          "name": "Coins",
+          "type": "integer",
+          "value": 250
+        },
+        "var_5d48f5a3": {
+          "id": "var_5d48f5a3",
+          "name": "Honor",
+          "type": "string",
+          "value": "da_archetype000000000000000000000.v-arch-honor.value"
+        },
+        "var_8c7fd568": {
+          "id": "var_8c7fd568",
+          "name": "Stride",
+          "type": "float",
+          "value": 1.25
+        },
+        "var_bd9f7c5d": {
+          "id": "var_bd9f7c5d",
+          "name": "Alive",
+          "type": "boolean",
+          "value": true
+        },
+        "var_b78a3223": {
+          "id": "var_b78a3223",
+          "name": "Title",
+          "type": "string",
+          "value": "da_hero0000000000000000000000000a.v-hero-title.value"
+        },
+        "var_42dff6d9": {
+          "id": "var_42dff6d9",
+          "name": "Traits",
+          "type": "string",
+          "value": [
+            "da_hero0000000000000000000000000a.v-hero-traits.value.0",
+            "da_hero0000000000000000000000000a.v-hero-traits.value.1"
+          ],
+          "isArray": true
+        },
+        "var_d0889988": {
+          "id": "var_d0889988",
+          "name": "Loadout",
+          "type": "map",
+          "value": [
+            {
+              "key": "weapon",
+              "value": "da_hero0000000000000000000000000a.v-hero-loadout.value.weapon"
+            },
+            {
+              "key": "armor",
+              "value": "da_hero0000000000000000000000000a.v-hero-loadout.value.armor"
+            }
+          ],
+          "keyType": "string",
+          "valueType": "string"
+        }
+      }
+    },
+    "characters\\archetype.sfc": {
+      "name": "da_archetype000000000000000000000.cf_name",
+      "variables": {
+        "var_a2aa6b4b": {
+          "id": "var_a2aa6b4b",
+          "name": "Coins",
+          "type": "integer",
+          "value": 10
+        },
+        "var_5d48f5a3": {
+          "id": "var_5d48f5a3",
+          "name": "Honor",
+          "type": "string",
+          "value": "da_archetype000000000000000000000.v-arch-honor.value"
+        },
+        "var_8c7fd568": {
+          "id": "var_8c7fd568",
+          "name": "Stride",
+          "type": "float",
+          "value": 1.25
+        }
+      }
+    }
+  },
+  "strings": {
+    "en": {
+      "da_villain00000000000000000000000.cf_name": "Morgrave",
+      "da_villain00000000000000000000000.v-vil-title.value": "Usurper of the Vale",
+      "da_villain00000000000000000000000.v-vil-traits.value.0": "Cruel",
+      "da_villain00000000000000000000000.v-vil-traits.value.1": "Patient",
+      "da_villain00000000000000000000000.v-vil-loadout.value.weapon": "Dagger",
+      "da_villain00000000000000000000000.v-vil-loadout.value.armor": "Cloak",
+      "da_hero0000000000000000000000000a.cf_name": "Sir Roland",
+      "da_archetype000000000000000000000.v-arch-honor.value": "Neutral",
+      "da_hero0000000000000000000000000a.v-hero-title.value": "Knight of the Vale",
+      "da_hero0000000000000000000000000a.v-hero-traits.value.0": "Brave",
+      "da_hero0000000000000000000000000a.v-hero-traits.value.1": "Loyal",
+      "da_hero0000000000000000000000000a.v-hero-loadout.value.weapon": "Longsword",
+      "da_hero0000000000000000000000000a.v-hero-loadout.value.armor": "Plate",
+      "da_archetype000000000000000000000.cf_name": "Wanderer"
+    }
+  },
+  "assets": {
+    "asset_image_1": {
+      "id": "asset_image_1",
+      "type": "image",
+      "path": "images/villain.png"
+    },
+    "asset_image_2": {
+      "id": "asset_image_2",
+      "type": "image",
+      "path": "images/hero.png"
+    }
+  }
+}

@@ -94,6 +94,14 @@ The plugin connects to the StoryFlow Editor over WebSocket for live project sync
 
 Full documentation at [storyflow-editor.com/integrations/godot](https://storyflow-editor.com/integrations/godot).
 
+## Data Asset state
+
+Data Asset setters reject unresolved or incompatible wired sources while accepting valid zero values and empty containers. Map mutations on `.sfd` values retain a detached result for an explicit whole-map Set; they do not write the source asset implicitly. Shared Data Asset writes, including host calls through the character-id bridge, refresh derived conditions in all live dialogues without discarding completed execution outputs.
+
+Saved `dataAssets` values remain bare JSON. Restore validates each complete slot against the current rootmost declaration and drops unknown or incompatible slots, revealing the current inherited/default value. Numeric values must fit this runtime's int64 and float64 representation. Arrays and maps are accepted only when every entry matches, including declared enum options.
+
+The manager and component expose `get_data_asset_variant` for detached scalar, array, and map reads.
+
 ## Contributing
 
 Contributions are welcome! Please read the guidelines below before submitting.

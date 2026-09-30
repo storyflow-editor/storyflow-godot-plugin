@@ -4,6 +4,7 @@ extends RefCounted
 # Preloaded by path so parsing never depends on the global class name cache,
 # which can be stale or mid-rewrite when the game launches (godotengine/godot#75388).
 const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
+const StoryFlowDataAssetStore = preload("res://addons/storyflow/core/storyflow_data_asset_store.gd")
 const StoryFlowProject = preload("res://addons/storyflow/core/storyflow_project.gd")
 const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
 const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
@@ -171,6 +172,73 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 				print("StoryFlow: Imported character '%s'" % char_path)
 
 	# ------------------------------------------------------------------
+	# Character index (character-index.json, P4)
+	# ------------------------------------------------------------------
+	# Source of the character id bridge (characters engine contract §3): character FILE id
+	# -> characters.json record key. An ABSENT file is a pre-P4 export and stays silent -
+	# everything resolves by path, exactly as before this file existed. Everything else is
+	# _parse_character_index's degraded ladder, shared with the inline arm below.
+	var character_index_file := build_dir.path_join("character-index.json")
+	if FileAccess.file_exists(character_index_file):
+		project.character_id_index = _parse_character_index(_load_json_file(character_index_file))
+
+	# ------------------------------------------------------------------
+	# Localization (localization.json, §9)
+	# ------------------------------------------------------------------
+	# THE TRANSLATIONS SIDECAR, on the same degraded ladder as the character index above and for
+	# the same reason: absence is a FORMAT VERSION, not a fault.
+	#
+	# THE FILE-PRESENCE MARKER is the only branch this contract has. No localization.json beside
+	# the artifacts means a pre-localization export - source-only, byte-for-byte the behavior of
+	# every release before this one - and never a count of anything: a project whose author
+	# registered a language and translated nothing still exports FULL tables of source text, and
+	# that is a localized project. _apply_localization records which of the two a project is,
+	# because an absent sidecar and a sidecar with no rows parse to the same empty Dictionary.
+	var localization_file := build_dir.path_join("localization.json")
+	if FileAccess.file_exists(localization_file):
+		_apply_localization(project, _load_json_file(localization_file))
+
+	# ------------------------------------------------------------------
+	# Data Assets (.sfd)
+	# ------------------------------------------------------------------
+	# Written beside characters.json, always (an empty object when the project references
+	# none). TRUSTED SEED: the editor's collector already stripped orphan and stale
+	# overrides and collapsed duplicate map keys, so nothing here re-validates or
+	# re-sanitizes — a plugin that "fixes" the seed diverges from the other three runtimes
+	# (engine contract 2.1).
+	#
+	# IT IS A KEYING ARTIFACT NOW. Localization spec §2's amendment of 2026-08-27 SUPERSEDES
+	# engine-contract 2.1's literal-value posture: a Data Asset's DECLARED string values are
+	# player-facing prose and ship as stable table keys in data-assets.json's own "strings"
+	# block. What is stored in the seed is still the verbatim bytes the exporter wrote — the
+	# lookup happens at the READ DOOR, and only for values whose PROVENANCE says they are
+	# content (StoryFlowDataAssetStore.try_read).
+	var data_assets_json: Dictionary = _load_json_file(build_dir.path_join("data-assets.json"))
+	if not data_assets_json.is_empty():
+		# data-assets.json's OWN strings table, merged into the project's global table exactly
+		# as characters.json's is above — same helper, same `<code>.<key>` shape, same collision
+		# warning. It is the SOURCE TIER the .sfd read door falls through to when the language
+		# being read carries no row for an id. ABSENT for a pre-amendment export, and then every
+		# .sfd value is its own text again, with no branch for it.
+		if data_assets_json.has("strings"):
+			var data_asset_strings := _flatten_strings(data_assets_json["strings"])
+			for key in data_asset_strings:
+				if project.global_strings.has(key):
+					push_warning("StoryFlow: Data Asset string key '%s' overwrites existing global string" % key)
+				project.global_strings[key] = data_asset_strings[key]
+		# .sfd media (contract §2.1's 2026-09-04 amendment): image and audio values ship as asset
+		# KEYS with their files beside them, so this artifact carries an "assets" registry of its
+		# own exactly as characters.json does above. Imported into the PROJECT pool - the shared
+		# final fallback for both image and audio resolution - which is what makes a key handed
+		# back by get_data_asset_string resolve to something the build actually contains.
+		# ABSENT for a pre-amendment export, and then .sfd media is a bare path again with no
+		# branch for it, like the strings table above.
+		if data_assets_json.has("assets"):
+			var data_asset_media := _parse_assets_dict(data_assets_json["assets"])
+			_import_media_assets(build_dir, output_dir, data_asset_media, project.resolved_assets)
+		project.data_assets = _parse_data_assets(data_assets_json.get("dataAssets", {}))
+
+	# ------------------------------------------------------------------
 	# Scripts – inline in project JSON
 	# ------------------------------------------------------------------
 	if project_json.has("scripts"):
@@ -194,8 +262,10 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 	var script_files := _find_json_files_recursive(build_dir)
 	for script_file in script_files:
 		var filename := script_file.get_file()
-		# Skip non-script files
-		if filename in ["project.json", "project.storyflow", "global-variables.json", "characters.json", IMPORT_META_FILENAME]:
+		# Skip non-script files. EVERY sidecar the export writes must be listed here:
+		# load_project_local re-runs this sweep on every launch, so an unlisted sidecar is
+		# imported as a phantom script named after its filename, silently, in shipped games.
+		if filename in ["project.json", "project.storyflow", "global-variables.json", "characters.json", "data-assets.json", "character-index.json", "localization.json", IMPORT_META_FILENAME]:
 			continue
 
 		var relative := _make_relative(script_file, build_dir)
@@ -224,6 +294,19 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 	_publish_project_file(project_file, build_dir, output_dir)
 	if norm_build != norm_output:
 		_copy_directory_recursive(build_dir, output_dir)
+		# Reconcile this owned optional sidecar only in a previously imported output.
+		# Never remove user files or delete through two spellings of the same directory.
+		var source_directory := ProjectSettings.globalize_path(build_dir).simplify_path()
+		var output_directory := ProjectSettings.globalize_path(output_dir).simplify_path()
+		var old_sidecar := output_dir.path_join("localization.json")
+		if source_directory.nocasecmp_to(output_directory) != 0 \
+				and not FileAccess.file_exists(localization_file) \
+				and FileAccess.file_exists(output_dir.path_join(IMPORT_META_FILENAME)) \
+				and FileAccess.file_exists(old_sidecar):
+			var remove_error := DirAccess.remove_absolute(old_sidecar)
+			if remove_error != OK:
+				_error_count += 1
+				push_error("StoryFlow: Failed to remove stale localization sidecar: %s" % error_string(remove_error))
 
 	# Save metadata so the manager can reload from the local copy
 	if norm_build != norm_output:
@@ -334,6 +417,54 @@ func import_project_from_json(project_json: Dictionary) -> StoryFlowProject:
 			if char_data.has("variables"):
 				character.variables = _parse_character_variables(char_data["variables"])
 			project.characters[normalized_path] = character
+
+	# Character index (inline). Accepts both the character-index.json document shape and a
+	# wrapper nesting, the same way the characters block above and the dataAssets block below
+	# accept either. The two cannot be confused: the document's own keys are
+	# schemaVersion/characters, so an inner "characterIndex" key is always the wrapper. A
+	# bare id -> key map is deliberately refused: it carries no schemaVersion, and accepting
+	# one would make this the only lane that skips the version rung. The parse (degraded
+	# ladder, verbatim values) is shared with the disk arm - the two arms must never diverge
+	# (the divergence lesson test_import_hardening.gd exists for).
+	if project_json.has("characterIndex"):
+		var index_data = project_json["characterIndex"]
+		if index_data is Dictionary and index_data.has("characterIndex"):
+			index_data = index_data["characterIndex"]
+		project.character_id_index = _parse_character_index(
+			index_data if index_data is Dictionary else {})
+
+	# Localization (inline). The presence of the KEY is the marker here, exactly as the presence
+	# of the FILE is on the disk arm - an absent key is a pre-localization payload. Accepts the
+	# localization.json document shape and a wrapper nesting, like the blocks around it; the two
+	# cannot be confused, because the document's own keys are schemaVersion/sourceLanguage/
+	# languages/strings, so an inner "localization" key is always the wrapper. The parse (degraded
+	# ladder, verbatim rows) is shared with the disk arm - the two arms must never diverge (the
+	# divergence lesson test_import_hardening.gd exists for).
+	if project_json.has("localization"):
+		var localization_data = project_json["localization"]
+		if localization_data is Dictionary and localization_data.has("localization"):
+			localization_data = localization_data["localization"]
+		_apply_localization(project,
+			localization_data if localization_data is Dictionary else {})
+
+	# Data assets (inline). Accepts both the flat asset table and the data-assets.json
+	# wrapper shape, the same way the characters block above accepts either nesting. The two
+	# cannot be confused: asset ids are always da_<32 hex>, so no asset can be keyed
+	# "dataAssets", and an inner "dataAssets" key is therefore always the wrapper.
+	if project_json.has("dataAssets"):
+		var data_assets_data = project_json["dataAssets"]
+		if data_assets_data is Dictionary and data_assets_data.has("dataAssets"):
+			# The WRAPPER shape carries the strings table too, and this arm must merge it for
+			# the same reason the disk arm does (localization spec §2's amendment): a .sfd
+			# declared string is a key into it. Reached only through the wrapper, because a
+			# flat asset table has no table to merge - the same asymmetry the characters block
+			# above lives with.
+			if data_assets_data.has("strings"):
+				var inline_data_asset_strings := _flatten_strings(data_assets_data["strings"])
+				for key in inline_data_asset_strings:
+					project.global_strings[key] = inline_data_asset_strings[key]
+			data_assets_data = data_assets_data["dataAssets"]
+		project.data_assets = _parse_data_assets(data_assets_data)
 
 	# Scripts (inline)
 	if project_json.has("scripts"):
@@ -532,6 +663,11 @@ func _parse_node_data(type_string: String, node_obj: Dictionary) -> Dictionary:
 		data["audioAllowSkip"] = data_src["audioAllowSkip"]
 	if data_src.has("character"):
 		data["character"] = data_src["character"]
+	# P4 id sibling of "character" (characters engine contract §1.3): additive on the wire,
+	# carried when shipped and absent otherwise. Resolution prefers the id; the path stays
+	# the fall-back.
+	if data_src.has("characterRefId"):
+		data["characterRefId"] = data_src["characterRefId"]
 
 	# Dialogue tags (presentation cues fired when the node is entered).
 	# Optional and additive: older files lack the key entirely. Guard that the
@@ -629,6 +765,7 @@ func _parse_node_data(type_string: String, node_obj: Dictionary) -> Dictionary:
 						"id": o.get("id", ""),
 						"name": o.get("name", ""),
 						"type": o.get("type", ""),
+						"isArray": o.get("isArray", false),
 					})
 			data["scriptOutputs"] = outputs
 		if iface.has("exits"):
@@ -660,6 +797,7 @@ func _parse_node_data(type_string: String, node_obj: Dictionary) -> Dictionary:
 					"id": o.get("id", ""),
 					"name": o.get("name", ""),
 					"type": o.get("type", ""),
+					"isArray": o.get("isArray", false),
 				})
 		data["scriptOutputs"] = outputs
 	if data_src.has("scriptExits") and not data.has("scriptExits"):
@@ -698,12 +836,33 @@ func _parse_node_data(type_string: String, node_obj: Dictionary) -> Dictionary:
 	if data_src.has("characterPath"):
 		data["characterPath"] = data_src["characterPath"]
 		data["variableName"] = data_src.get("variable", "")
+	# P4 id sibling of "characterPath" (characters engine contract §1.3): additive on the
+	# wire, carried when shipped and absent otherwise. Resolution prefers the id; the path
+	# stays the fall-back - the same rule as the dialogue block's characterRefId above.
+	if data_src.has("characterId"):
+		data["characterId"] = data_src["characterId"]
 	if data_src.has("variableName"):
 		data["variableName"] = data_src["variableName"]
 	if data_src.has("variableType"):
 		data["variableType"] = data_src["variableType"]
 	if data_src.has("isArray"):
 		data["isArray"] = data_src["isArray"]
+
+	# -- Data Assets (.sfd) ------------------------------------------------
+	# Only two fields are new here; the accessor's variableType / isArray /
+	# keyType / valueType snapshot rides the character-variable keys above and
+	# below, which is why json-export-strategy.ts spells them the same way.
+	#
+	# "assetId" belongs to the reference PILL and "variableId" to the two
+	# accessors, which carry no assetId of their own — the wire into their
+	# dataAsset pin is the binding (engine contract 2.2). The accessor's
+	# "variable" (its spawn-time display NAME) lands in data["variable"] via the
+	# common block at the top of this function; nothing reads it at run time,
+	# since the id is the binding, but it is what makes a warning legible.
+	if data_src.has("assetId"):
+		data["assetId"] = data_src["assetId"]
+	if data_src.has("variableId"):
+		data["variableId"] = data_src["variableId"]
 
 	# -- Map fields (per-variable map nodes and catalog op nodes) -----------
 	if data_src.has("keyType"):
@@ -848,15 +1007,317 @@ func _parse_character_variables(raw: Dictionary) -> Dictionary:
 		elif var_obj.has("value"):
 			value = _parse_variant(var_obj["value"], type_string)
 		result[var_name] = {
+			"id": str(var_key),
 			"name": var_name,
 			"type": var_type,
 			"value": value,
+			# The wire's array marker, carried for the DA-surface character branch's
+			# scalar gate (P4): an array-valued row stores its ELEMENT type in "type", so
+			# without this flag a bool-array row would satisfy a scalar boolean read.
+			"is_array": bool(var_obj.get("isArray", false)),
 			"key_type": StoryFlowTypes.parse_variable_type(key_type_string),
 			"value_type": StoryFlowTypes.parse_variable_type(value_type_string),
 			"key_enum_values": key_enum_values,
 			"value_enum_values": value_enum_values,
 		}
 	return result
+
+
+## Parse a PRESENT character-index.json document into the id -> record-key table
+## (characters engine contract §3), or {} when a degraded rung refuses it. Both import
+## arms funnel through here, so the ladder and the verbatim rule cannot diverge.
+##
+## The degraded ladder - each refusing rung warns naming the consequence, once per import
+## since an import parses the document once:
+##   absent file          silent (a pre-P4 export; never reaches this function)
+##   empty characters map fine (a P4 project with no characters)
+##   unreadable document  warn + skip
+##   unknown/missing schemaVersion (a plain string compare against "1" - no schema-token
+##                        machinery exists in this plugin)  warn + skip
+##   no characters object warn + skip
+## A skipped index leaves the table empty, so characters keep resolving by path.
+##
+## Values are stored VERBATIM. The wire ships the exporter's lowercase-backslash record
+## keys, which are byte-identical to StoryFlowCharacter.normalize_path's output (to_lower +
+## forward->backslash) - normalize_path applied to a value would be a no-op by construction.
+## That byte-identity is why no normalization pass exists here or at lookup time; never add
+## one (a second normalization regime is exactly the two-regime drift this comment guards).
+##
+## No re-validation either: the editor never ships unmigrated character ids in the index
+## (they simply have no entry, contract §2), so the seed is trusted as-is - the same
+## posture as the data-assets block.
+func _parse_character_index(index_json: Dictionary) -> Dictionary:
+	if index_json.is_empty():
+		# {} is both _load_json_file's parse-failure answer (the error it pushed carries
+		# the details) and what a literal empty object parses to - the two cannot be told
+		# apart here, so the warn names both. An inline payload that is no object lands
+		# here too.
+		push_warning("StoryFlow: character-index.json is unreadable or empty - the character id bridge was skipped; characters keep resolving by path")
+		return {}
+
+	# TYPE-CHECKED, never str()-gated - the same rule the localization reader carries since
+	# de0ed70e, and the last reader in this plugin that still branched on a formatter's output.
+	# The schema version is a STRING in the format ("1"), but a hand-edited numeric parses to a
+	# FLOAT whose printed form is Godot-version-dependent: 4.3 renders 1.0 as "1" and 4.6 as
+	# "1.0", so the old str() gate ACCEPTED that file on one Godot and silently skipped the id
+	# bridge on another. Requiring a genuine String removes the engine from the decision. It also
+	# gives up the numeric tolerance the old comment claimed from Unity, deliberately: matching
+	# Unreal's refusal is worth more than matching Unity's leniency when the third option is
+	# behaving differently per Godot build. The str() in the MESSAGE below is display-only and
+	# nothing branches on it.
+	var declared_version = index_json.get("schemaVersion")
+	if not (declared_version is String) or declared_version != "1":
+		# Absent and present-but-empty read differently in the warn - <missing> vs '' -
+		# the same distinction both sibling plugins print (the Unreal spelling).
+		var shown: String = str(declared_version) if index_json.has("schemaVersion") else "<missing>"
+		push_warning("StoryFlow: character-index.json has an unknown schemaVersion ('%s'; this plugin reads '1') - the character id bridge was skipped; characters keep resolving by path" % shown)
+		return {}
+
+	var chars = index_json.get("characters")
+	if not (chars is Dictionary):
+		push_warning("StoryFlow: character-index.json carries no characters object - the character id bridge was skipped; characters keep resolving by path")
+		return {}
+
+	var result: Dictionary = {}
+	for id in chars:
+		# Trusted-seed posture for malformed VALUES too: a non-String entry is skipped
+		# silently, precedent-exact with Unity's index reader - distinct from the
+		# unmigrated-id trust above, which is about entries the editor never ships.
+		if not (chars[id] is String):
+			continue
+		result[str(id)] = chars[id]
+	return result
+
+
+## Apply a PRESENT localization.json document (localization spec §9) to [param project], or leave
+## the project SOURCE-ONLY when a degraded rung refuses it. Both import arms funnel through here,
+## so the ladder and the verbatim-row rule cannot diverge.
+##
+## The degraded ladder - each refusing rung warns naming the consequence, once per import since an
+## import parses the document once:
+##   absent file/key      silent (a pre-localization export; never reaches this function)
+##   empty target tables  fine (a project whose author registered a language and translated
+##                        nothing still ships full tables of source text - and even a sidecar with
+##                        no tables at all is a LOCALIZED project, which is why the marker is set
+##                        before a single row is counted)
+##   unreadable document  warn + skip
+##   MISSING schemaVersion    warn + skip - a DISTINCT message from the rung below, because a
+##                        sidecar that declares no version and one that declares a version this
+##                        plugin cannot read are two different authoring situations; a .get()
+##                        with a default would answer the same thing for both and collapse them
+##   unsupported schemaVersion (a plain string compare against "1" - no schema-token machinery
+##                        exists in this plugin)  warn + skip
+##   no strings object    warn + skip
+## A skipped sidecar leaves has_localization false, so every string keeps resolving to its source
+## text exactly as it did before this file existed.
+##
+## THE TABLES ARE FULL AND PRE-RESOLVED: the export already applied every §7 fallback (an OUTDATED
+## row carries the OLD translation per user ruling 2, an UNTRANSLATED or CLEARED one carries the
+## source text, an ORPHAN has no row at all). Nothing here computes a status or compares a hash,
+## and the lookup that reads these tables holds no rule beyond the tiers in
+## StoryFlowLocalization.look_up.
+##
+## THE ID SET IS THE SHIPPED SET - the ids that KEYED an artifact this export wrote. `.sfui` widget
+## and dropdown strings have NO rows here: `.sfui` documents never reach a plugin, and their text
+## localizes in the HTML lane. Their absence is the contract, not a missing feature, and nothing
+## downstream should infer a bug from it.
+##
+## Ids and texts are stored VERBATIM and ids are OPAQUE: this plugin never parses one, and the
+## only thing it ever does with one is look it up.
+func _apply_localization(project: StoryFlowProject, localization_json: Dictionary) -> void:
+	if localization_json.is_empty():
+		# {} is both _load_json_file's parse-failure answer (the error it pushed carries the
+		# details) and what a literal empty object parses to - the two cannot be told apart here,
+		# so the warn names both. An inline payload that is no object lands here too.
+		push_warning("StoryFlow: localization.json is unreadable or empty - the language tables were skipped; strings keep resolving to their source text")
+		return
+
+	if not localization_json.has("schemaVersion"):
+		push_warning("StoryFlow: localization.json declares no schemaVersion (this plugin reads '1') - the language tables were skipped; strings keep resolving to their source text")
+		return
+
+	# A TYPE-CHECKED compare, never str() on the parsed value - no schema-token machinery exists in
+	# this plugin, but the gate still has to be version-independent.
+	#
+	# WHY THE VALUE IS NEVER STRINGIFIED: Godot's JSON parses every number as a FLOAT, and the way
+	# a whole-valued float PRINTS is version-dependent - Godot 4.3 renders 1.0 as "1" while 4.6
+	# renders it as "1.0". A `str(value) != "1"` gate would therefore ACCEPT an unquoted numeric 1
+	# on one engine build and REFUSE it on another, which is a degraded ladder that answers
+	# differently depending on which Godot a game happens to ship on. Requiring a genuine String
+	# removes the engine from the decision entirely: the schema version is a STRING in the format
+	# (the exporter always writes the quoted "1"), so anything else - float, int, bool, array - is
+	# an unsupported version and lands here. The str() in the MESSAGE is display-only and may well
+	# print version-dependently; nothing branches on it.
+	#
+	# The message is DISTINCT from the missing-field rung above on purpose: a sidecar that declares
+	# no version and one that declares a version this plugin cannot read are two different
+	# authoring situations, and a `.get()` with a default would collapse them into one. A
+	# present-but-empty version prints as '' here, which is what keeps that case readable too.
+	var declared_version = localization_json["schemaVersion"]
+	if not (declared_version is String) or declared_version != "1":
+		push_warning("StoryFlow: localization.json declares schemaVersion '%s', which this plugin does not support (it reads the string '1') - the language tables were skipped; strings keep resolving to their source text" % str(declared_version))
+		return
+
+	var strings = localization_json.get("strings")
+	if not (strings is Dictionary):
+		push_warning("StoryFlow: localization.json carries no strings object - the language tables were skipped; strings keep resolving to their source text")
+		return
+
+	# Past every rung: this project IS localized. Set before a single row is counted, so a
+	# present-but-empty sidecar is still a localized project.
+	project.has_localization = true
+
+	# EVERY VALUE BELOW IS TYPE-CHECKED RATHER THAN STRINGIFIED, for the reason spelled out at the
+	# version gate above: a parsed number is a float whose printed form is Godot-version-dependent,
+	# so str() on anything read out of this document would make the import answer differently on
+	# different engine builds. Codes, labels and rows are STRINGS in the format; a non-string is
+	# malformed and is ignored rather than coerced. (Table and row KEYS are exempt - JSON object
+	# keys are always strings.)
+	var declared_source = localization_json.get("sourceLanguage", "")
+	if declared_source is String and not declared_source.is_empty():
+		project.source_language = declared_source
+
+	# Registry ORDER is the author's and is preserved: it is the order a picker draws.
+	var declared_languages = localization_json.get("languages", [])
+	if declared_languages is Array:
+		for entry in declared_languages:
+			if not (entry is Dictionary):
+				continue
+			var code = entry.get("code", "")
+			if not (code is String) or code.is_empty():
+				continue
+			var label = entry.get("name", "")
+			var has_label: bool = label is String and not label.is_empty()
+			project.languages.append({"code": code, "name": label if has_label else code})
+
+	for language_code in strings:
+		var table = strings[language_code]
+		if not (table is Dictionary):
+			continue
+		var rows: Dictionary = {}
+		for key in table:
+			# Trusted-seed posture for malformed VALUES, precedent-exact with the character
+			# index's reader: a non-String row is skipped silently.
+			if not (table[key] is String):
+				continue
+			rows[str(key)] = table[key]
+		project.language_strings[str(language_code)] = rows
+
+
+# =============================================================================
+# Data Asset Parsing
+# =============================================================================
+
+## Parse the exported data-assets.json table (engine contract 2.1) into raw definitions:
+## asset_id → { "id", "name", "parent", "variables": Array[declaration], "raw_overrides" }.
+##
+## Declarations are parsed IN ORDER — declaration order is contractual. Overrides are kept as
+## RAW JSON, because typing one needs the declaration that owns its id, which may live on an
+## ancestor that has not been parsed yet; StoryFlowDataAssetStore.build_seed types them in a
+## second pass once every level is present.
+func _parse_data_assets(raw) -> Dictionary:
+	var result: Dictionary = {}
+	if not raw is Dictionary:
+		return result
+
+	for asset_id in raw:
+		var asset_obj = raw[asset_id]
+		if not asset_obj is Dictionary:
+			continue
+
+		var variables: Array = []
+		var variables_raw = asset_obj.get("variables", [])
+		if variables_raw is Array:
+			for var_obj in variables_raw:
+				if not var_obj is Dictionary:
+					continue
+				var declaration := _parse_data_asset_variable(var_obj)
+				if not declaration.is_empty():
+					variables.append(declaration)
+
+		var overrides_raw = asset_obj.get("overrides", {})
+		var parent = asset_obj.get("parent", null)
+		result[str(asset_id)] = {
+			# The MAP KEY is the authoritative assetId: it is what the pills, the resolver
+			# and the save key all use.
+			"id": str(asset_id),
+			"name": str(asset_obj.get("name", "")),
+			"parent": "" if parent == null else str(parent),
+			"variables": variables,
+			"raw_overrides": overrides_raw if overrides_raw is Dictionary else {},
+		}
+
+	return result
+
+
+## Parse one .sfd variable declaration, or an empty Dictionary when the row is DROPPED.
+##
+## Two kinds of row are dropped rather than carried:
+##  - "category" rows, which are section headers with no value at all and can never be
+##    resolved. StoryFlowTypes.VariableType has no CATEGORY member, and the contract's
+##    category-drop sanction lets a typed engine drop them at import — Unreal drops, so
+##    Godot drops. Silent, because it is the normal shape of an authored .sfd.
+##  - rows whose type string the shared table does not know, which is a broken or
+##    newer-than-this-plugin export and worth a warning.
+##
+## The declared VALUE is typed by StoryFlowDataAssetStore.type_value — the same one rule that
+## types stored overrides — so a declaration default and an override of it can never disagree
+## about the shape a read hands out. A row with no usable value keeps its TYPE DEFAULT and
+## still resolves; "is this id declared?" and "does it carry a value?" are different questions.
+func _parse_data_asset_variable(var_obj: Dictionary) -> Dictionary:
+	var var_id := str(var_obj.get("id", ""))
+	if var_id.is_empty():
+		return {}
+
+	var type_string := str(var_obj.get("type", ""))
+	if type_string == "category":
+		return {}
+
+	var var_type: StoryFlowTypes.VariableType = StoryFlowTypes.parse_variable_type(type_string)
+	if var_type == StoryFlowTypes.VariableType.NONE:
+		push_warning("StoryFlow: Data Asset variable '%s' has unknown type '%s' - dropping the declaration" % [var_obj.get("name", var_id), type_string])
+		return {}
+
+	var key_type_string := ""
+	var value_type_string := ""
+	var key_enum_values: Array = []
+	var value_enum_values: Array = []
+	if var_type == StoryFlowTypes.VariableType.MAP:
+		key_type_string = str(var_obj.get("keyType", "string"))
+		value_type_string = str(var_obj.get("valueType", "string"))
+		if var_obj.has("keyEnumValues"):
+			for ev in var_obj["keyEnumValues"]:
+				key_enum_values.append(str(ev))
+		if var_obj.has("valueEnumValues"):
+			for ev in var_obj["valueEnumValues"]:
+				value_enum_values.append(str(ev))
+
+	var enum_values: Array = []
+	if var_obj.has("enumValues"):
+		for ev in var_obj["enumValues"]:
+			enum_values.append(str(ev))
+
+	var declaration: Dictionary = {
+		"id": var_id,
+		"name": str(var_obj.get("name", "")),
+		"type": var_type,
+		"is_array": bool(var_obj.get("isArray", false)),
+		"key_type": StoryFlowTypes.parse_variable_type(key_type_string),
+		"value_type": StoryFlowTypes.parse_variable_type(value_type_string),
+		"enum_values": enum_values,
+		"key_enum_values": key_enum_values,
+		"value_enum_values": value_enum_values,
+		"value": null,
+	}
+
+	var value: StoryFlowVariant = null
+	if var_obj.has("value"):
+		value = StoryFlowDataAssetStore.type_value(declaration, var_obj["value"])
+	if value == null:
+		value = StoryFlowDataAssetStore.type_default(declaration)
+	declaration["value"] = value
+
+	return declaration
 
 
 # =============================================================================
@@ -894,7 +1355,10 @@ func _parse_map_entries(entries_raw: Array, key_type_string: String, value_type_
 		var key = _coerce_map_key(entry_obj["key"], key_type_string)
 		# String-family values store the exported strings-table key / asset id
 		# verbatim; resolution happens at read time, exactly like scalar variables
-		entries[key] = _parse_variant(entry_obj.get("value"), value_type_string)
+		var value := _parse_variant(entry_obj.get("value"), value_type_string)
+		if value_type_string == "string" and entry_obj.get("value") is String:
+			value.string_key = entry_obj["value"]
+		entries[key] = value
 	return entries
 
 
@@ -934,10 +1398,14 @@ func _parse_variant(value, type_hint: String = "") -> StoryFlowVariant:
 			variant.set_enum(value)
 		else:
 			variant.set_string(value)
+			variant.string_is_literal = false
 	elif value is Array:
 		var arr: Array = []
 		for item in value:
-			arr.append(_parse_variant(item, type_hint))
+			var element := _parse_variant(item, type_hint)
+			if type_hint == "string" and item is String:
+				element.string_key = item
+			arr.append(element)
 		variant.set_array(arr)
 
 	return variant
