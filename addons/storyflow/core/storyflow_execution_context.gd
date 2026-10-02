@@ -16,6 +16,7 @@ const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
 
 const MAX_EVALUATION_DEPTH := 100
 const MAX_PROCESSING_DEPTH := 1000
+## Legacy default API; execution uses the project's max_script_nesting setting.
 const MAX_SCRIPT_DEPTH := 20
 const MAX_FLOW_DEPTH := 50
 

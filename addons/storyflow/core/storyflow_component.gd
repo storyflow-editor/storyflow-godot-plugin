@@ -2103,8 +2103,11 @@ func _handle_run_script(node: Dictionary) -> void:
 	pending_state.output_values = {}
 	pending_state.output_arrays = {}
 	pending_state.output_types = {}
-	if _context.call_stack.size() >= StoryFlowExecutionContext.MAX_SCRIPT_DEPTH:
-		_report_error("Max script nesting depth exceeded (%d)" % StoryFlowExecutionContext.MAX_SCRIPT_DEPTH)
+	var mgr := get_manager()
+	var project: StoryFlowProject = mgr.get_project() if mgr else null
+	var max_script_nesting := StoryFlowProject.normalize_max_script_nesting(project.max_script_nesting) if project else StoryFlowExecutionContext.MAX_SCRIPT_DEPTH
+	if _context.call_stack.size() >= max_script_nesting:
+		_report_error("Max script nesting depth exceeded (%d)" % max_script_nesting)
 		return
 
 	var data: Dictionary = node.get("data", {})
@@ -2113,11 +2116,6 @@ func _handle_run_script(node: Dictionary) -> void:
 		_report_error("RunScript node has no script path")
 		return
 
-	var mgr := get_manager()
-	if not mgr:
-		return
-
-	var project: StoryFlowProject = mgr.get_project()
 	if not project:
 		return
 

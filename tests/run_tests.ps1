@@ -78,7 +78,7 @@ foreach ($testName in @('driver', 'runtime', 'analyzer', 'component')) {
         $failed = 1
     }
 }
-foreach ($testName in @('nested_reference_interpolation', 'data_reference_nodes', 'data_asset_override_localization')) {
+foreach ($testName in @('nested_reference_interpolation', 'data_reference_nodes', 'data_asset_override_localization', 'script_nesting')) {
     $testOutput = @(& $GodotExe --headless --quit-after 600 --path $repoRoot --script "res://tests/test_$testName.gd" 2>&1)
     $testCode = $LASTEXITCODE
     $testOutput | ForEach-Object { Write-Output $_ }
