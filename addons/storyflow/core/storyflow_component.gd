@@ -929,9 +929,8 @@ func set_character_variable_by_id(character_id: String, variable_name: String, v
 # false. See _warn_data_asset_once.
 #
 # .sfd STRINGS RESOLVE AT THIS DOOR, and only where their PROVENANCE says they are content: a
-# DECLARED string value localizes, an override and a session write are handed back verbatim. That
-# is localization spec §2's amendment of 2026-08-27, which SUPERSEDES engine-contract 2.1's
-# literal-value posture; the rule itself lives once, in StoryFlowDataAssetStore.try_read, and
+# declaration or version 2 authored override localizes unless its declaration opts out. Legacy
+# overrides and all session writes stay literal. The rule lives in StoryFlowDataAssetStore.try_read, and
 # these accessors reach it by calling that door instead of try_resolve. Unlike
 # get_string_variable above, the running script's strings table is NOT consulted - see
 # _data_asset_locale.

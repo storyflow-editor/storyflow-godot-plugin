@@ -215,6 +215,7 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 	# content (StoryFlowDataAssetStore.try_read).
 	var data_assets_json: Dictionary = _load_json_file(build_dir.path_join("data-assets.json"))
 	if not data_assets_json.is_empty():
+		project.data_asset_localization_version = _data_asset_localization_version(data_assets_json)
 		# data-assets.json's OWN strings table, merged into the project's global table exactly
 		# as characters.json's is above — same helper, same `<code>.<key>` shape, same collision
 		# warning. It is the SOURCE TIER the .sfd read door falls through to when the language
@@ -454,6 +455,7 @@ func import_project_from_json(project_json: Dictionary) -> StoryFlowProject:
 	if project_json.has("dataAssets"):
 		var data_assets_data = project_json["dataAssets"]
 		if data_assets_data is Dictionary and data_assets_data.has("dataAssets"):
+			project.data_asset_localization_version = _data_asset_localization_version(data_assets_data)
 			# The WRAPPER shape carries the strings table too, and this arm must merge it for
 			# the same reason the disk arm does (localization spec §2's amendment): a .sfd
 			# declared string is a key into it. Reached only through the wrapper, because a
@@ -1208,6 +1210,12 @@ func _apply_localization(project: StoryFlowProject, localization_json: Dictionar
 # Data Asset Parsing
 # =============================================================================
 
+## Only the numeric version 2 opts in; absent/legacy or unsupported metadata stays conservative.
+func _data_asset_localization_version(document: Dictionary) -> int:
+	var version = document.get("localizationVersion", 1)
+	return 2 if (version is int or version is float) and version == 2 else 1
+
+
 ## Parse the exported data-assets.json table (engine contract 2.1) into raw definitions:
 ## asset_id → { "id", "name", "parent", "variables": Array[declaration], "raw_overrides" }.
 ##
@@ -1301,6 +1309,7 @@ func _parse_data_asset_variable(var_obj: Dictionary) -> Dictionary:
 		"id": var_id,
 		"name": str(var_obj.get("name", "")),
 		"type": var_type,
+		"localizable": var_obj.get("localizable", true) != false,
 		"is_array": bool(var_obj.get("isArray", false)),
 		"key_type": StoryFlowTypes.parse_variable_type(key_type_string),
 		"value_type": StoryFlowTypes.parse_variable_type(value_type_string),

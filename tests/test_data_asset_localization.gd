@@ -1,4 +1,6 @@
 extends SceneTree
+## Legacy exports only: the frozen fixtures omit localizationVersion. Version 2 coverage lives
+## in test_data_asset_override_localization.gd; its file overrides can localize.
 ## Headless tests for the .sfd LOCALIZATION GATE — localization spec §2's amendment of
 ## 2026-08-27, which SUPERSEDES engine-contract 2.1's literal-value posture: a Data Asset's
 ## DECLARED string values are player-facing prose that ship as stable keys in data-assets.json's

@@ -1,0 +1,82 @@
+{
+  "schemaVersion": "1",
+  "sourceLanguage": "en",
+  "languages": [
+    {
+      "code": "fr",
+      "name": "French"
+    },
+    {
+      "code": "es",
+      "name": "Spanish"
+    }
+  ],
+  "strings": {
+    "fr": {
+      "1.title": "Salutations",
+      "1.text": "Bien le bonjour.",
+      "4.value": "Champion",
+      "8.title": "Retort",
+      "8.text": "You again.",
+      "da_villain00000000000000000000000.cf_name": "Morgrave le Fourbe",
+      "da_villain00000000000000000000000.v-vil-title.value": "Usurper of the Vale",
+      "da_villain00000000000000000000000.v-vil-traits.value.0": "Cruel",
+      "da_villain00000000000000000000000.v-vil-traits.value.1": "Patient",
+      "da_villain00000000000000000000000.v-vil-loadout.value.weapon": "Dagger",
+      "da_villain00000000000000000000000.v-vil-loadout.value.armor": "Cloak",
+      "da_hero0000000000000000000000000a.cf_name": "Sire Roland",
+      "da_archetype000000000000000000000.v-arch-honor.value": "Neutre",
+      "da_hero0000000000000000000000000a.v-hero-title.value": "Knight of the Vale",
+      "da_hero0000000000000000000000000a.v-hero-traits.value.0": "Brave",
+      "da_hero0000000000000000000000000a.v-hero-traits.value.1": "Loyal",
+      "da_hero0000000000000000000000000a.v-hero-loadout.value.weapon": "Longsword",
+      "da_hero0000000000000000000000000a.v-hero-loadout.value.armor": "Plate",
+      "da_archetype000000000000000000000.cf_name": "Wanderer",
+      "v-relic-oath.value": "Sworn at the ford.",
+      "data.da_itemrelic000000000000000000000.v-item-desc.value": "Une lame aux anciens chagrins.",
+      "data.da_itemrelic000000000000000000000.v-item-tags.value.0": "Ancien",
+      "data.da_itemrelic000000000000000000000.v-item-tags.value.1": "Unique en son genre",
+      "data.da_itemrelic000000000000000000000.v-item-slots.value.hand.slot/opaque": "Main de relique",
+      "data.da_itemrelic000000000000000000000.v-item-slots.value.back": "Dos de relique",
+      "v-item-name.value": "Epee de fer",
+      "v-item-desc.value": "Une lame simple, faite avec soin.",
+      "v-item-tags.value.0": "Arme",
+      "v-item-tags.value.1": "Common",
+      "v-item-slots.value.hand": "Main directrice",
+      "v-item-slots.value.back": "Sheathed at the Back"
+    },
+    "es": {
+      "1.title": "Saludo",
+      "1.text": "Well met.",
+      "4.value": "Champion",
+      "8.title": "Retort",
+      "8.text": "Otra vez tu.",
+      "da_villain00000000000000000000000.cf_name": "Morgrave",
+      "da_villain00000000000000000000000.v-vil-title.value": "Usurpador",
+      "da_villain00000000000000000000000.v-vil-traits.value.0": "Cruel",
+      "da_villain00000000000000000000000.v-vil-traits.value.1": "Patient",
+      "da_villain00000000000000000000000.v-vil-loadout.value.weapon": "Dagger",
+      "da_villain00000000000000000000000.v-vil-loadout.value.armor": "Cloak",
+      "da_hero0000000000000000000000000a.cf_name": "Sir Roland",
+      "da_archetype000000000000000000000.v-arch-honor.value": "Imparcial",
+      "da_hero0000000000000000000000000a.v-hero-title.value": "Caballero del Valle",
+      "da_hero0000000000000000000000000a.v-hero-traits.value.0": "Brave",
+      "da_hero0000000000000000000000000a.v-hero-traits.value.1": "Loyal",
+      "da_hero0000000000000000000000000a.v-hero-loadout.value.weapon": "Longsword",
+      "da_hero0000000000000000000000000a.v-hero-loadout.value.armor": "Plate",
+      "da_archetype000000000000000000000.cf_name": "Wanderer",
+      "v-relic-oath.value": "Sworn at the ford.",
+      "data.da_itemrelic000000000000000000000.v-item-desc.value": "Una hoja de antiguos pesares.",
+      "data.da_itemrelic000000000000000000000.v-item-tags.value.0": "Antiguo",
+      "data.da_itemrelic000000000000000000000.v-item-tags.value.1": "Unico",
+      "data.da_itemrelic000000000000000000000.v-item-slots.value.hand.slot/opaque": "Mano de reliquia",
+      "data.da_itemrelic000000000000000000000.v-item-slots.value.back": "Espalda de reliquia",
+      "v-item-name.value": "Iron Sword",
+      "v-item-desc.value": "Una hoja sencilla, bien forjada.",
+      "v-item-tags.value.0": "Weapon",
+      "v-item-tags.value.1": "Common",
+      "v-item-slots.value.hand": "Main Hand",
+      "v-item-slots.value.back": "En la vaina"
+    }
+  }
+}

@@ -1045,8 +1045,8 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 		# arm here hands back a value whose string IS a table key, which is why the tail's
 		# _resolve_string_key exists at all; a .sfd read has already been through the store's own
 		# door, which resolved it or deliberately did not, GATED ON PROVENANCE
-		# (StoryFlowDataAssetStore.try_read — declarations localize, overrides and session writes
-		# never do). Running this ladder over the answer would be a SECOND door gated on SHAPE,
+		# (StoryFlowDataAssetStore.try_read — opted-in declarations and version 2 file overrides
+		# localize; session writes never do). Running this ladder over the answer would be a SECOND door gated on SHAPE,
 		# and it would undo exactly the case the gate exists for: a session write whose value
 		# happens to be a real key would come back as somebody else's prose, invisibly in the
 		# source language.

@@ -36,6 +36,8 @@ var character_id_index: Dictionary = {}
 ## on an ancestor this table has not reached yet, so StoryFlowDataAssetStore.build_seed types
 ## them in a second pass once every level is present.
 var data_assets: Dictionary = {}
+## data-assets.json localizationVersion. Legacy exports localize declarations only.
+var data_asset_localization_version: int = 1
 
 ## "lang.key" → "value"
 var global_strings: Dictionary = {}
