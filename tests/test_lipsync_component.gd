@@ -21,6 +21,7 @@ func _initialize() -> void:
 	await _test_redraw_and_fresh_entry_peak()
 	await _test_finished_audio_releases_analysis()
 	await _test_actor_reentry()
+	await _test_restored_entry()
 	await _test_explicit_analysis_bus()
 	await _test_voiced_analysis_failure_stays_silent()
 	await create_timer(0.1).timeout
@@ -45,6 +46,8 @@ func _make_face() -> Dictionary:
 	actor.add_child(face)
 	var lipsync := LipsyncScript.new()
 	actor.add_child(lipsync)
+	# Idle pose selection must not depend on resource/object allocation order.
+	lipsync._driver._random.seed = 1
 	return {"actor": actor, "face": face, "lipsync": lipsync}
 
 
@@ -85,8 +88,10 @@ func _test_text_line_and_teardown() -> void:
 			break
 	_check(jaw_moved, "text-only dialogue animates the real mesh")
 	source.dialogue_ended.emit()
-	for i in 20:
+	for i in 90:
 		await process_frame
+		if is_zero_approx(parts.face.get_blend_shape_value(0)):
+			break
 	_check(not lipsync.is_lipsync_active(), "dialogue end clears line ownership")
 	_check(is_zero_approx(parts.face.get_blend_shape_value(0)), "dialogue end closes the owned morph")
 	lipsync.enabled = false
@@ -402,6 +407,7 @@ func _test_actor_reentry() -> void:
 	root.add_child(parts.actor)
 	await process_frame
 	await process_frame
+	lipsync._driver._random.seed = 1
 	line.node_id = "after-readd"
 	source.dialogue_updated.emit(line)
 	_check(lipsync.is_lipsync_active(), "readded actor binds and hears new dialogue")
@@ -483,4 +489,51 @@ func _test_voiced_analysis_failure_stays_silent() -> void:
 		manual_moved = manual_moved or parts.face.get_blend_shape_value(0) > 0.0001
 	_check(not manual_moved, "manual playing audio without analysis also stays silent")
 	parts.actor.free()
+	source.free()
+
+
+func _test_restored_entry() -> void:
+	var source := FixtureSourceScript.new()
+	root.add_child(source)
+	var parts := _make_face()
+	var lipsync: Node = parts.lipsync
+	lipsync.source = source
+	await process_frame
+	var line := StateScript.new()
+	line.is_valid = true
+	line.node_id = "before-back"
+	source.fixture_entry_serial = 1
+	source.fixture_dialogue = line
+	source.dialogue_updated.emit(line)
+	_check(lipsync.is_lipsync_active(), "ordinary entry owns lipsync before Back")
+	parts.face.set_blend_shape_value(0, 0.4)
+	line.node_id = "restored"
+	line.set("is_restored", true)
+	source.fixture_entry_serial = 2
+	source.dialogue_restored.emit(line)
+	_check(not lipsync.is_lipsync_active() and is_zero_approx(parts.face.get_blend_shape_value(0)), "restored entry releases prior lipsync and closes mesh immediately")
+	source.dialogue_updated.emit(line)
+	_check(not lipsync.is_lipsync_active(), "redraw of fully revealed restored entry stays closed")
+	root.remove_child(parts.actor)
+	root.add_child(parts.actor)
+	await process_frame
+	await process_frame
+	_check(source.get_signal_connection_list("dialogue_restored").size() == 1 and not lipsync.is_lipsync_active(), "rebind keeps one restored listener and respects restored presentation")
+	lipsync.enabled = false
+	lipsync.enabled = true
+	_check(not lipsync.is_lipsync_active(), "re-enabled lipsync leaves restored entry fully revealed")
+	var manual := AudioStreamPlayer.new()
+	parts.actor.add_child(manual)
+	lipsync.start_lipsync_for(manual)
+	source.dialogue_restored.emit(line)
+	source.dialogue_updated.emit(line)
+	_check(lipsync.is_lipsync_active(), "restoration and redraw preserve explicit manual lipsync")
+	lipsync.stop_lipsync()
+	line.set("is_restored", false)
+	line.node_id = "next-fresh"
+	source.fixture_entry_serial = 3
+	source.dialogue_updated.emit(line)
+	_check(lipsync.is_lipsync_active(), "next fresh entry resumes lipsync normally")
+	parts.actor.free()
+	_check(source.get_signal_connection_list("dialogue_restored").is_empty(), "disposed lipsync disconnects restored listener")
 	source.free()

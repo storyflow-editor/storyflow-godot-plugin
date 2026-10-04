@@ -24,6 +24,8 @@ const MAX_FLOW_DEPTH := 50
 # Current Execution State
 # =============================================================================
 
+var rollback_rng = null
+var persistent_image_script: String = ""
 var current_script: StoryFlowScript = null
 var current_node_id: String = ""
 var is_waiting_for_input: bool = false
@@ -302,6 +304,8 @@ func find_variable_by_name(name: String) -> Dictionary:
 
 
 func reset() -> void:
+	rollback_rng = null
+	persistent_image_script = ""
 	current_script = null
 	current_node_id = ""
 	is_waiting_for_input = false

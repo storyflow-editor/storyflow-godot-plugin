@@ -244,6 +244,7 @@ enum NodeType {
 	FOR_EACH_DATA_LOOP,
 	GET_DATA,
 	SET_DATA,
+	BLOCK_ROLLBACK,
 }
 
 enum VariableType {
@@ -343,6 +344,7 @@ static var _node_type_map: Dictionary = {
 	"equalEnum": NodeType.EQUAL_ENUM,
 	"switchOnEnum": NodeType.SWITCH_ON_ENUM,
 	"randomBranch": NodeType.RANDOM_BRANCH,
+	"blockRollback": NodeType.BLOCK_ROLLBACK,
 
 	# Type Conversion
 	"intToBoolean": NodeType.INT_TO_BOOLEAN,

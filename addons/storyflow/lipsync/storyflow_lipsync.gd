@@ -228,6 +228,7 @@ func _bind_source() -> void:
 		return
 	_warned_no_source = false
 	_bound_source.dialogue_updated.connect(_on_dialogue_updated)
+	_bound_source.dialogue_restored.connect(_on_dialogue_restored)
 	_bound_source.dialogue_ended.connect(_on_dialogue_ended)
 	if _bound_source.is_dialogue_active():
 		var state = _bound_source.get_current_dialogue()
@@ -239,6 +240,8 @@ func _unbind_source() -> void:
 	if is_instance_valid(_bound_source):
 		if _bound_source.dialogue_updated.is_connected(_on_dialogue_updated):
 			_bound_source.dialogue_updated.disconnect(_on_dialogue_updated)
+		if _bound_source.dialogue_restored.is_connected(_on_dialogue_restored):
+			_bound_source.dialogue_restored.disconnect(_on_dialogue_restored)
 		if _bound_source.dialogue_ended.is_connected(_on_dialogue_ended):
 			_bound_source.dialogue_ended.disconnect(_on_dialogue_ended)
 	_bound_source = null
@@ -246,6 +249,9 @@ func _unbind_source() -> void:
 
 func _on_dialogue_updated(state) -> void:
 	if not enabled or not state:
+		return
+	if state.is_restored:
+		_on_dialogue_restored(state)
 		return
 	if not _speaker_is_mine():
 		if not _manual:
@@ -270,6 +276,20 @@ func _on_dialogue_updated(state) -> void:
 			_driver.reset_level()
 	elif not _is_playing_line_audio():
 		_release_player()
+
+
+func _on_dialogue_restored(state) -> void:
+	# Back fully reveals the entry. Catch-up and redraw must leave it at rest too.
+	if not enabled or _manual:
+		return
+	# An earlier listener can replace the session before this signal reaches us.
+	if not is_instance_valid(_bound_source) or not state or not state.is_restored or _bound_source.get_current_dialogue() != state:
+		return
+	stop_lipsync()
+	if _driver:
+		_driver.advance_silent(10.0)
+	_zero_owned_shapes()
+	_at_rest = true
 
 
 func _on_dialogue_ended() -> void:

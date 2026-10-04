@@ -1,0 +1,84 @@
+{
+  "startNode": "0",
+  "nodes": {
+    "0": {
+      "type": "start",
+      "id": "0"
+    },
+    "A": {
+      "type": "dialogue",
+      "id": "A",
+      "text": "A.text",
+      "choices": []
+    },
+    "B": {
+      "type": "dialogue",
+      "id": "B",
+      "text": "B.text",
+      "choices": []
+    },
+    "barrier": {
+      "type": "blockRollback",
+      "id": "barrier"
+    },
+    "C": {
+      "type": "dialogue",
+      "id": "C",
+      "text": "C.text",
+      "choices": []
+    },
+    "D": {
+      "type": "dialogue",
+      "id": "D",
+      "text": "D.text",
+      "choices": []
+    }
+  },
+  "connections": [
+    {
+      "id": "0--A-0",
+      "source": "0",
+      "target": "A",
+      "sourceHandle": "source-0-",
+      "targetHandle": "target-A-0"
+    },
+    {
+      "id": "A--B-0",
+      "source": "A",
+      "target": "B",
+      "sourceHandle": "source-A-",
+      "targetHandle": "target-B-0"
+    },
+    {
+      "id": "B--barrier-0",
+      "source": "B",
+      "target": "barrier",
+      "sourceHandle": "source-B-",
+      "targetHandle": "target-barrier-0"
+    },
+    {
+      "id": "barrier-1-C-0",
+      "source": "barrier",
+      "target": "C",
+      "sourceHandle": "source-barrier-1",
+      "targetHandle": "target-C-0"
+    },
+    {
+      "id": "C--D-0",
+      "source": "C",
+      "target": "D",
+      "sourceHandle": "source-C-",
+      "targetHandle": "target-D-0"
+    }
+  ],
+  "variables": {},
+  "strings": {
+    "en": {
+      "A.text": "A",
+      "B.text": "B",
+      "C.text": "C",
+      "D.text": "D"
+    }
+  },
+  "assets": {}
+}

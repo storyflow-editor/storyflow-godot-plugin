@@ -16,6 +16,8 @@ var _owner: Node = null
 var _bus: StringName = &"Master"
 var _volume_db: float = 0.0
 var _playback_serial: int = 0
+var _playback_identity: int = 0
+var _finished_callback: Callable
 
 
 func initialize(owner: Node, bus: StringName, volume_db: float) -> void:
@@ -40,16 +42,20 @@ func play(audio_stream: AudioStream, loop: bool) -> void:
 	# Keep an optional lipsync analysis route across line changes. Its bus forwards to _bus.
 	_looping = loop
 
-	if not _player.finished.is_connected(_on_audio_finished):
-		_player.finished.connect(_on_audio_finished)
-
+	_finished_callback = _on_audio_finished.bind(_playback_serial)
+	_player.finished.connect(_finished_callback)
+	_player.stream_paused = false
 	_player.play()
 
 
 func stop() -> void:
 	_playback_serial += 1
-	if is_instance_valid(_player) and _player.playing:
+	_playback_identity = _playback_serial
+	if is_instance_valid(_player):
+		if _finished_callback.is_valid() and _player.finished.is_connected(_finished_callback):
+			_player.finished.disconnect(_finished_callback)
 		_player.stop()
+	_finished_callback = Callable()
 	_looping = false
 
 
@@ -62,7 +68,12 @@ func get_player() -> AudioStreamPlayer:
 
 
 func get_playback_serial() -> int:
-	return _playback_serial
+	return _playback_identity
+
+
+## Recovery resumes the same presentation; completion callbacks keep their newer generation.
+func restore_playback_identity(identity: int) -> void:
+	_playback_identity = identity
 
 
 func resolve_audio_asset(audio_path: String, script: StoryFlowScript, manager: Node) -> AudioStream:
@@ -95,7 +106,9 @@ func _try_load_asset(assets: Dictionary, key: String) -> Resource:
 	return null
 
 
-func _on_audio_finished() -> void:
+func _on_audio_finished(serial: int) -> void:
+	if serial != _playback_serial:
+		return
 	if _looping and is_instance_valid(_player):
 		_player.play()
 	else:

@@ -207,14 +207,12 @@ func _test_round_trip_and_resave() -> void:
 	# declaration-typed load buys — a read cannot tell an enum from a string, but the next save
 	# can.
 	#
-	# BYTE-IDENTITY IS THE INSTRUMENT, NOT THE CONTRACT. It is simply the sharpest comparison
-	# available here, and it over-pins: it also asserts key ORDER, which the format does not
-	# require of anyone (JSON object key order is not meaningful, and this only holds because
-	# JSON.stringify sorts). A deliberate change to how keys are ordered is expected to update
-	# this assertion; a change to what is IN the document is not.
+	# Compare semantic JSON: 4.6 can emit 42.0 before typed load and 42 after it.
+	# Object key order and integral-number spelling are not save-format contracts;
+	# array order and all values remain significant. Typed restoration is checked above.
 	_check("resave writes a slot", _manager.save_to_slot("unified_rt2"))
-	_check("save -> load -> save is byte-identical",
-		_read_slot_text("unified_rt") == _read_slot_text("unified_rt2"))
+	_check("save -> load -> save preserves semantic JSON",
+		_json_equal(JSON.parse_string(_read_slot_text("unified_rt")), JSON.parse_string(_read_slot_text("unified_rt2"))))
 
 
 # =============================================================================

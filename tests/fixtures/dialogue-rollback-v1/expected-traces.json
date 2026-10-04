@@ -1,0 +1,58 @@
+{
+  "purchase": [
+    { "op": "assert", "state": { "dialogue": "A", "globals": { "Gold": 100, "Inventory": ["axe"], "Counts": [{ "key": "axe", "value": 1 }] }, "canGoBack": false, "options": ["buy", "leave"] } },
+    { "op": "choose", "id": "buy" },
+    { "op": "assert", "state": { "dialogue": "B", "globals": { "Gold": 90, "Inventory": ["axe", "sword"], "Counts": [{ "key": "axe", "value": 1 }, { "key": "sword", "value": 1 }] }, "canGoBack": true } },
+    { "op": "back" },
+    { "op": "assert", "state": { "dialogue": "A", "globals": { "Gold": 100, "Inventory": ["axe"], "Counts": [{ "key": "axe", "value": 1 }] }, "canGoBack": false, "options": ["buy", "leave"] } },
+    { "op": "choose", "id": "leave" },
+    { "op": "assert", "state": { "dialogue": "C", "globals": { "Gold": 100, "Inventory": ["axe"] }, "canGoBack": true } }
+  ],
+  "nested-loops": [
+    { "op": "assert", "state": { "dialogue": "Visit", "callDepth": 1, "loopCursors": [0, 0], "canGoBack": false } },
+    { "op": "advance" },
+    { "op": "assert", "state": { "dialogue": "Visit", "loopCursors": [0, 1] } },
+    { "op": "advance" },
+    { "op": "assert", "state": { "dialogue": "Visit", "loopCursors": [1, 0] } },
+    { "op": "back" },
+    { "op": "assert", "state": { "dialogue": "Visit", "loopCursors": [0, 1] } },
+    { "op": "advance" },
+    { "op": "assert", "state": { "dialogue": "Visit", "loopCursors": [1, 0] } },
+    { "op": "advance" },
+    { "op": "assert", "state": { "dialogue": "Visit", "loopCursors": [1, 1] } },
+    { "op": "advance" },
+    { "op": "assert", "state": { "dialogue": "Done", "callDepth": 0 } }
+  ],
+  "same-node": [
+    { "op": "assert", "state": { "dialogue": "A", "globals": { "Visits": 0 }, "canGoBack": false } },
+    { "op": "choose", "id": "again" },
+    { "op": "assert", "state": { "dialogue": "A", "globals": { "Visits": 1 }, "canGoBack": true } },
+    { "op": "choose", "id": "again" },
+    { "op": "assert", "state": { "dialogue": "A", "globals": { "Visits": 2 } } },
+    { "op": "back" },
+    { "op": "assert", "state": { "dialogue": "A", "globals": { "Visits": 1 } } },
+    { "op": "back" },
+    { "op": "assert", "state": { "dialogue": "A", "globals": { "Visits": 0 }, "canGoBack": false } }
+  ],
+  "random": [
+    { "op": "advance" },
+    { "op": "assert", "state": { "dialogue": "B", "rememberGlobals": ["Roll"] } },
+    { "op": "back" },
+    { "op": "assert", "state": { "dialogue": "A", "globals": { "Roll": 0 } } },
+    { "op": "advance" },
+    { "op": "assert", "state": { "dialogue": "B", "sameGlobals": ["Roll"] } }
+  ],
+  "barrier": [
+    { "op": "advance" },
+    { "op": "assert", "state": { "dialogue": "B", "canGoBack": true } },
+    { "op": "advance" },
+    { "op": "assert", "state": { "dialogue": "C", "canGoBack": false } },
+    { "op": "advance" },
+    { "op": "assert", "state": { "dialogue": "D", "canGoBack": true } },
+    { "op": "back" },
+    { "op": "assert", "state": { "dialogue": "C", "canGoBack": false } },
+    { "op": "block" },
+    { "op": "advance" },
+    { "op": "assert", "state": { "dialogue": "D", "canGoBack": false } }
+  ]
+}

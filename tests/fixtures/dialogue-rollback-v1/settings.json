@@ -1,0 +1,22 @@
+[
+  { "name": "missing", "expected": { "version": 1, "enabled": false, "historyLimit": 100 } },
+  { "name": "null", "input": null, "expected": { "version": 1, "enabled": false, "historyLimit": 100 } },
+  { "name": "array", "input": [], "expected": { "version": 1, "enabled": false, "historyLimit": 100 } },
+  { "name": "boolean", "input": true, "expected": { "version": 1, "enabled": false, "historyLimit": 100 } },
+  { "name": "string", "input": "enabled", "expected": { "version": 1, "enabled": false, "historyLimit": 100 } },
+  { "name": "no version", "input": { "enabled": true, "historyLimit": 3 }, "expected": { "version": 1, "enabled": false, "historyLimit": 100 } },
+  { "name": "future version", "input": { "version": 2, "enabled": true, "historyLimit": 3 }, "expected": { "version": 1, "enabled": false, "historyLimit": 100 } },
+  { "name": "string version", "input": { "version": "1", "enabled": true }, "expected": { "version": 1, "enabled": false, "historyLimit": 100 } },
+  { "name": "minimum", "input": { "version": 1, "enabled": true, "historyLimit": 1 }, "expected": { "version": 1, "enabled": true, "historyLimit": 1 } },
+  { "name": "maximum", "input": { "version": 1, "enabled": true, "historyLimit": 1000 }, "expected": { "version": 1, "enabled": true, "historyLimit": 1000 } },
+  { "name": "disabled retains limit", "input": { "version": 1, "enabled": false, "historyLimit": 42 }, "expected": { "version": 1, "enabled": false, "historyLimit": 42 } },
+  { "name": "string enabled", "input": { "version": 1, "enabled": "true", "historyLimit": 42 }, "expected": { "version": 1, "enabled": false, "historyLimit": 42 } },
+  { "name": "numeric enabled", "input": { "version": 1, "enabled": 1 }, "expected": { "version": 1, "enabled": false, "historyLimit": 100 } },
+  { "name": "default limit", "input": { "version": 1, "enabled": true }, "expected": { "version": 1, "enabled": true, "historyLimit": 100 } },
+  { "name": "zero limit", "input": { "version": 1, "enabled": true, "historyLimit": 0 }, "expected": { "version": 1, "enabled": true, "historyLimit": 100 } },
+  { "name": "negative limit", "input": { "version": 1, "enabled": true, "historyLimit": -1 }, "expected": { "version": 1, "enabled": true, "historyLimit": 100 } },
+  { "name": "excessive limit", "input": { "version": 1, "enabled": true, "historyLimit": 1001 }, "expected": { "version": 1, "enabled": true, "historyLimit": 100 } },
+  { "name": "fractional limit", "input": { "version": 1, "enabled": true, "historyLimit": 1.5 }, "expected": { "version": 1, "enabled": true, "historyLimit": 100 } },
+  { "name": "string limit", "input": { "version": 1, "enabled": true, "historyLimit": "42" }, "expected": { "version": 1, "enabled": true, "historyLimit": 100 } },
+  { "name": "boolean limit", "input": { "version": 1, "enabled": true, "historyLimit": true }, "expected": { "version": 1, "enabled": true, "historyLimit": 100 } }
+]

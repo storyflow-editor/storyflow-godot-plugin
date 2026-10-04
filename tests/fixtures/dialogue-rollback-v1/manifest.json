@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "sourceEditorCommit": "cf173f3b3",
+  "authoringSources": "cases.ts",
+  "exportVerification": "src/__tests__/main/export/dialogue-rollback-fixtures.test.ts",
+  "browserTraceVerification": "src/__tests__/runtime/rollback-conformance.test.ts",
+  "regenerate": "UPDATE_ROLLBACK_FIXTURES=1 vitest run src/__tests__/main/export/dialogue-rollback-fixtures.test.ts",
+  "cases": ["purchase", "nested-loops", "same-node", "random", "barrier"],
+  "randomSequence": { "seed": 1, "states": [270369, 67634689, 2647435461] }
+}

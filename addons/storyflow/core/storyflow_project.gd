@@ -15,6 +15,7 @@ var description: String = ""
 var startup_script: String = ""
 ## Maximum simultaneous runScript calls, excluding the initial script.
 var max_script_nesting: int = DEFAULT_MAX_SCRIPT_NESTING
+var dialogue_rollback: Dictionary = {"version": 1, "enabled": false, "historyLimit": 100}
 
 ## script_path → StoryFlowScript
 var scripts: Dictionary = {}

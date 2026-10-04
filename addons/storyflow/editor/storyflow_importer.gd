@@ -87,6 +87,7 @@ func import_project(build_dir: String, output_dir: String) -> StoryFlowProject:
 	project.title = metadata.get("title", "")
 	project.description = metadata.get("description", "")
 	project.max_script_nesting = StoryFlowProject.normalize_max_script_nesting(metadata.get("maxScriptNesting"))
+	project.dialogue_rollback = preload("res://addons/storyflow/core/storyflow_rollback_settings.gd").normalize(metadata.get("dialogueRollback"))
 
 	# ------------------------------------------------------------------
 	# Global variables  (may be inline in project or in a separate file)
@@ -381,6 +382,7 @@ func import_project_from_json(project_json: Dictionary) -> StoryFlowProject:
 	project.title = metadata.get("title", "")
 	project.description = metadata.get("description", "")
 	project.max_script_nesting = StoryFlowProject.normalize_max_script_nesting(metadata.get("maxScriptNesting"))
+	project.dialogue_rollback = preload("res://addons/storyflow/core/storyflow_rollback_settings.gd").normalize(metadata.get("dialogueRollback"))
 
 	# Global variables
 	if project_json.has("globalVariables"):

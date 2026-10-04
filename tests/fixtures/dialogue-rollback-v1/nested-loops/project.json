@@ -1,0 +1,17 @@
+{
+  "version": "1.8.2",
+  "apiVersion": "1.0",
+  "metadata": {
+    "maxScriptNesting": 20,
+    "dialogueRollback": {
+      "version": 1,
+      "enabled": true,
+      "historyLimit": 100
+    },
+    "title": "Rollback nested-loops",
+    "description": "Shared dialogue rollback conformance fixture",
+    "created": "2026-10-04T00:00:00.000Z",
+    "modified": "2026-10-04T00:00:00.000Z"
+  },
+  "startupScript": "main.json"
+}

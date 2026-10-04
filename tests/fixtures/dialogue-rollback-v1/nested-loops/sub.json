@@ -1,0 +1,42 @@
+{
+  "startNode": "0",
+  "nodes": {
+    "0": {
+      "type": "start",
+      "id": "0"
+    },
+    "Visit": {
+      "type": "dialogue",
+      "id": "Visit",
+      "text": "Visit.text",
+      "choices": []
+    },
+    "end": {
+      "type": "end",
+      "id": "end"
+    }
+  },
+  "connections": [
+    {
+      "id": "0--Visit-0",
+      "source": "0",
+      "target": "Visit",
+      "sourceHandle": "source-0-",
+      "targetHandle": "target-Visit-0"
+    },
+    {
+      "id": "Visit--end-0",
+      "source": "Visit",
+      "target": "end",
+      "sourceHandle": "source-Visit-",
+      "targetHandle": "target-end-0"
+    }
+  ],
+  "variables": {},
+  "strings": {
+    "en": {
+      "Visit.text": "Visit"
+    }
+  },
+  "assets": {}
+}

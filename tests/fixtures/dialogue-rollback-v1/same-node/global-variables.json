@@ -1,0 +1,14 @@
+{
+  "variables": {
+    "var_d7e637a6": {
+      "id": "var_d7e637a6",
+      "name": "Visits",
+      "type": "integer",
+      "value": 0
+    }
+  },
+  "strings": {
+    "en": {}
+  },
+  "assets": {}
+}

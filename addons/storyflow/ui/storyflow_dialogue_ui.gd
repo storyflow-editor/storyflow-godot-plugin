@@ -22,6 +22,12 @@ const StoryFlowTextBlock = preload("res://addons/storyflow/core/storyflow_text_b
 
 ## Optional custom button scene for options. Falls back to plain Button if null.
 @export var option_button_scene: PackedScene
+## This gate preserves authored disabling independently of runtime history.
+@export var author_allows_back: bool = true:
+	set(value):
+		author_allows_back = value
+		_update_back_button()
+var _presentation_generation: int = 0
 
 var _component: StoryFlowComponent = null
 
@@ -30,15 +36,68 @@ var _component: StoryFlowComponent = null
 # =============================================================================
 
 func initialize_with_component(component: StoryFlowComponent) -> void:
+	_disconnect_component()
 	_component = component
-	_component.dialogue_started.connect(_on_dialogue_started)
-	_component.dialogue_updated.connect(_on_dialogue_updated)
-	_component.dialogue_ended.connect(_on_dialogue_ended)
-	_component.background_image_changed.connect(_on_background_image_changed)
+	if not is_instance_valid(_component):
+		return
+	for binding in _component_bindings():
+		_component.connect(binding[0], binding[1])
+	if is_node_ready() and component.is_dialogue_active():
+		visible = true
+		var state := component.get_current_dialogue()
+		if state:
+			_display_state(state)
+	_update_back_button()
+
+
+func _component_bindings() -> Array:
+	return [["dialogue_started", _on_dialogue_started], ["dialogue_updated", _on_dialogue_updated],
+		["dialogue_ended", _on_dialogue_ended], ["background_image_changed", _on_background_image_changed],
+		["dialogue_restored", _on_dialogue_restored], ["rollback_availability_changed", _on_rollback_availability_changed]]
+
+
+func _disconnect_component() -> void:
+	_presentation_generation += 1
+	if is_instance_valid(_component):
+		for binding in _component_bindings():
+			if _component.is_connected(binding[0], binding[1]):
+				_component.disconnect(binding[0], binding[1])
+	_component = null
+
+
+func _exit_tree() -> void:
+	_disconnect_component()
+
+
+func _on_dialogue_restored(state: StoryFlowDialogueState) -> void:
+	if not is_instance_valid(_component) or not state or not state.is_restored or _component.get_current_dialogue() != state:
+		return
+	_display_state(state)
+	if text_label:
+		text_label.visible_characters = -1
+
+
+func _on_rollback_availability_changed(_availability: Dictionary) -> void:
+	_update_back_button()
+
+
+func _update_back_button() -> void:
+	var back_button: Button = get_node_or_null("%BackButton")
+	if back_button:
+		back_button.disabled = not author_allows_back or not is_instance_valid(_component) or not _component.can_go_back()
+
+
+func _on_back_pressed() -> void:
+	if author_allows_back and is_instance_valid(_component):
+		_component.go_back()
 
 
 func _ready() -> void:
 	visible = false
+	var back_button: Button = get_node_or_null("%BackButton")
+	if back_button:
+		back_button.pressed.connect(_on_back_pressed)
+	_update_back_button()
 	if advance_button:
 		advance_button.pressed.connect(_on_advance_pressed)
 
@@ -92,6 +151,8 @@ func _on_background_image_changed(image_path: String) -> void:
 # =============================================================================
 
 func _display_state(state: StoryFlowDialogueState) -> void:
+	_presentation_generation += 1
+	# Availability is published after capture; display runs during the temporary busy state.
 	# Title (hidden by default - override in subclass if needed)
 	if title_label:
 		title_label.visible = false
@@ -157,18 +218,19 @@ func _build_options(options: Array[StoryFlowDialogueOption]) -> void:
 		if option_button_scene:
 			var btn: Button = option_button_scene.instantiate()
 			btn.text = option.text
-			btn.pressed.connect(_on_option_pressed.bind(option.id))
+			btn.pressed.connect(_on_option_pressed.bind(option.id, _presentation_generation))
 			options_container.add_child(btn)
 		else:
 			var btn := Button.new()
 			btn.text = option.text
-			btn.pressed.connect(_on_option_pressed.bind(option.id))
+			btn.pressed.connect(_on_option_pressed.bind(option.id, _presentation_generation))
 			options_container.add_child(btn)
 
 
 func _clear_options() -> void:
 	if options_container:
 		for child in options_container.get_children():
+			options_container.remove_child(child)
 			child.queue_free()
 
 
@@ -176,8 +238,10 @@ func _clear_options() -> void:
 # Input Handlers
 # =============================================================================
 
-func _on_option_pressed(option_id: String) -> void:
-	if _component:
+func _on_option_pressed(option_id: String, generation: int = -1) -> void:
+	if generation != -1 and generation != _presentation_generation:
+		return
+	if is_instance_valid(_component):
 		_component.select_option(option_id)
 
 
