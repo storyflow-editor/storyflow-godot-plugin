@@ -1,0 +1,14 @@
+{
+  "variables": {
+    "var_25b5eb3b": {
+      "id": "var_25b5eb3b",
+      "name": "Roll",
+      "type": "integer",
+      "value": 0
+    }
+  },
+  "strings": {
+    "en": {}
+  },
+  "assets": {}
+}

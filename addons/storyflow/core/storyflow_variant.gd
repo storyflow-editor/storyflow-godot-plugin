@@ -14,14 +14,29 @@ var _string_value: String = ""
 var string_key: String = ""
 ## Scalar prose written during play must not be looked up as an authored key.
 var string_is_literal: bool = false
-var _array_value: Array = []
+# Keep unused scalar containers absent. Public access still exposes a stable mutable container.
+var _array_storage: Variant = null
+var _array_value: Array:
+	get:
+		if _array_storage == null:
+			_array_storage = []
+		return _array_storage
+	set(value):
+		_array_storage = value
 # Map entries: key -> StoryFlowVariant value. Godot Dictionaries preserve
 # insertion order, which is contractual — entry order is observable through
 # mapKeys/mapValues/forEachMap and must match the editor's serialized order.
 # Keys are int (integer keyType, coerced at the importer parse site) or String
 # (string/enum keyType). Assignment shares the Dictionary reference, which is
 # how setMap aliasing works (mirrors the HTML runtime assigning _runtimeMap).
-var _map_value: Dictionary = {}
+var _map_storage: Variant = null
+var _map_value: Dictionary:
+	get:
+		if _map_storage == null:
+			_map_storage = {}
+		return _map_storage
+	set(value):
+		_map_storage = value
 
 # =============================================================================
 # Getters
@@ -94,7 +109,7 @@ func set_array(value: Array) -> void:
 	_array_value = value
 	# A variant holds either array or map data, never both. Reassign instead of
 	# clear() so a Dictionary shared with another variant is not emptied.
-	_map_value = {}
+	_map_storage = null
 	if value.size() > 0 and value[0] is StoryFlowVariant:
 		type = value[0].type
 
@@ -104,7 +119,7 @@ func set_map(value: Dictionary) -> void:
 	_map_value = value
 	# A variant holds either array or map data, never both. Reassign instead of
 	# clear() so an Array shared with another variant is not emptied.
-	_array_value = []
+	_array_storage = null
 
 
 # =============================================================================
@@ -150,18 +165,21 @@ func duplicate_variant() -> StoryFlowVariant:
 	# StoryFlowVariant is a RefCounted - so BOTH containers must duplicate their
 	# variant members explicitly or the copy keeps handing out the source's own
 	# element objects, and writing through one of them reaches the original.
-	v._array_value = []
-	for element in _array_value:
-		if element is StoryFlowVariant:
-			v._array_value.append(element.duplicate_variant())
-		else:
-			v._array_value.append(element)
-	for key in _map_value:
-		var entry_value = _map_value[key]
-		if entry_value is StoryFlowVariant:
-			v._map_value[key] = entry_value.duplicate_variant()
-		else:
-			v._map_value[key] = entry_value
+	if _array_storage != null:
+		v._array_value = []
+		for element in _array_storage:
+			if element is StoryFlowVariant:
+				v._array_value.append(element.duplicate_variant())
+			else:
+				v._array_value.append(element)
+	if _map_storage != null:
+		v._map_value = {}
+		for key in _map_storage:
+			var entry_value = _map_storage[key]
+			if entry_value is StoryFlowVariant:
+				v._map_value[key] = entry_value.duplicate_variant()
+			else:
+				v._map_value[key] = entry_value
 	return v
 
 
@@ -173,8 +191,10 @@ func reset() -> void:
 	_string_value = ""
 	string_key = ""
 	string_is_literal = false
-	_array_value.clear()
-	_map_value.clear()
+	if _array_storage != null:
+		_array_storage.clear()
+	if _map_storage != null:
+		_map_storage.clear()
 
 
 # =============================================================================

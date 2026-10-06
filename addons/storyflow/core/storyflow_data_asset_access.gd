@@ -136,6 +136,14 @@ func read_data_asset_scalar(asset: String, variable_name: String, expected: Arra
 ## image-declared variable written through set_data_asset_string lands with the tag the store
 ## expects (StoryFlowDataAssetStore.storage_type) and an enum lands ENUM-tagged.
 func write_data_asset_scalar(asset: String, variable_name: String, expected: Array, raw) -> bool:
+	var guarded: bool = _mgr != null and _mgr._rollback_write_begin()
+	var result := _write_data_asset_scalar_owned(asset, variable_name, expected, raw)
+	if guarded:
+		_mgr.end_rollback_mutation()
+	return result
+
+
+func _write_data_asset_scalar_owned(asset: String, variable_name: String, expected: Array, raw) -> bool:
 	var mgr := _mgr
 	if not mgr:
 		return false
@@ -294,6 +302,14 @@ func read_character_scalar(id: String, variable_name: String, expected: Array) -
 ## the write REPLACES the row's value the way the node lane does. A3(b): a missing variable
 ## was already refused in _resolve_character_branch — nothing here can create one.
 func write_character_scalar(id: String, variable_name: String, expected: Array, raw) -> bool:
+	var guarded: bool = _mgr != null and _mgr._rollback_write_begin()
+	var result := _write_character_scalar_owned(id, variable_name, expected, raw)
+	if guarded:
+		_mgr.end_rollback_mutation()
+	return result
+
+
+func _write_character_scalar_owned(id: String, variable_name: String, expected: Array, raw) -> bool:
 	var resolved := resolve_character_branch(id, variable_name, expected)
 	if resolved.is_empty():
 		return false
@@ -409,6 +425,15 @@ func warn_character_access_once(id: String, reason: String, message: String) -> 
 ## write - a partial list is a shape no author declared. An EMPTY list is a legitimate write and
 ## clears the variable.
 func set_array(asset: String, variable_name: String, elements: Array) -> bool:
+	var scope := _mgr
+	var guarded: bool = scope != null and scope._rollback_write_begin()
+	var result := _set_array_owned(asset, variable_name, elements)
+	if guarded:
+		scope.end_rollback_mutation()
+	return result
+
+
+func _set_array_owned(asset: String, variable_name: String, elements: Array) -> bool:
 	var mgr := _mgr
 	if not mgr:
 		return false
@@ -454,6 +479,15 @@ func set_array(asset: String, variable_name: String, elements: Array) -> bool:
 ## rather than truncating to the shorter, which would silently drop entries the caller listed. Entry
 ## ORDER is the caller's and is preserved.
 func set_map(asset: String, variable_name: String, keys: Array, values: Array) -> bool:
+	var scope := _mgr
+	var guarded: bool = scope != null and scope._rollback_write_begin()
+	var result := _set_map_owned(asset, variable_name, keys, values)
+	if guarded:
+		scope.end_rollback_mutation()
+	return result
+
+
+func _set_map_owned(asset: String, variable_name: String, keys: Array, values: Array) -> bool:
 	var mgr := _mgr
 	if not mgr:
 		return false

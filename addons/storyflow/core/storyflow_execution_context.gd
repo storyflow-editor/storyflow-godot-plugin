@@ -16,6 +16,7 @@ const StoryFlowTypes = preload("res://addons/storyflow/core/storyflow_types.gd")
 
 const MAX_EVALUATION_DEPTH := 100
 const MAX_PROCESSING_DEPTH := 1000
+## Legacy default API; execution uses the project's max_script_nesting setting.
 const MAX_SCRIPT_DEPTH := 20
 const MAX_FLOW_DEPTH := 50
 
@@ -23,6 +24,8 @@ const MAX_FLOW_DEPTH := 50
 # Current Execution State
 # =============================================================================
 
+var rollback_rng = null
+var persistent_image_script: String = ""
 var current_script: StoryFlowScript = null
 var current_node_id: String = ""
 var is_waiting_for_input: bool = false
@@ -301,6 +304,8 @@ func find_variable_by_name(name: String) -> Dictionary:
 
 
 func reset() -> void:
+	rollback_rng = null
+	persistent_image_script = ""
 	current_script = null
 	current_node_id = ""
 	is_waiting_for_input = false

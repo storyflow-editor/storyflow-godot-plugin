@@ -1,0 +1,141 @@
+{
+  "startNode": "0",
+  "nodes": {
+    "0": {
+      "type": "start",
+      "id": "0"
+    },
+    "A": {
+      "type": "dialogue",
+      "id": "A",
+      "text": "A.text",
+      "choices": [
+        {
+          "id": "buy",
+          "text": "buy",
+          "onceOnly": true
+        },
+        {
+          "id": "leave",
+          "text": "leave"
+        }
+      ]
+    },
+    "spend": {
+      "type": "setInt",
+      "id": "spend",
+      "variable": "var_9768feb3",
+      "value": 90,
+      "isGlobal": true
+    },
+    "inventory": {
+      "type": "getStringArray",
+      "id": "inventory",
+      "variable": "var_4d604dd8",
+      "isGlobal": true
+    },
+    "add": {
+      "type": "addToStringArray",
+      "id": "add",
+      "value": "add.value"
+    },
+    "counts": {
+      "type": "getMap",
+      "id": "counts",
+      "variable": "var_fbc82f77",
+      "isGlobal": true,
+      "keyType": "string",
+      "valueType": "integer"
+    },
+    "count": {
+      "type": "setMapValue",
+      "id": "count",
+      "keyType": "string",
+      "valueType": "integer",
+      "key": "sword",
+      "value": 1
+    },
+    "B": {
+      "type": "dialogue",
+      "id": "B",
+      "text": "B.text",
+      "choices": []
+    },
+    "C": {
+      "type": "dialogue",
+      "id": "C",
+      "text": "C.text",
+      "choices": []
+    }
+  },
+  "connections": [
+    {
+      "id": "0--A-0",
+      "source": "0",
+      "target": "A",
+      "sourceHandle": "source-0-",
+      "targetHandle": "target-A-0"
+    },
+    {
+      "id": "A-buy-spend-0",
+      "source": "A",
+      "target": "spend",
+      "sourceHandle": "source-A-buy",
+      "targetHandle": "target-spend-0"
+    },
+    {
+      "id": "spend-1-add-0",
+      "source": "spend",
+      "target": "add",
+      "sourceHandle": "source-spend-1",
+      "targetHandle": "target-add-0"
+    },
+    {
+      "id": "add-1-count-0",
+      "source": "add",
+      "target": "count",
+      "sourceHandle": "source-add-1",
+      "targetHandle": "target-count-0"
+    },
+    {
+      "id": "count-1-B-0",
+      "source": "count",
+      "target": "B",
+      "sourceHandle": "source-count-1",
+      "targetHandle": "target-B-0"
+    },
+    {
+      "id": "inventory-string-array--add-string-array-2",
+      "source": "inventory",
+      "target": "add",
+      "sourceHandle": "source-inventory-string-array-",
+      "targetHandle": "target-add-string-array-2"
+    },
+    {
+      "id": "counts-map-string-integer--count-map-string-integer-2",
+      "source": "counts",
+      "target": "count",
+      "sourceHandle": "source-counts-map-string-integer-",
+      "targetHandle": "target-count-map-string-integer-2"
+    },
+    {
+      "id": "A-leave-C-0",
+      "source": "A",
+      "target": "C",
+      "sourceHandle": "source-A-leave",
+      "targetHandle": "target-C-0"
+    }
+  ],
+  "variables": {},
+  "strings": {
+    "en": {
+      "A.text": "A",
+      "buy": "Buy",
+      "leave": "Leave",
+      "add.value": "sword",
+      "B.text": "B",
+      "C.text": "C"
+    }
+  },
+  "assets": {}
+}

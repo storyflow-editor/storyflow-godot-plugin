@@ -71,6 +71,32 @@ var _localization: StoryFlowLocalization = StoryFlowLocalization.new()
 
 var _used_once_only_options: Dictionary = {}
 var _active_dialogue_count: int = 0
+var _rollback_owners: Array = []
+var _rollback_content_revision: int = 0
+var _rollback_mutation_depth: int = 0
+var _rollback_mutation_reason: String = "barrier"
+
+## Guards cover callbacks and registrations during the entire external operation.
+func begin_rollback_mutation(reason: String = "barrier") -> void:
+	_rollback_mutation_depth += 1
+	if reason == "contentChanged":
+		_rollback_content_revision += 1
+		_rollback_mutation_reason = reason
+	elif _rollback_mutation_depth == 1:
+		_rollback_mutation_reason = reason
+	for owner in _rollback_owners.duplicate():
+		if owner.active:
+			owner.invalidate(_rollback_mutation_reason, _rollback_mutation_reason == "contentChanged")
+
+func end_rollback_mutation() -> void:
+	_rollback_mutation_depth = maxi(0, _rollback_mutation_depth - 1)
+
+func _rollback_write_begin(owner = null) -> bool:
+	if _rollback_owners.is_empty() or (owner != null and owner in _rollback_owners and owner.active):
+		return false
+	begin_rollback_mutation()
+	return true
+
 
 ## .sfd Data Asset SEED (engine contract 3): asset_id → definition, built from the project.
 ## Read-only once built — nothing anywhere writes into it.
@@ -128,9 +154,11 @@ func get_project() -> StoryFlowProject:
 
 
 func set_project(project: StoryFlowProject) -> void:
+	begin_rollback_mutation("contentChanged")
 	_project = project
 	if _project:
 		_initialize_from_project()
+	end_rollback_mutation()
 
 
 func has_project() -> bool:
@@ -157,9 +185,12 @@ func get_global_variables() -> Dictionary:
 	return _global_variables
 
 
-func set_global_variable(var_id: String, value: StoryFlowVariant) -> void:
+func set_global_variable(var_id: String, value: StoryFlowVariant, owner = null) -> void:
+	var guarded := _rollback_write_begin(owner)
 	if _global_variables.has(var_id):
 		_global_variables[var_id]["value"] = value
+	if guarded:
+		end_rollback_mutation()
 
 
 func get_global_variable(var_id: String) -> Dictionary:
@@ -167,6 +198,13 @@ func get_global_variable(var_id: String) -> Dictionary:
 
 
 func reset_global_variables() -> void:
+	var guarded := _rollback_write_begin()
+	_reset_global_variables_owned()
+	if guarded:
+		end_rollback_mutation()
+
+
+func _reset_global_variables_owned() -> void:
 	if _project:
 		# Mutate IN PLACE - never rebind. A running dialogue's evaluator holds
 		# a reference to this dictionary (handed out by get_global_variables at
@@ -254,6 +292,13 @@ func get_data_asset_overlay() -> Dictionary:
 ## until the next advance or option selection, both of which clear the cache on their way through.
 ## Nothing reads a stale value after that point.
 func reset_data_assets() -> void:
+	var guarded := _rollback_write_begin()
+	_reset_data_assets_owned()
+	if guarded:
+		end_rollback_mutation()
+
+
+func _reset_data_assets_owned() -> void:
 	if _project:
 		StoryFlowDataAssetStore.build_seed(_project, _data_asset_seed)
 	StoryFlowDataAssetStore.reset_overlay(_data_asset_overlay, _data_asset_revision)
@@ -273,6 +318,13 @@ func get_runtime_character(character_path: String) -> StoryFlowCharacter:
 
 
 func reset_runtime_characters() -> void:
+	var guarded := _rollback_write_begin()
+	_reset_runtime_characters_owned()
+	if guarded:
+		end_rollback_mutation()
+
+
+func _reset_runtime_characters_owned() -> void:
 	if _project:
 		_runtime_characters.clear()
 		for path in _project.characters:
@@ -418,8 +470,11 @@ func get_used_once_only_options() -> Dictionary:
 	return _used_once_only_options
 
 
-func mark_option_used(key: String) -> void:
+func mark_option_used(key: String, owner = null) -> void:
+	var guarded := _rollback_write_begin(owner)
 	_used_once_only_options[key] = true
+	if guarded:
+		end_rollback_mutation()
 
 
 func is_option_used(key: String) -> bool:
@@ -434,12 +489,26 @@ func is_dialogue_active() -> bool:
 	return _active_dialogue_count > 0
 
 
-func register_dialogue_start() -> void:
+func register_dialogue_start(owner = null) -> void:
 	_active_dialogue_count += 1
+	if owner != null:
+		_rollback_owners.append(owner)
+		if _rollback_mutation_depth > 0:
+			owner.invalidate(_rollback_mutation_reason, _rollback_mutation_reason == "contentChanged", false)
+	if _active_dialogue_count > 1:
+		for registered in _rollback_owners.duplicate():
+			if registered.active:
+				registered.invalidate("multipleSessions")
 
 
-func register_dialogue_end() -> void:
+func register_dialogue_end(owner = null) -> void:
+	if owner != null:
+		_rollback_owners.erase(owner)
 	_active_dialogue_count = maxi(0, _active_dialogue_count - 1)
+	if _active_dialogue_count == 1:
+		for registered in _rollback_owners.duplicate():
+			if registered.active and not registered.terminal:
+				registered.invalidate("empty")
 
 
 # =============================================================================
@@ -571,6 +640,13 @@ func list_save_slots() -> PackedStringArray:
 ## StoryFlowComponent.stop_dialogue first if the intent is to end the story too, not only to
 ## rewind its state.
 func reset_all_state() -> void:
+	var guarded := _rollback_write_begin()
+	_reset_all_state_owned()
+	if guarded:
+		end_rollback_mutation()
+
+
+func _reset_all_state_owned() -> void:
 	reset_global_variables()
 	reset_runtime_characters()
 	reset_data_assets()

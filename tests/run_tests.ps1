@@ -78,12 +78,12 @@ foreach ($testName in @('driver', 'runtime', 'analyzer', 'component')) {
         $failed = 1
     }
 }
-foreach ($testName in @('nested_reference_interpolation', 'data_reference_nodes')) {
+foreach ($testName in @('nested_reference_interpolation', 'data_reference_nodes', 'data_asset_override_localization', 'script_nesting', 'loop_parity', 'array_node_parity', 'dialogue_rollback', 'dialogue_rollback_safety', 'dialogue_rollback_ui')) {
     $testOutput = @(& $GodotExe --headless --quit-after 600 --path $repoRoot --script "res://tests/test_$testName.gd" 2>&1)
     $testCode = $LASTEXITCODE
     $testOutput | ForEach-Object { Write-Output $_ }
     $testText = $testOutput -join [Environment]::NewLine
-    if ($testCode -ne 0 -or $testText -match 'SCRIPT ERROR:|FAIL:' -or $testText -notmatch 'checks, 0 failures') {
+    if ($testCode -ne 0 -or $testText -match 'SCRIPT ERROR:|FAIL:' -or ($testName -like 'dialogue_rollback*' -and $testText -match '\bERROR:') -or $testText -notmatch 'checks, 0 failures') {
         $failed = 1
     }
 }

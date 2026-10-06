@@ -1,0 +1,38 @@
+{
+  "variables": {
+    "var_9768feb3": {
+      "id": "var_9768feb3",
+      "name": "Gold",
+      "type": "integer",
+      "value": 100
+    },
+    "var_4d604dd8": {
+      "id": "var_4d604dd8",
+      "name": "Inventory",
+      "type": "string",
+      "value": [
+        "inventory.value.0"
+      ],
+      "isArray": true
+    },
+    "var_fbc82f77": {
+      "id": "var_fbc82f77",
+      "name": "Counts",
+      "type": "map",
+      "value": [
+        {
+          "key": "axe",
+          "value": 1
+        }
+      ],
+      "keyType": "string",
+      "valueType": "integer"
+    }
+  },
+  "strings": {
+    "en": {
+      "inventory.value.0": "axe"
+    }
+  },
+  "assets": {}
+}

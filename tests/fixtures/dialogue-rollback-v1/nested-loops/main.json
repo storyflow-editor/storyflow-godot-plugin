@@ -1,0 +1,140 @@
+{
+  "startNode": "0",
+  "nodes": {
+    "0": {
+      "type": "start",
+      "id": "0"
+    },
+    "array": {
+      "type": "getIntArray",
+      "id": "array",
+      "variable": "var_cbebfa21"
+    },
+    "outer": {
+      "type": "forEachIntLoop",
+      "id": "outer"
+    },
+    "map": {
+      "type": "getMap",
+      "id": "map",
+      "variable": "var_46f3ea05",
+      "keyType": "string",
+      "valueType": "integer"
+    },
+    "inner": {
+      "type": "forEachMap",
+      "id": "inner",
+      "keyType": "string",
+      "valueType": "integer"
+    },
+    "call": {
+      "type": "runScript",
+      "id": "call",
+      "script": "sub.json"
+    },
+    "after": {
+      "type": "setInt",
+      "id": "after",
+      "variable": "var_97997416",
+      "value": 1
+    },
+    "Done": {
+      "type": "dialogue",
+      "id": "Done",
+      "text": "Done.text",
+      "choices": []
+    }
+  },
+  "connections": [
+    {
+      "id": "0--outer-0",
+      "source": "0",
+      "target": "outer",
+      "sourceHandle": "source-0-",
+      "targetHandle": "target-outer-0"
+    },
+    {
+      "id": "outer-loopBody-inner-0",
+      "source": "outer",
+      "target": "inner",
+      "sourceHandle": "source-outer-loopBody",
+      "targetHandle": "target-inner-0"
+    },
+    {
+      "id": "outer-completed-Done-0",
+      "source": "outer",
+      "target": "Done",
+      "sourceHandle": "source-outer-completed",
+      "targetHandle": "target-Done-0"
+    },
+    {
+      "id": "inner-loopBody-call-0",
+      "source": "inner",
+      "target": "call",
+      "sourceHandle": "source-inner-loopBody",
+      "targetHandle": "target-call-0"
+    },
+    {
+      "id": "call-output-after-0",
+      "source": "call",
+      "target": "after",
+      "sourceHandle": "source-call-output",
+      "targetHandle": "target-after-0"
+    },
+    {
+      "id": "array-integer-array--outer-integer-array-array",
+      "source": "array",
+      "target": "outer",
+      "sourceHandle": "source-array-integer-array-",
+      "targetHandle": "target-outer-integer-array-array"
+    },
+    {
+      "id": "map-map-string-integer--inner-map-string-integer-map",
+      "source": "map",
+      "target": "inner",
+      "sourceHandle": "source-map-map-string-integer-",
+      "targetHandle": "target-inner-map-string-integer-map"
+    }
+  ],
+  "variables": {
+    "var_cbebfa21": {
+      "id": "var_cbebfa21",
+      "name": "Numbers",
+      "type": "integer",
+      "value": [
+        1,
+        2
+      ],
+      "isArray": true
+    },
+    "var_97997416": {
+      "id": "var_97997416",
+      "name": "Visited",
+      "type": "integer",
+      "value": 0
+    },
+    "var_46f3ea05": {
+      "id": "var_46f3ea05",
+      "name": "Map",
+      "type": "map",
+      "value": [
+        {
+          "key": "a",
+          "value": 1
+        },
+        {
+          "key": "b",
+          "value": 2
+        }
+      ],
+      "keyType": "string",
+      "valueType": "integer"
+    }
+  },
+  "strings": {
+    "en": {
+      "Done.text": "Done"
+    }
+  },
+  "assets": {}
+}

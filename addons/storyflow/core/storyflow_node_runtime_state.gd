@@ -20,6 +20,11 @@ var loop_array: Array = []
 ## Whether the loop has been initialized.
 var loop_initialized: bool = false
 
+## Set while the loop's handler is on the call stack running a body, and by a body that finished
+## there to ask for the next iteration. Call-stack facts, so never part of a rollback snapshot.
+var loop_running: bool = false
+var loop_continue: bool = false
+
 ## Map loop state (forEachMap). loop_keys/loop_values are a SNAPSHOT of the
 ## map's entries taken once at loop init (parallel arrays, insertion order) —
 ## body mutations land on the live map but never affect iteration. loop_key

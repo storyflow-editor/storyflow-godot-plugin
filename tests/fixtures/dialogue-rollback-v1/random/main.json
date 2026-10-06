@@ -1,0 +1,71 @@
+{
+  "startNode": "0",
+  "nodes": {
+    "0": {
+      "type": "start",
+      "id": "0"
+    },
+    "A": {
+      "type": "dialogue",
+      "id": "A",
+      "text": "A.text",
+      "choices": []
+    },
+    "random": {
+      "type": "random",
+      "id": "random",
+      "value1": 1,
+      "value2": 100000
+    },
+    "set": {
+      "type": "setInt",
+      "id": "set",
+      "variable": "var_25b5eb3b",
+      "isGlobal": true
+    },
+    "B": {
+      "type": "dialogue",
+      "id": "B",
+      "text": "B.text",
+      "choices": []
+    }
+  },
+  "connections": [
+    {
+      "id": "0--A-0",
+      "source": "0",
+      "target": "A",
+      "sourceHandle": "source-0-",
+      "targetHandle": "target-A-0"
+    },
+    {
+      "id": "A--set-0",
+      "source": "A",
+      "target": "set",
+      "sourceHandle": "source-A-",
+      "targetHandle": "target-set-0"
+    },
+    {
+      "id": "set-1-B-0",
+      "source": "set",
+      "target": "B",
+      "sourceHandle": "source-set-1",
+      "targetHandle": "target-B-0"
+    },
+    {
+      "id": "random-integer--set-integer-2",
+      "source": "random",
+      "target": "set",
+      "sourceHandle": "source-random-integer-",
+      "targetHandle": "target-set-integer-2"
+    }
+  ],
+  "variables": {},
+  "strings": {
+    "en": {
+      "A.text": "A",
+      "B.text": "B"
+    }
+  },
+  "assets": {}
+}

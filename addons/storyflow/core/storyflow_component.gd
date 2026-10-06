@@ -71,6 +71,8 @@ const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.
 # Signals
 # =============================================================================
 
+signal dialogue_restored(state: StoryFlowDialogueState)
+signal rollback_availability_changed(availability: Dictionary)
 signal dialogue_started()
 signal dialogue_updated(state: StoryFlowDialogueState)
 signal dialogue_ended()
@@ -87,6 +89,16 @@ signal audio_play_requested(audio_path: String, loop: bool)
 # Internal State
 # =============================================================================
 
+const RollbackController = preload("res://addons/storyflow/core/storyflow_rollback_controller.gd")
+const ROLLBACK_CONTEXT_FIELDS := ["current_node_id", "is_waiting_for_input", "is_executing", "is_paused", "entering_dialogue_via_edge", "previous_node_id", "previous_node_type", "call_stack", "flow_call_stack", "loop_stack", "local_variables", "node_runtime_states", "input_option_values", "persistent_background_image", "persistent_image", "persistent_image_script"]
+var _publishing_rollback_availability := false
+var _pending_rollback_availability := false
+var _rollback = null
+var _rollback_was_enabled: bool = false
+var _rollback_depth: int = 0
+var _session_generation: int = 0
+var _tearing_down: bool = false
+var _rollback_audio: Dictionary = {}
 var _context: StoryFlowExecutionContext = null
 var _evaluator: StoryFlowEvaluator = null
 var _text: StoryFlowTextInterpolator = null
@@ -99,6 +111,7 @@ var _audio_advance_allow_skip: bool = false
 
 # Presentation hooks: a redraw keeps its entry, while revisiting even the same node gets a new one.
 var _dialogue_entry_serial: int = 0
+var _restored_dialogue_serial: int = -1
 var _current_speaker_path: String = ""
 
 ## Whether THIS component currently holds a registration on the manager's active-dialogue count.
@@ -120,6 +133,10 @@ var _node_handlers: Dictionary = {}
 # Lifecycle
 # =============================================================================
 
+func _enter_tree() -> void:
+	_tearing_down = false
+
+
 func _ready() -> void:
 	add_to_group("storyflow_components")
 	_context = StoryFlowExecutionContext.new()
@@ -133,6 +150,7 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	_tearing_down = true
 	if _audio:
 		_audio.stop()
 	# Silently clean up without emitting signals - listeners are being torn down too and a
@@ -163,9 +181,17 @@ func _end_dialogue_registration() -> void:
 	if not _counted_dialogue_start:
 		return
 	_counted_dialogue_start = false
+	var ending_generation := _session_generation
+	var outgoing = _rollback
+	_rollback = null
+	if outgoing:
+		outgoing.active = false
+		outgoing.history.clear()
 	var mgr := get_manager()
 	if mgr:
-		mgr.register_dialogue_end()
+		mgr.register_dialogue_end(outgoing)
+	if outgoing and not _tearing_down and ending_generation == _session_generation and _rollback == null:
+		_publish_rollback_availability()
 
 # =============================================================================
 # Control Functions
@@ -181,6 +207,8 @@ func start_dialogue() -> void:
 
 ## Start dialogue with a specific script path (overrides [member script_path]).
 func start_dialogue_with_script(path: String) -> void:
+	if _tearing_down:
+		return
 	if path.is_empty():
 		_report_error("start_dialogue_with_script called with empty path")
 		return
@@ -200,6 +228,9 @@ func start_dialogue_with_script(path: String) -> void:
 		_report_error("Script not found: %s" % path)
 		return
 
+	_session_generation += 1
+	var starting_generation := _session_generation
+
 	# RESTART WITHOUT A STOP is a supported call: nothing above requires the caller to have
 	# stopped first, and a host chaining one script into another does exactly this. Give the
 	# previous run's registration back BEFORE taking a new one, or the count climbs by one per
@@ -213,9 +244,12 @@ func start_dialogue_with_script(path: String) -> void:
 	# survives the restart rather than being suspended across it.
 	if _counted_dialogue_start:
 		_end_dialogue_registration()
+		if starting_generation != _session_generation:
+			return
 
 	# Initialize execution context
-	_context.reset()
+	_context = StoryFlowExecutionContext.new()
+	_text.set_context(_context)
 	_context.current_script = script_asset
 	_context.current_node_id = "0"
 	_context.is_executing = true
@@ -252,8 +286,16 @@ func start_dialogue_with_script(path: String) -> void:
 	_text.set_language_code(language_code)
 
 	# Register with manager, and witness it so both teardown paths can give it back exactly once.
-	mgr.register_dialogue_start()
+	_rollback_was_enabled = project.dialogue_rollback.enabled
+	if _rollback_was_enabled:
+		_rollback = RollbackController.new()
+		_rollback.initialize(self, mgr, project.dialogue_rollback.historyLimit)
+		_context.rollback_rng = _rollback
+	var registration = _rollback
 	_counted_dialogue_start = true
+	mgr.register_dialogue_start(registration)
+	if starting_generation != _session_generation or _rollback != registration or not _counted_dialogue_start:
+		return
 
 	# Create dialogue UI (use built-in default if none assigned)
 	var ui_scene: PackedScene = dialogue_ui_scene
@@ -275,11 +317,18 @@ func start_dialogue_with_script(path: String) -> void:
 
 	# Broadcast start events
 	dialogue_started.emit()
+	if starting_generation != _session_generation:
+		return
 	script_started.emit(path)
+	if starting_generation != _session_generation:
+		return
 
 	# Find start node and begin execution
 	var start_node: Dictionary = script_asset.get_start_node()
 	if not start_node.is_empty():
+		if script_asset.find_connection_by_source_handle(StoryFlowHandles.source("0")).is_empty():
+			_report_error("Start node is not connected")
+			return
 		_process_node(start_node)
 	else:
 		_report_error("Start node (id=0) not found in script")
@@ -321,6 +370,8 @@ func _resolve_dialogue_ui_parent(ui_root: Node) -> Node:
 
 ## Select a dialogue option by ID.
 func select_option(option_id: String) -> void:
+	if _rollback and _rollback.busy:
+		return
 	if not _context.is_executing or not _context.is_waiting_for_input:
 		return
 
@@ -343,7 +394,7 @@ func select_option(option_id: String) -> void:
 				var option_key := dialogue_node_id + "-" + option_id
 				var mgr := get_manager()
 				if mgr:
-					mgr.mark_option_used(option_key)
+					mgr.mark_option_used(option_key, _rollback)
 				break
 
 	# Save current dialogue node ID for potential re-render
@@ -369,13 +420,17 @@ func select_option(option_id: String) -> void:
 	_is_processing_chain = true
 	_dialogue_dirty = false
 
-	# Continue from the selected option
+	# Continue from the selected option. With nothing connected it is a dead end, even inside a
+	# forEach body: the dialogue is re-rendered below rather than the loop moved on.
 	var source_handle := StoryFlowHandles.source(dialogue_node_id, option_id)
-	_process_next_node(source_handle)
+	if not _context.current_script.find_connection_by_source_handle(source_handle).is_empty():
+		_process_next_node(source_handle)
 
 	# End processing chain — flush any deferred re-render
 	_is_processing_chain = false
 	_flush_deferred_dialogue_update()
+	if _rollback:
+		_rollback.capture()
 
 	# If no edge was found (dead end) and we're still executing but not waiting for input,
 	# return to the current dialogue to re-render
@@ -389,6 +444,8 @@ func select_option(option_id: String) -> void:
 
 ## Advance a narrative-only dialogue (no options defined). Uses the header output edge.
 func advance_dialogue() -> void:
+	if _rollback and _rollback.busy:
+		return
 	if not _context.is_executing or not _context.is_waiting_for_input:
 		return
 
@@ -435,6 +492,16 @@ func advance_dialogue() -> void:
 	_process_next_node(header_handle)
 	_is_processing_chain = false
 	_flush_deferred_dialogue_update()
+	if _rollback:
+		_rollback.capture()
+
+	# A walk that ran out of connections leaves this line on screen and usable, as select_option does
+	if not _context.is_waiting_for_input and _context.is_executing:
+		var node: Dictionary = _context.current_script.get_node(dialogue_node_id)
+		if not node.is_empty() and node.get("type", -1) == StoryFlowTypes.NodeType.DIALOGUE:
+			_context.current_dialogue_state = _build_dialogue_state(node)
+			_context.is_waiting_for_input = true
+			dialogue_updated.emit(_context.current_dialogue_state)
 
 
 ## Stop dialogue execution.
@@ -452,16 +519,20 @@ func stop_dialogue() -> void:
 	if _context.current_script:
 		current_script_path = _context.current_script.script_path
 
+	_session_generation += 1
+	var stopping_generation := _session_generation
+	var outgoing_ui := _dialogue_ui_instance
+	_dialogue_ui_instance = null
 	_context.reset()
 	_end_dialogue_registration()
-
+	if is_instance_valid(outgoing_ui):
+		outgoing_ui.queue_free()
+	if stopping_generation != _session_generation:
+		return
 	script_ended.emit(current_script_path)
+	if stopping_generation != _session_generation:
+		return
 	dialogue_ended.emit()
-
-	# Destroy dialogue UI after broadcasting so it receives dialogue_ended
-	if _dialogue_ui_instance:
-		_dialogue_ui_instance.queue_free()
-		_dialogue_ui_instance = null
 
 
 ## Pause dialogue execution.
@@ -486,6 +557,250 @@ func get_current_speaker_path() -> String:
 ## Monotonic line-entry identity. UI refreshes keep this value, new entries increment it.
 func get_dialogue_entry_serial() -> int:
 	return _dialogue_entry_serial
+
+
+func can_go_back() -> bool:
+	return _rollback != null and _rollback.availability().canGoBack
+
+
+func _publish_rollback_availability() -> void:
+	_pending_rollback_availability = true
+	if _publishing_rollback_availability:
+		return
+	_publishing_rollback_availability = true
+	# The component outlives controllers replaced by synchronous observers.
+	while _pending_rollback_availability:
+		_pending_rollback_availability = false
+		rollback_availability_changed.emit(get_rollback_availability())
+	_publishing_rollback_availability = false
+
+
+func get_rollback_availability() -> Dictionary:
+	return _rollback.availability() if _rollback else {"canGoBack": false, "steps": 0, "reason": "empty" if _rollback_was_enabled else "disabled"}
+
+
+func go_back() -> Dictionary:
+	return _rollback.go_back() if _rollback else {"ok": false, "reason": get_rollback_availability().reason}
+
+
+func block_rollback(_reason: String) -> void:
+	if _rollback:
+		_rollback.invalidate("barrier")
+
+
+func _rollback_capture_state() -> Dictionary:
+	var scope := get_manager()
+	var context_data := {}
+	for field in ROLLBACK_CONTEXT_FIELDS:
+		context_data[field] = _context.get(field)
+	context_data.script = _context.current_script.script_path
+	var characters := {}
+	for key in scope.get_runtime_characters():
+		var character: StoryFlowCharacter = scope.get_runtime_characters()[key]
+		characters[key] = {"character_name": character.character_name, "name_is_literal": character.name_is_literal,
+			"character_path": character.character_path, "image_key": character.image_key, "variables": character.variables}
+	var state := _context.current_dialogue_state
+	var presentation := {"node": state.node_id, "title": state.title, "text": state.text, "options": [], "blocks": [],
+		"speaker": _current_speaker_path, "speakerName": state.character.name if state.character else "", "tags": state.tags,
+		"canAdvance": state.can_advance, "audioAdvance": state.audio_advance_on_end, "audioSkip": state.audio_allow_skip,
+		"restored": state.is_restored, "audioKey": state.audio_key}
+	for option in state.options:
+		presentation.options.append({"id": option.id, "text": option.text})
+	for block in state.text_blocks:
+		presentation.blocks.append({"id": block.id, "text": block.text})
+	var audio := _rollback_audio.duplicate()
+	var player := _audio.get_player()
+	audio.playing = _audio.is_playing() or (player != null and player.stream_paused and player.has_stream_playback())
+	audio.loop = _audio._looping
+	audio.position = player.get_playback_position() if player else 0.0
+	audio.paused = player.stream_paused if player else false
+	audio.playbackIdentity = _audio.get_playback_serial()
+	return {"version": 1, "revision": _rollback.revision, "session": _session_generation, "context": context_data, "globals": scope.get_global_variables(),
+		"characters": characters, "overlay": scope.get_data_asset_overlay(), "used": scope.get_used_once_only_options(),
+		"presentation": presentation, "rng": _rollback.rng_state, "audio": audio,
+		"waitingAudio": _waiting_for_audio_advance, "audioSkip": _audio_advance_allow_skip}
+
+
+func _rollback_prepare_state(data: Dictionary, recovery: bool) -> Dictionary:
+	var scope := get_manager()
+	var project: StoryFlowProject = scope.get_project()
+	if data.get("version") != 1 or data.get("revision") != scope._rollback_content_revision or data.get("session") != _session_generation:
+		return {}
+	var prepared := StoryFlowExecutionContext.new()
+	prepared.current_script = project.get_storyflow_script(data.context.script)
+	if not prepared.current_script or prepared.current_script.get_node(data.presentation.node).is_empty():
+		return {}
+	for field in ROLLBACK_CONTEXT_FIELDS:
+		if field in ["call_stack", "flow_call_stack", "loop_stack"]:
+			prepared.get(field).assign(data.context[field])
+		else:
+			prepared.set(field, data.context[field])
+	for frame in prepared.call_stack:
+		frame.script_asset = project.get_storyflow_script(frame.script_path)
+		if not frame.script_asset or frame.script_asset.get_node(frame.return_node_id).is_empty():
+			return {}
+		if not _rollback_validate_activation(frame.script_asset, frame.saved_node_runtime_states, frame.saved_loop_stack):
+			return {}
+	if not _rollback_validate_activation(prepared.current_script, prepared.node_runtime_states, prepared.loop_stack):
+		return {}
+	prepared.build_variable_name_index(prepared.local_variables, false)
+	prepared.build_variable_name_index(data.globals, true)
+	prepared.data_asset_seed = scope.get_data_asset_seed()
+	prepared.data_asset_overlay = data.overlay
+	prepared.character_id_bridge = scope.get_character_id_bridge()
+	prepared.localization = scope.get_localization()
+	prepared.rollback_rng = _rollback
+	var characters := {}
+	for key in data.characters:
+		if not scope.get_runtime_characters().has(key):
+			return {}
+		var character := StoryFlowCharacter.new()
+		for field in data.characters[key]:
+			character.set(field, data.characters[key][field])
+		# Resolve every authored name using the project table, before any interpolation.
+		if not character.name_is_literal:
+			var localized = StoryFlowLocalization.look_up(prepared.localization, null, project.global_strings, character.character_name, language_code)
+			character.character_name = character.character_name if localized == null else localized
+			character.name_is_literal = true
+		characters[key] = character
+	var resolver := StoryFlowTextInterpolator.new()
+	resolver.set_context(prepared)
+	resolver.set_manager(scope)
+	resolver.set_language_code(language_code)
+	resolver.snapshot_globals = data.globals
+	resolver.snapshot_characters = characters
+	var state := StoryFlowDialogueState.new()
+	state.is_valid = true
+	state.node_id = data.presentation.node
+	state.is_restored = data.presentation.restored if recovery else true
+	state.can_advance = data.presentation.canAdvance
+	state.tags.assign(data.presentation.tags)
+	state.audio_advance_on_end = data.presentation.audioAdvance if recovery else false
+	state.audio_allow_skip = data.presentation.audioSkip if recovery else false
+	if recovery:
+		state.audio_key = data.presentation.audioKey
+		state.audio = _audio.resolve_audio_asset(state.audio_key, prepared.current_script, scope)
+	var speaker: String = data.presentation.speaker
+	if not speaker.is_empty():
+		if not characters.has(speaker):
+			return {}
+		var character: StoryFlowCharacter = characters[speaker]
+		state.character = StoryFlowCharacterData.new()
+		state.character.character_path = speaker
+		state.character.name = data.presentation.speakerName if recovery else character.character_name
+		state.character.image = _rollback_image(character.image_key, null, scope.get_runtime_characters()[speaker].resolved_assets)
+		for name in character.variables:
+			var value = character.variables[name].get("value")
+			if value is StoryFlowVariant:
+				state.character.variables[name] = value.to_display_string()
+	prepared.current_dialogue_state = state
+	var authored: Dictionary = prepared.current_script.get_node(state.node_id).get("data", {})
+	state.title = data.presentation.title if recovery else resolver.interpolate(resolver.get_string(str(authored.get("title", "")), language_code))
+	state.text = data.presentation.text if recovery else resolver.interpolate(resolver.get_string(str(authored.get("text", "")), language_code))
+	for cached in data.presentation.options:
+		var definition := _rollback_find_entry(authored.get("options", []), cached.id)
+		if definition.is_empty():
+			return {}
+		var option := StoryFlowDialogueOption.new()
+		option.id = cached.id
+		option.text = cached.text if recovery else resolver.interpolate(resolver.get_string(str(definition.get("text", "")), language_code))
+		state.options.append(option)
+	for cached in data.presentation.blocks:
+		var definition := _rollback_find_entry(authored.get("textBlocks", []), cached.id)
+		if definition.is_empty():
+			return {}
+		var block := StoryFlowTextBlock.new()
+		block.id = cached.id
+		block.text = cached.text if recovery else resolver.interpolate(resolver.get_string(str(definition.get("text", "")), language_code))
+		state.text_blocks.append(block)
+	var image_script: StoryFlowScript = project.get_storyflow_script(prepared.persistent_image_script)
+	state.image_key = prepared.persistent_image
+	state.image = _rollback_image(state.image_key, image_script)
+	prepared.persistent_image_texture = state.image
+	var audio_stream: AudioStream = null
+	if data.audio.get("playing", false) and (recovery or (data.audio.get("loop", false) and data.audio.get("persistent", false))):
+		audio_stream = _audio.resolve_audio_asset(str(data.audio.get("key", "")), project.get_storyflow_script(str(data.audio.get("script", ""))), scope)
+	var evaluator := StoryFlowEvaluator.new()
+	evaluator.initialize(prepared, scope.get_global_variables(), scope.get_runtime_characters(), language_code, project.global_strings, scope)
+	evaluator.set_trace(_sf_trace)
+	return {"data": data, "context": prepared, "evaluator": evaluator, "audio": audio_stream}
+
+
+func _rollback_find_entry(entries: Array, id: String) -> Dictionary:
+	for entry in entries:
+		if entry.get("id", "") == id:
+			return entry
+	return {}
+
+
+func _rollback_validate_activation(script: StoryFlowScript, states: Dictionary, loops: Array) -> bool:
+	for id in states:
+		if script.get_node(id).is_empty() or not states[id] is StoryFlowNodeRuntimeState:
+			return false
+	for frame in loops:
+		if not frame is StoryFlowLoopFrame or frame.current_index < 0 or script.get_node(frame.node_id).is_empty():
+			return false
+		if not states.has(frame.node_id) or not states[frame.node_id].loop_initialized:
+			return false
+	return true
+
+
+func _rollback_image(key: String, script: StoryFlowScript, character_assets: Dictionary = {}) -> Texture2D:
+	if key.is_empty():
+		return null
+	var pools: Array = [character_assets, script.resolved_assets if script else {}, get_manager().get_project().resolved_assets]
+	for pool in pools:
+		var asset = pool.get(key)
+		if asset is Texture2D:
+			return asset
+		if asset is String and not asset.is_empty() and ResourceLoader.exists(asset):
+			var loaded = ResourceLoader.load(asset)
+			if loaded is Texture2D:
+				return loaded
+	return null
+
+
+## No user signals, evaluation or asset loading occurs in this commit section.
+## A subclass may refuse commit; the controller then applies prepared live recovery.
+func _rollback_commit_state(prepared: Dictionary, recovery: bool) -> bool:
+	var scope := get_manager()
+	var data: Dictionary = prepared.data
+	_audio.stop()
+	for pair in [[scope.get_global_variables(), data.globals], [scope.get_data_asset_overlay(), data.overlay], [scope.get_used_once_only_options(), data.used]]:
+		pair[0].clear()
+		pair[0].merge(pair[1])
+	for key in data.characters:
+		var character: StoryFlowCharacter = scope.get_runtime_characters()[key]
+		for field in data.characters[key]:
+			if field == "variables":
+				character.variables.clear()
+				character.variables.merge(data.characters[key][field])
+			else:
+				character.set(field, data.characters[key][field])
+	scope.get_data_asset_revision()[0] += 1
+	_context = prepared.context
+	_context.data_asset_overlay = scope.get_data_asset_overlay()
+	_context.data_asset_revision = scope.get_data_asset_revision()
+	_context._observed_data_asset_revision = scope.get_data_asset_revision()[0]
+	_evaluator = prepared.evaluator
+	_text.set_context(_context)
+	_current_speaker_path = data.presentation.speaker
+	_rollback.rng_state = data.rng
+	_waiting_for_audio_advance = data.waitingAudio if recovery else false
+	_audio_advance_allow_skip = data.audioSkip if recovery else false
+	_is_processing_chain = false
+	_dialogue_dirty = false
+	_rollback_audio = data.audio
+	if prepared.audio:
+		_audio.play(prepared.audio, data.audio.loop)
+		var player := _audio.get_player()
+		player.seek(data.audio.position)
+		player.stream_paused = data.audio.paused if recovery else false
+	if recovery:
+		_audio.restore_playback_identity(data.audio.playbackIdentity)
+	if not recovery:
+		_context.is_paused = false
+	return true
 
 
 ## The actual player, including a paused line or audio retained after dialogue ends.
@@ -666,7 +981,7 @@ func set_character_variable(character_path: String, variable_name: String, value
 	# The landed/refused answer is deliberately DISCARDED: this lane's pre-P4 posture is a
 	# SILENT VOID no-op on a character or variable miss (A3(b) — never a create), pinned
 	# first-class in tests/test_character_by_id_saves.gd. Only the ById setter below reports.
-	_apply_character_variable(mgr.get_runtime_character(character_path), variable_name, value)
+	_apply_character_variable(character_path, variable_name, value)
 
 
 ## The ONE write core behind the void path setter above and the bool ById setter below,
@@ -679,7 +994,23 @@ func set_character_variable(character_path: String, variable_name: String, value
 ## while the native spellings stay byte-untouched (a custom variable named "Name"
 ## or "Image" still writes exactly as pre-P4, and a name that matches nothing is still
 ## the same silent no-op, never a create).
-func _apply_character_variable(character: StoryFlowCharacter, variable_name: String, value: StoryFlowVariant) -> bool:
+func _apply_character_variable(character_reference: String, variable_name: String, value: StoryFlowVariant, by_id: bool = false) -> bool:
+	var scope := get_manager()
+	var guarded: bool = scope != null and scope._rollback_write_begin()
+	var mgr := get_manager()
+	var character: StoryFlowCharacter = null
+	if mgr:
+		var key := character_reference
+		if by_id:
+			key = StoryFlowCharacter.resolve_character_key(mgr.get_character_id_bridge(), mgr.get_runtime_characters(), character_reference, mgr)
+		character = mgr.get_runtime_character(key)
+	var result := _apply_character_variable_owned(character, variable_name, value)
+	if guarded:
+		scope.end_rollback_mutation()
+	return result
+
+
+func _apply_character_variable_owned(character: StoryFlowCharacter, variable_name: String, value: StoryFlowVariant) -> bool:
 	if not character:
 		return false
 	var lower := variable_name.to_lower()
@@ -874,7 +1205,7 @@ func set_character_variable_by_id(character_id: String, variable_name: String, v
 		mgr.get_character_id_bridge(), mgr.get_runtime_characters(), character_id, mgr)
 	if record_key.is_empty():
 		return false
-	return _apply_character_variable(mgr.get_runtime_character(record_key), variable_name, value)
+	return _apply_character_variable(character_id, variable_name, value, true)
 
 
 # =============================================================================
@@ -929,9 +1260,8 @@ func set_character_variable_by_id(character_id: String, variable_name: String, v
 # false. See _warn_data_asset_once.
 #
 # .sfd STRINGS RESOLVE AT THIS DOOR, and only where their PROVENANCE says they are content: a
-# DECLARED string value localizes, an override and a session write are handed back verbatim. That
-# is localization spec §2's amendment of 2026-08-27, which SUPERSEDES engine-contract 2.1's
-# literal-value posture; the rule itself lives once, in StoryFlowDataAssetStore.try_read, and
+# declaration or version 2 authored override localizes unless its declaration opts out. Legacy
+# overrides and all session writes stay literal. The rule lives in StoryFlowDataAssetStore.try_read, and
 # these accessors reach it by calling that door instead of try_resolve. Unlike
 # get_string_variable above, the running script's strings table is NOT consulted - see
 # _data_asset_locale.
@@ -1601,9 +1931,13 @@ func _find_map_scoped(variable_name: String, is_global: bool) -> Dictionary:
 
 ## Reset all local variables to their initial values from the current script.
 func reset_variables() -> void:
+	var scope := get_manager()
+	var guarded: bool = scope != null and scope._rollback_write_begin()
 	if _context.current_script:
 		_context.local_variables = StoryFlowVariant.deep_copy_variables(_context.current_script.variables)
 		_context.build_variable_name_index(_context.current_script.variables, false)
+	if guarded:
+		scope.end_rollback_mutation()
 
 
 ## Get a localized string by key from the current script or global strings.
@@ -1665,6 +1999,7 @@ func _build_dispatch_table() -> void:
 	# Enum / random
 	_node_handlers[NT.SWITCH_ON_ENUM] = _handle_switch_on_enum
 	_node_handlers[NT.RANDOM_BRANCH] = _handle_random_branch
+	_node_handlers[NT.BLOCK_ROLLBACK] = _handle_block_rollback
 
 	# Logic nodes (no-op at execution, evaluated lazily)
 	var logic_handler := _handle_logic_node
@@ -1806,6 +2141,9 @@ func _process_node(node: Dictionary) -> void:
 		_report_error("Max processing depth exceeded (%d) - possible cyclic graph" % StoryFlowExecutionContext.MAX_PROCESSING_DEPTH)
 		stop_dialogue()
 		return
+	var processing_context := _context
+	if _rollback:
+		_rollback_depth += 1
 	_context.processing_depth += 1
 
 	_context.current_node_id = node.get("id", "")
@@ -1830,12 +2168,20 @@ func _process_node(node: Dictionary) -> void:
 		push_warning("StoryFlow: Unsupported node type '%s' at node %s, skipping" % [node.get("type_string", ""), node.get("id", "")])
 		_process_next_node(StoryFlowHandles.source(node.get("id", "")))
 
-	_context.processing_depth -= 1
+	processing_context.processing_depth = maxi(0, processing_context.processing_depth - 1)
+	if _rollback_depth > 0:
+		_rollback_depth -= 1
+	if _rollback:
+		_rollback.capture()
 
 
 func _process_next_node(source_handle: String) -> void:
 	var edge: Dictionary = _context.current_script.find_connection_by_source_handle(source_handle)
 	if edge.is_empty():
+		# Nothing connected: inside a forEach body the iteration is finished and the loop moves
+		# on (the HTML runtime's processNextNode). Outside a loop the walk ends here.
+		if not _context.loop_stack.is_empty():
+			_continue_for_each_loop(_context.loop_stack.back().node_id)
 		return
 
 	var target_id: String = edge.get("target", "")
@@ -1882,9 +2228,6 @@ func _handle_end(node: Dictionary) -> void:
 						exit_flow_id = popped_flow_id
 						break
 
-	# Clean up any active loop state for the ending script
-	_context.loop_stack.clear()
-
 	# Check if we're in a nested script (runScript call)
 	if _context.call_stack.size() > 0:
 		# If exit flow, check if exit handle is connected in calling script BEFORE popping
@@ -1896,6 +2239,9 @@ func _handle_end(node: Dictionary) -> void:
 				if check_edge.is_empty():
 					# Exit handle not connected - stay in called script
 					return
+
+		# Clean up any active loop state for the ending script
+		_context.loop_stack.clear()
 
 		# Gather output variable values from the called script (by name for mapping).
 		# Map-typed outputs DETACH (duplicate_variant deep-copies the entries):
@@ -1923,7 +2269,10 @@ func _handle_end(node: Dictionary) -> void:
 		if _context.current_script:
 			ended_script_path = _context.current_script.script_path
 		_sf_trace('SCRIPT RETURN "%s"' % ended_script_path)
+		var returning_generation := _session_generation
 		script_ended.emit(ended_script_path)
+		if returning_generation != _session_generation:
+			return
 
 		if frame.script_asset:
 			_context.current_script = frame.script_asset
@@ -1932,6 +2281,14 @@ func _handle_end(node: Dictionary) -> void:
 
 			# Restore flow call stack
 			_context.flow_call_stack = frame.saved_flow_stack.duplicate()
+			_context.loop_stack.assign(frame.saved_loop_stack)
+			_context.node_runtime_states = frame.saved_node_runtime_states
+			# Caller expression memo predates callee writes; retained execution outputs stay intact.
+			_context.clear_boolean_memo()
+			for caller_node_id in _context.node_runtime_states:
+				var caller_node: Dictionary = _context.current_script.get_node(caller_node_id)
+				if caller_node.get("type") in [StoryFlowTypes.NodeType.GET_BOOL, StoryFlowTypes.NodeType.SET_BOOL]:
+					_context.node_runtime_states[caller_node_id].cached_output = null
 
 			# Map output values using the RunScript node's scriptOutputs.
 			# Edge handles use scriptInterface output IDs, not variable IDs.
@@ -1975,6 +2332,8 @@ func _handle_end(node: Dictionary) -> void:
 			var edge: Dictionary = _context.current_script.find_connection_by_source_handle(handle)
 			if not edge.is_empty():
 				_process_next_node(handle)
+			elif not _context.loop_stack.is_empty():
+				_continue_for_each_loop(_context.loop_stack.back().node_id)
 	else:
 		# Main script complete
 		stop_dialogue()
@@ -2056,6 +2415,8 @@ func _handle_dialogue(node: Dictionary) -> void:
 			var audio_loop: bool = data.get("audioLoop", false)
 			_sf_trace('AUDIO "%s"' % _context.current_dialogue_state.audio_key)
 			_audio.play(_context.current_dialogue_state.audio, audio_loop)
+			if _rollback:
+				_rollback_audio = {"key": _context.current_dialogue_state.audio_key, "script": _context.current_script.script_path, "persistent": false}
 
 			# Set advance-on-end state (only for non-looped audio that actually played)
 			var advance_on_end: bool = data.get("audioAdvanceOnEnd", false)
@@ -2104,21 +2465,19 @@ func _handle_run_script(node: Dictionary) -> void:
 	pending_state.output_values = {}
 	pending_state.output_arrays = {}
 	pending_state.output_types = {}
-	if _context.call_stack.size() >= StoryFlowExecutionContext.MAX_SCRIPT_DEPTH:
-		_report_error("Max script nesting depth exceeded (%d)" % StoryFlowExecutionContext.MAX_SCRIPT_DEPTH)
-		return
-
 	var data: Dictionary = node.get("data", {})
 	var target_script_path: String = data.get("script", "")
 	if target_script_path.is_empty():
-		_report_error("RunScript node has no script path")
+		push_warning("StoryFlow: RunScript node has no script selected")
 		return
 
 	var mgr := get_manager()
-	if not mgr:
+	var project: StoryFlowProject = mgr.get_project() if mgr else null
+	var max_script_nesting := StoryFlowProject.normalize_max_script_nesting(project.max_script_nesting) if project else StoryFlowExecutionContext.MAX_SCRIPT_DEPTH
+	if _context.call_stack.size() >= max_script_nesting:
+		_report_error("Max script nesting depth exceeded (%d)" % max_script_nesting)
 		return
 
-	var project: StoryFlowProject = mgr.get_project()
 	if not project:
 		return
 
@@ -2140,8 +2499,7 @@ func _handle_run_script(node: Dictionary) -> void:
 			if is_array:
 				# Array parameters use "{type}-array-param-{id}" handle suffix
 				var handle_suffix := param_type + "-array-param-" + param_id
-				if _context.current_script.find_input_edge(node["id"], handle_suffix).is_empty():
-					continue
+				# Nothing wired passes an empty array (HTML getArrayInput)
 				var arr: Array = []
 				match param_type:
 					"boolean": arr = _evaluator.evaluate_bool_array_input(node.get("id", ""), handle_suffix)
@@ -2152,13 +2510,14 @@ func _handle_run_script(node: Dictionary) -> void:
 					"character": arr = _evaluator.evaluate_character_array_input(node.get("id", ""), handle_suffix)
 					"dataAsset": arr = _evaluator.evaluate_data_array_input(node.get("id", ""), handle_suffix)
 					"audio": arr = _evaluator.evaluate_audio_array_input(node.get("id", ""), handle_suffix)
-				var variant := StoryFlowVariant.new()
-				variant.set_array(arr)
-				param_values[param_name] = variant
+				# By value, like map parameters: the called script never holds the caller's array
+				param_values[param_name] = StoryFlowVariant.from_array(arr).duplicate_variant()
 			else:
 				# Scalar parameters use "{type}-param-{id}" handle suffix
 				var handle_suffix := param_type + "-param-" + param_id
-				if _context.current_script.find_input_edge(node["id"], handle_suffix).is_empty():
+				# Nothing wired passes the type's empty value (HTML getTypedInput); an unwired map
+				# passes nothing and the called script keeps its declared map
+				if param_type == "map" and _context.current_script.find_input_edge(node["id"], handle_suffix).is_empty():
 					continue
 
 				if param_type == "map":
@@ -2208,6 +2567,13 @@ func _handle_run_script(node: Dictionary) -> void:
 	call_frame.script_asset = _context.current_script
 	call_frame.saved_variables = _context.local_variables
 	call_frame.saved_flow_stack = _context.flow_call_stack.duplicate()
+	# The caller's loops and node state are parked in its frame with or without rollback: the
+	# called script starts with none of its own, so its End cannot end a loop of the caller and
+	# a loop it leaves unfinished is gone by its next call.
+	call_frame.saved_loop_stack = _context.loop_stack
+	call_frame.saved_node_runtime_states = _context.node_runtime_states
+	_context.loop_stack = []
+	_context.node_runtime_states = {}
 	_context.call_stack.push_back(call_frame)
 
 	_sf_trace('SCRIPT CALL "%s"' % target_script_path)
@@ -2218,7 +2584,10 @@ func _handle_run_script(node: Dictionary) -> void:
 	_context.build_variable_name_index(target_script.variables, false)
 	_context.flow_call_stack.clear()
 
+	var calling_generation := _session_generation
 	script_started.emit(target_script_path)
+	if calling_generation != _session_generation:
+		return
 
 	# Apply parameter values to the called script's local variables
 	for param_name in param_values:
@@ -2230,6 +2599,9 @@ func _handle_run_script(node: Dictionary) -> void:
 	# Start from node 0 in new script
 	var start_node: Dictionary = target_script.get_start_node()
 	if not start_node.is_empty():
+		if target_script.find_connection_by_source_handle(StoryFlowHandles.source("0")).is_empty():
+			_report_error("Script's Start node is not connected")
+			return
 		_process_node(start_node)
 	else:
 		_report_error("Start node not found in script: %s" % target_script_path)
@@ -2239,7 +2611,7 @@ func _handle_run_flow(node: Dictionary) -> void:
 	var data: Dictionary = node.get("data", {})
 	var flow_id: String = data.get("flowId", "")
 	if flow_id.is_empty():
-		_report_error("RunFlow node has no flow ID")
+		push_warning("StoryFlow: RunFlow node has no flow selected")
 		return
 
 	if _context.flow_call_stack.size() >= StoryFlowExecutionContext.MAX_FLOW_DEPTH:
@@ -2262,7 +2634,10 @@ func _handle_run_flow(node: Dictionary) -> void:
 			return
 
 	# Special case: calling the main "Start" flow
-	if flow_id.to_lower() == "start":
+	if flow_id == "start":
+		if script_asset.find_connection_by_source_handle(StoryFlowHandles.source("0")).is_empty():
+			_report_error("Start node is not connected")
+			return
 		_context.flow_call_stack.push_back(flow_id)
 		var start_node: Dictionary = script_asset.get_start_node()
 		if not start_node.is_empty():
@@ -2279,7 +2654,7 @@ func _handle_run_flow(node: Dictionary) -> void:
 				_process_node(n)
 				return
 
-	_report_error("EntryFlow not found for flowId: %s" % flow_id)
+	_report_error('Flow "%s" not found' % script_asset.flows.get(flow_id, {}).get("name", flow_id))
 
 
 func _handle_entry_flow(node: Dictionary) -> void:
@@ -2452,9 +2827,7 @@ func _handle_switch_on_enum(node: Dictionary) -> void:
 			enum_value = val.get_string("")
 
 	var source_handle := StoryFlowHandles.source(node["id"], enum_value)
-	var edge: Dictionary = _context.current_script.find_connection_by_source_handle(source_handle)
-	if not edge.is_empty():
-		_process_next_node(source_handle)
+	_process_next_node(source_handle)
 
 
 func _handle_random_branch(node: Dictionary) -> void:
@@ -2480,13 +2853,11 @@ func _handle_random_branch(node: Dictionary) -> void:
 	if total_weight <= 0:
 		var first_option: Dictionary = options[0]
 		var source_handle := StoryFlowHandles.source(node["id"], first_option.get("id", ""))
-		var edge: Dictionary = _context.current_script.find_connection_by_source_handle(source_handle)
-		if not edge.is_empty():
-			_process_next_node(source_handle)
+		_process_next_node(source_handle)
 		return
 
 	# Pick a random value in [0, total_weight)
-	var roll := randi() % total_weight
+	var roll: int = _context.rollback_rng.random_int(0, total_weight - 1) if _context.rollback_rng else randi() % total_weight
 
 	# Find selected option using cumulative weight
 	var cumulative := 0
@@ -2499,13 +2870,56 @@ func _handle_random_branch(node: Dictionary) -> void:
 
 	var selected_option: Dictionary = options[selected_index]
 	var source_handle := StoryFlowHandles.source(node["id"], selected_option.get("id", ""))
-	var edge: Dictionary = _context.current_script.find_connection_by_source_handle(source_handle)
-	if not edge.is_empty():
-		_process_next_node(source_handle)
+	_process_next_node(source_handle)
 
 # =============================================================================
 # Node Handlers - Array Set
 # =============================================================================
+
+const _SET_ELEMENT_TYPES := {
+	StoryFlowTypes.NodeType.SET_BOOL_ARRAY_ELEMENT: "boolean", StoryFlowTypes.NodeType.SET_INT_ARRAY_ELEMENT: "integer",
+	StoryFlowTypes.NodeType.SET_FLOAT_ARRAY_ELEMENT: "float", StoryFlowTypes.NodeType.SET_STRING_ARRAY_ELEMENT: "string",
+	StoryFlowTypes.NodeType.SET_IMAGE_ARRAY_ELEMENT: "image", StoryFlowTypes.NodeType.SET_CHARACTER_ARRAY_ELEMENT: "character",
+	StoryFlowTypes.NodeType.SET_AUDIO_ARRAY_ELEMENT: "audio",
+}
+
+
+## Whether anything is wired into a Set Array node's array input.
+func _has_array_input(node: Dictionary) -> bool:
+	for connection in _context.current_script.find_connections_to_node(node["id"]):
+		if str(connection.get("target_handle", "")).contains("-array"):
+			return true
+	return false
+
+
+## Set Array Element as the editor runs it (HTML setArrayElement): the array from input "2", the
+## index from input "3" or the exported value1, the value from input "4" or the exported value2,
+## and the changed copy written back to the variable behind the array input.
+func _handle_set_array_element(node: Dictionary, type: String) -> void:
+	var node_id: String = node["id"]
+	var data: Dictionary = node.get("data", {})
+	var array_suffix := type + "-array-2"
+	if _evaluator:
+		var arr := _evaluate_character_var_array_input(node_id, type, array_suffix)
+		var index := _evaluator.evaluate_integer_input(node_id, "integer-3", _evaluator._get_data_int(data, "value1", 0))
+		if index >= 0 and index < arr.size():
+			var inline_value = data.get("value2", null)
+			var element := StoryFlowVariant.new()
+			match type:
+				"boolean":
+					element.set_bool(_evaluator.evaluate_boolean_input(node_id, "boolean-4", inline_value.get_bool(false) if inline_value is StoryFlowVariant else false))
+				"integer":
+					element.set_int(_evaluator.evaluate_integer_input(node_id, "integer-4", inline_value.get_int(0) if inline_value is StoryFlowVariant else 0))
+				"float":
+					element.set_float(_evaluator.evaluate_float_input(node_id, "float-4", inline_value.get_float(0.0) if inline_value is StoryFlowVariant else 0.0))
+				"string":
+					element.set_string(_evaluator.evaluate_string_input(node_id, "string-4", _text.get_string(inline_value.get_string(""), language_code) if inline_value is StoryFlowVariant else ""))
+				_:
+					element.set_string(_evaluator.evaluate_string_input(node_id, type + "-4", inline_value.get_string("") if inline_value is StoryFlowVariant else ""))
+			arr[index] = element
+			_update_connected_array_variable(node, array_suffix, arr)
+	_handle_set_node_end(node, StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_FLOW))
+
 
 func _handle_array_set(node: Dictionary) -> void:
 	if node.get("type") == StoryFlowTypes.NodeType.SET_DATA_ARRAY_ELEMENT:
@@ -2513,14 +2927,18 @@ func _handle_array_set(node: Dictionary) -> void:
 		return
 	var data: Dictionary = node.get("data", {})
 	var var_id: String = data.get("variable", "")
+	var node_type: StoryFlowTypes.NodeType = node.get("type", StoryFlowTypes.NodeType.UNKNOWN)
+	var NT := StoryFlowTypes.NodeType
+	# The export writes no variable on an element setter: its array arrives over the input edge.
+	if var_id.is_empty() and _SET_ELEMENT_TYPES.has(node_type):
+		_handle_set_array_element(node, _SET_ELEMENT_TYPES[node_type])
+		return
 	var is_global: bool = data.get("isGlobal", false)
 	var variable: Dictionary = _find_variable(var_id, is_global)
 	if variable.is_empty():
 		_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
 		return
 
-	var node_type: StoryFlowTypes.NodeType = node.get("type", StoryFlowTypes.NodeType.UNKNOWN)
-	var NT := StoryFlowTypes.NodeType
 
 	# Determine if this is a SetArrayElement
 	var is_set_element := node_type in [
@@ -2577,9 +2995,10 @@ func _handle_array_set(node: Dictionary) -> void:
 					elem.set_string(_evaluator.evaluate_string_input(node.get("id", ""), StoryFlowHandles.IN_STRING, dv))
 			arr[idx] = elem
 	elif not is_set_element and _evaluator:
-		# Set whole array from connected input
-		var new_array: Array = []
-		match node_type:
+		# Set whole array from connected input. With nothing connected the variable keeps its
+		# value (HTML updateArrayVariable).
+		var new_array: Array = variant.get_array()
+		match node_type if _has_array_input(node) else NT.UNKNOWN:
 			NT.SET_BOOL_ARRAY:
 				new_array = _evaluator.evaluate_bool_array_input(node.get("id", ""), StoryFlowHandles.IN_BOOL_ARRAY)
 			NT.SET_INT_ARRAY:
@@ -2596,6 +3015,9 @@ func _handle_array_set(node: Dictionary) -> void:
 				new_array = _evaluator.evaluate_data_array_input(node.get("id", ""), StoryFlowHandles.IN_DATA_ARRAY)
 			NT.SET_AUDIO_ARRAY:
 				new_array = _evaluator.evaluate_audio_array_input(node.get("id", ""), StoryFlowHandles.IN_AUDIO_ARRAY)
+		if not is_same(new_array, variant.get_array()):
+			# A copy, so the variable does not follow later changes to the array it was set from
+			new_array = StoryFlowVariant.from_array(new_array).duplicate_variant().get_array()
 		variant.set_array(new_array)
 
 	var _arr_var_name: String = variable.get("name", var_id)
@@ -2641,6 +3063,8 @@ func _handle_array_modify(node: Dictionary) -> void:
 				arr = _evaluator.evaluate_data_array_input(node_id, StoryFlowHandles.IN_DATA_ARRAY).duplicate()
 			NT.ADD_TO_AUDIO_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY, NT.CLEAR_AUDIO_ARRAY:
 				arr = _evaluator.evaluate_audio_array_input(node_id, StoryFlowHandles.IN_AUDIO_ARRAY)
+		# The op changes a copy and writes it back to the variable behind the input, if there is one
+		arr = arr.duplicate()
 
 	var inline_value = data.get("value", null)
 
@@ -2680,11 +3104,11 @@ func _handle_array_modify(node: Dictionary) -> void:
 				dv = _resolve_string(raw)
 			elif inline_value is String:
 				dv = _resolve_string(inline_value)
-			var eval_result: String = _evaluator.evaluate_string_input(node_id, StoryFlowHandles.IN_STRING, dv) if _evaluator else dv
-			# If evaluator returned empty but we have a resolved default, use the default
-			# (the input edge may evaluate a localization key that the string evaluator can't resolve)
-			if eval_result.is_empty() and not dv.is_empty():
-				eval_result = dv
+			# A wired value is added as it is, empty included; the inline value is for an unwired
+			# pin. A bare "string-array" handle also answers the "string" lookup, and is not the value.
+			var eval_result := dv
+			if _evaluator and _context.current_script.find_input_edge(node_id, StoryFlowHandles.IN_STRING) != _context.current_script.find_input_edge(node_id, StoryFlowHandles.IN_STRING_ARRAY):
+				eval_result = _evaluator.evaluate_string_input(node_id, StoryFlowHandles.IN_STRING, dv)
 			var elem := StoryFlowVariant.new()
 			elem.set_string(eval_result)
 			arr.append(elem)
@@ -2916,7 +3340,16 @@ func _get_array_handle_suffix(node_type: StoryFlowTypes.NodeType) -> String:
 # Node Handlers - ForEach Loop
 # =============================================================================
 
+## Iterations run one after another here rather than each inside the last one's call chain, so
+## a long loop does not run out of call depth: a body that finishes while this is still on the
+## stack asks for the next iteration (see _continue_for_each_loop) and unwinds back to it.
 func _handle_for_each_loop(node: Dictionary) -> void:
+	while _for_each_loop_step(node):
+		pass
+
+
+## One iteration, or the loop's end. True when the body finished and the next iteration is due.
+func _for_each_loop_step(node: Dictionary) -> bool:
 	var node_id: String = node["id"]
 	var node_state: StoryFlowNodeRuntimeState = _context.get_node_state(node_id)
 	var node_type: StoryFlowTypes.NodeType = node.get("type", StoryFlowTypes.NodeType.UNKNOWN)
@@ -2944,7 +3377,8 @@ func _handle_for_each_loop(node: Dictionary) -> void:
 				NT.FOR_EACH_AUDIO_LOOP:
 					loop_array = _evaluator.evaluate_audio_array_input(node.get("id", ""), StoryFlowHandles.IN_AUDIO_ARRAY)
 
-		node_state.loop_array = loop_array
+		# A copy: the body may change the variable, the walk stays as it began (HTML getArrayInput)
+		node_state.loop_array = loop_array.duplicate()
 		node_state.loop_index = 0
 		node_state.loop_initialized = true
 
@@ -2968,10 +3402,11 @@ func _handle_for_each_loop(node: Dictionary) -> void:
 		var loop_frame := StoryFlowLoopFrame.new()
 		loop_frame.node_id = node_id
 		loop_frame.type = StoryFlowTypes.LoopType.FOR_EACH
+		loop_frame.current_index = node_state.loop_index
 		_context.loop_stack.push_back(loop_frame)
 
 		# Execute loop body
-		_process_next_node(StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_LOOP_BODY))
+		return _run_loop_body(node, node_state)
 	else:
 		# Loop complete - cleanup
 		node_state.loop_initialized = false
@@ -2982,7 +3417,25 @@ func _handle_for_each_loop(node: Dictionary) -> void:
 			_context.loop_stack.pop_back()
 
 		# Continue after loop
-		_process_next_node(StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_LOOP_COMPLETED))
+		_complete_loop(node_id)
+		return false
+
+
+## Run a loop body. True when it finished synchronously and asked for the next iteration.
+func _run_loop_body(node: Dictionary, node_state: StoryFlowNodeRuntimeState) -> bool:
+	var context := _context
+	var was_running := node_state.loop_running
+	node_state.loop_running = true
+	node_state.loop_continue = false
+	_process_next_node(StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_LOOP_BODY))
+	node_state.loop_running = was_running
+	var again := node_state.loop_continue and context == _context and context.is_executing and not context.is_paused
+	node_state.loop_continue = false
+	if again:
+		# What _process_node does on entering the loop node again
+		context.current_node_id = node["id"]
+		_sf_trace("NODE %s %s" % [node["id"], node.get("type_string", "")])
+	return again
 
 
 func _continue_for_each_loop(node_id: String) -> void:
@@ -3000,6 +3453,11 @@ func _continue_for_each_loop(node_id: String) -> void:
 	# Pop the loop context that was pushed for this iteration
 	if _context.loop_stack.size() > 0 and _context.loop_stack.back().node_id == node_id:
 		_context.loop_stack.pop_back()
+
+	# The loop's handler is still on the stack running this body: unwind to it
+	if node_state.loop_running:
+		node_state.loop_continue = true
+		return
 
 	# Re-process the loop node to continue
 	_process_node(loop_node)
@@ -3173,6 +3631,11 @@ func _handle_map_pure_node(node: Dictionary) -> void:
 
 
 func _handle_for_each_map(node: Dictionary) -> void:
+	while _for_each_map_step(node):
+		pass
+
+
+func _for_each_map_step(node: Dictionary) -> bool:
 	# Mirrors the HTML runtime's processForEachMap: iterate map entries (key +
 	# value) in insertion order. Entries are SNAPSHOT once at loop init — body
 	# mutations (even removeMapKey of the current key) land on the live map but
@@ -3185,8 +3648,8 @@ func _handle_for_each_map(node: Dictionary) -> void:
 	# Missing K/V types: the map input handle cannot be built — HTML follows
 	# "completed" immediately with zero iterations (and no LOOP trace).
 	if str(data.get("keyType", "")).is_empty() or str(data.get("valueType", "")).is_empty():
-		_process_next_node(StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_LOOP_COMPLETED))
-		return
+		_complete_loop(node_id)
+		return false
 
 	var node_state: StoryFlowNodeRuntimeState = _context.get_node_state(node_id)
 
@@ -3234,10 +3697,11 @@ func _handle_for_each_map(node: Dictionary) -> void:
 		var loop_frame := StoryFlowLoopFrame.new()
 		loop_frame.node_id = node_id
 		loop_frame.type = StoryFlowTypes.LoopType.FOR_EACH
+		loop_frame.current_index = node_state.loop_index
 		_context.loop_stack.push_back(loop_frame)
 
 		# Execute loop body
-		_process_next_node(StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_LOOP_BODY))
+		return _run_loop_body(node, node_state)
 	else:
 		# Loop complete - cleanup all loop state
 		node_state.loop_initialized = false
@@ -3252,7 +3716,8 @@ func _handle_for_each_map(node: Dictionary) -> void:
 			_context.loop_stack.pop_back()
 
 		# Continue after loop
-		_process_next_node(StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_LOOP_COMPLETED))
+		_complete_loop(node_id)
+		return false
 
 
 ## Deep-duplicate a map's entries into a fresh Dictionary (per-value
@@ -3311,6 +3776,7 @@ func _handle_set_background_image(node: Dictionary) -> void:
 	# correct script context (asset IDs are per-file, so cross-script lookups
 	# would fail without the cached texture).
 	_context.persistent_image = image_path
+	_context.persistent_image_script = _context.current_script.script_path
 	if image_path != "":
 		_context.persistent_image_texture = _resolve_image_asset(image_path, null, null)
 	else:
@@ -3363,6 +3829,8 @@ func _handle_play_audio(node: Dictionary) -> void:
 		var stream: AudioStream = _audio.resolve_audio_asset(audio_path, _context.current_script, mgr)
 		if stream:
 			_audio.play(stream, loop)
+			if _rollback:
+				_rollback_audio = {"key": audio_path, "script": _context.current_script.script_path, "persistent": true}
 	audio_play_requested.emit(audio_path, loop)
 	_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_OUTPUT))
 
@@ -3842,6 +4310,7 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 	_current_speaker_path = ""
 	var state := StoryFlowDialogueState.new()
 	state.is_valid = true
+	state.is_restored = _dialogue_entry_serial == _restored_dialogue_serial
 	state.node_id = dialogue_node.get("id", "")
 
 	var data: Dictionary = dialogue_node.get("data", {})
@@ -3908,6 +4377,7 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 		state.image_key = image_key
 		state.image = _resolve_image_asset(image_key, project, null)
 		_context.persistent_image = image_key
+		_context.persistent_image_script = _context.current_script.script_path
 		_context.persistent_image_texture = state.image
 	elif data.get("imageReset", false):
 		state.image = null
@@ -3978,7 +4448,7 @@ func _build_dialogue_state(dialogue_node: Dictionary) -> StoryFlowDialogueState:
 		state.can_advance = not header_edge.is_empty()
 
 	# Audio advance-on-end flags for UI
-	var audio_advance: bool = data.get("audioAdvanceOnEnd", false) and not data.get("audioLoop", false)
+	var audio_advance: bool = not state.is_restored and data.get("audioAdvanceOnEnd", false) and not data.get("audioLoop", false)
 	state.audio_advance_on_end = audio_advance
 	state.audio_allow_skip = audio_advance and data.get("audioAllowSkip", false)
 
@@ -4081,7 +4551,7 @@ func _set_variable_on_node(node: Dictionary, value: StoryFlowVariant) -> void:
 	if is_global:
 		var mgr := get_manager()
 		if mgr:
-			mgr.set_global_variable(var_id, value)
+			mgr.set_global_variable(var_id, value, _rollback)
 			var variable: Dictionary = mgr.get_global_variable(var_id)
 			if not variable.is_empty():
 				_notify_variable_changed(variable, true)
@@ -4092,6 +4562,14 @@ func _set_variable_on_node(node: Dictionary, value: StoryFlowVariant) -> void:
 
 
 func _set_variable_from_result(result: Dictionary, value: StoryFlowVariant) -> void:
+	var scope := get_manager()
+	var guarded: bool = scope != null and scope._rollback_write_begin()
+	_set_variable_from_result_owned(result, value)
+	if guarded:
+		scope.end_rollback_mutation()
+
+
+func _set_variable_from_result_owned(result: Dictionary, value: StoryFlowVariant) -> void:
 	var is_global: bool = result.get("is_global", false)
 	var var_id: String = result.get("id", "")
 
@@ -4288,3 +4766,23 @@ func _handle_set_data_array_element(node: Dictionary) -> void:
 			_context.get_node_state(node_id).cached_output = StoryFlowVariant.from_array(arr)
 			_update_connected_array_variable(node, suffix, arr)
 	_handle_set_node_end(node, StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_FLOW))
+
+
+func _complete_loop(node_id: String) -> void:
+	var handle := StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_LOOP_COMPLETED)
+	if _context.current_script.find_connection_by_source_handle(handle).is_empty() and not _context.loop_stack.is_empty():
+		_continue_for_each_loop(_context.loop_stack.back().node_id)
+	else:
+		_process_next_node(handle)
+
+
+func _handle_block_rollback(node: Dictionary) -> void:
+	var generation := _session_generation
+	var entry := _dialogue_entry_serial
+	var context := _context
+	var script := context.current_script
+	var node_id: String = node["id"]
+	block_rollback("barrier")
+	if generation != _session_generation or entry != _dialogue_entry_serial or not context.is_executing or context != _context or script != context.current_script or context.current_node_id != node_id:
+		return
+	_process_next_node(StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_FLOW))

@@ -41,12 +41,13 @@ const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.
 ## THE SEED STORES VERBATIM BYTES AND THE READ DOOR LOCALIZES, and the REASON changed with
 ## localization spec §2's amendment of 2026-08-27, which SUPERSEDES engine-contract 2.1's
 ## literal-value posture: data-assets.json now DOES carry a strings table, and a Data Asset's
-## DECLARED string value is a table key like any other artifact's (the importer merges that table
+## authored string value is a table key like any other artifact's (the importer merges that table
 ## into the project globals characters.json already feeds). It is still not resolved on the way
 ## IN, because a bake would freeze the text in whatever language happened to be current at import
 ## and would destroy the one thing the gate needs - the difference between a value that came from
 ## the seed and one a script wrote. Resolution happens at [method try_read] / [method read_bound]
 ## instead.
+## Version 2 extends this to file overrides; the declaration's localizable flag gates both tiers.
 ##
 ## FOUR DOORS OUT, one walk behind all of them:
 ##  - [method try_read]   the value with the LOCALIZATION GATE applied: the door every surface
@@ -107,9 +108,9 @@ enum Binding {
 ## re-derived afterwards: once an overlay entry and an override are both just a StoryFlowVariant
 ## reference, nothing downstream can tell them apart.
 enum Origin {
-	## The root-most declaration's own authored value (section 4.3). The ONLY tier that localizes.
+	## The root-most declaration's own authored value (section 4.3).
 	DECLARATION,
-	## An `overrides` entry at some chain level. Authored, but NOT keyed - see [method _read_out].
+	## An authored override. Localizes only in localizationVersion 2 exports.
 	OVERRIDE,
 	## An overlay entry: a write this session made. Live data, never content.
 	SESSION_WRITE,
@@ -131,6 +132,7 @@ const KEY_NEAREST := "nearest"
 const KEY_FOUND := "found"
 const KEY_DECLARATION := "declaration"
 const KEY_ORIGIN := "origin"
+const KEY_LOCALIZATION_VERSION := "localization_version"
 
 ## The BOUND wrapper's key holding a whole resolution ([method _bind]'s answer). It spells the
 ## same word as [constant KEY_FOUND] and means something different - that one is the bundle's own
@@ -179,6 +181,7 @@ static func build_seed(project: StoryFlowProject, out_seed: Dictionary) -> void:
 			"parent": "" if parent == null else str(parent),
 			"variables": variables if variables is Array else [],
 			"overrides": {},
+			KEY_LOCALIZATION_VERSION: project.data_asset_localization_version,
 		}
 
 	# --- Pass 2: overrides, typed against the chain's declaration ---
@@ -609,32 +612,15 @@ static func try_resolve(seed: Dictionary, overlay: Dictionary, asset_id: String,
 ## "nothing to look anything up in" and every value passes through verbatim, which is what a
 ## hand-built store in a test wants.
 ##
-## Localization spec §2's amendment of 2026-08-27 - which SUPERSEDES engine-contract 2.1's "a .sfd
-## value is a literal, never look it up" - makes a Data Asset's DECLARED string values
-## player-facing prose, shipped as stable table keys in data-assets.json's own strings block and
-## resolved through the very ladder every other artifact's strings already use.
+## Declarations localize in every export version. localizationVersion 2 also keys authored
+## overrides as data.<authoringAssetId>.<variableId>.value, with array index / opaque map-key
+## suffixes. The nearest override already carries its author's key, including when inherited;
+## this door resolves those stored bytes and never constructs a key from the reading asset.
+## Missing/version 1 retains declaration-only behavior for historical exports.
 ##
-## WHAT LOCALIZES, and the three rules re-derivable wrongly (the vendored package's
-## manifest.localization.dataAssets spells all of them out):
-##
-##  - ONLY A DECLARATION. [constant Origin.OVERRIDE] and [constant Origin.SESSION_WRITE] are
-##    handed back verbatim. An override is AUTHORED but UNKEYED: a .sfd id carries no per-asset
-##    segment, so a declaration and a descendant's override of it would collide on one
-##    `<variableId>.value`, and the exporter therefore keys declarations only. Localizing an
-##    override does not MISS - it serves the ANCESTOR's translation for a text the descendant
-##    deliberately replaced.
-##  - A WRITTEN VALUE NEVER LOCALIZES, including after a save/load, because the save carries the
-##    overlay and a restored write was never content. The gate is WHERE THE VALUE CAME FROM and
-##    never whether it LOOKS like a key: a write that happened to equal a key would otherwise be
-##    translated into a string the game has since redefined, and that failure is invisible in the
-##    source language.
-##  - STRING-TYPED PROSE ONLY, decided by the DECLARED type - see [method _localize_declared].
-##
-## THE ID IS BUILT FROM THE VARIABLE ALONE (`<variableId>.value`, `.value.<index>`,
-## `.value.<mapKey>`) and it is THE EXPORTER that built it; nothing here re-derives one, this
-## resolves the bytes the seed carries. That is the deliberate CONTRAST with a character value's
-## `<characterId>.<variableId>.value`, and the reason every level of a chain may carry keyed
-## strings: it is the VARIABLE that is unique, not the asset.
+## The root-most declaration's localizable=false keeps all its values literal. Session writes,
+## including restored writes, always stay literal. Only string scalars, string-array elements
+## and string-valued map values localize; map keys and other declared types never do.
 ##
 ## RESOLUTION IS AT THIS DOOR, never baked, so a mid-session set_language lands on the very next
 ## .sfd read - the same read-time posture this engine already has for every other string it holds
@@ -756,12 +742,14 @@ static func _copy_out(found: Dictionary) -> StoryFlowVariant:
 ## to look anything up in" - a hand-built store in a test - and passes everything through.
 static func _read_out(found: Dictionary, locale: Dictionary) -> StoryFlowVariant:
 	var value := _copy_out(found)
-	if found[KEY_ORIGIN] == Origin.DECLARATION and not locale.is_empty():
+	var authored: bool = found[KEY_ORIGIN] == Origin.DECLARATION or (
+		found[KEY_ORIGIN] == Origin.OVERRIDE and found[KEY_LOCALIZATION_VERSION] == 2)
+	if authored and found[KEY_DECLARATION].get("localizable", true) != false and not locale.is_empty():
 		_localize_declared(found[KEY_DECLARATION], locale, value)
 	return value
 
 
-## A DECLARED value with its string-table keys resolved, IN PLACE on the copy the read is about
+## An authored value with its string-table keys resolved, IN PLACE on the copy the read is about
 ## to hand out.
 ##
 ## THE TYPE GATE IS THE EXPORTER'S, transcribed (json-export-strategy.ts's keying pass): a string
@@ -854,14 +842,15 @@ static func _localize_string(locale: Dictionary, value) -> void:
 ##  - [constant KEY_FOUND] / [constant KEY_DECLARATION]: whether any level declared the id, and
 ##    the ROOT-MOST declaration.
 ##  - [constant KEY_ORIGIN]: WHICH tier the nearest hit came from, recorded at the branch that
-##    already knows. DECLARATION when there is no nearest hit at all, which is the one tier the
-##    localization gate treats as content.
+##    already knows. DECLARATION when there is no nearest hit at all.
+##  - [constant KEY_LOCALIZATION_VERSION]: the override author's imported version, used to
+##    distinguish keyed version 2 content from legacy literal overrides.
 ##
 ## ADDRESS IT THROUGH THOSE CONSTANTS AND NEVER THROUGH A STRING LITERAL - at every door here and
 ## at the fifth door that does not exist yet, which is where the typo lands. The constants' own
 ## doc says what a misspelled literal costs, and it is not a crash.
 static func _walk_for_value(seed: Dictionary, overlay: Dictionary, asset_id: String, variable_id: String) -> Dictionary:
-	var acc := {KEY_HAS_NEAREST: false, KEY_NEAREST: null, KEY_FOUND: false, KEY_DECLARATION: {}, KEY_ORIGIN: Origin.DECLARATION}
+	var acc := {KEY_HAS_NEAREST: false, KEY_NEAREST: null, KEY_FOUND: false, KEY_DECLARATION: {}, KEY_ORIGIN: Origin.DECLARATION, KEY_LOCALIZATION_VERSION: 1}
 	if variable_id.is_empty():
 		return acc
 
@@ -879,6 +868,7 @@ static func _walk_for_value(seed: Dictionary, overlay: Dictionary, asset_id: Str
 					acc[KEY_NEAREST] = overrides[variable_id]
 					acc[KEY_HAS_NEAREST] = true
 					acc[KEY_ORIGIN] = Origin.OVERRIDE
+					acc[KEY_LOCALIZATION_VERSION] = level.get(KEY_LOCALIZATION_VERSION, 1)
 		var declaration := _find_declared_on_level(level, variable_id)
 		if not declaration.is_empty():
 			acc[KEY_DECLARATION] = declaration

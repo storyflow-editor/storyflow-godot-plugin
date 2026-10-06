@@ -10,6 +10,9 @@ const StoryFlowTextBlock = preload("res://addons/storyflow/core/storyflow_text_b
 ## Whether this state represents a valid dialogue node.
 var is_valid: bool = false
 
+## A restored entry is already fully revealed, including on presentation redraw.
+var is_restored: bool = false
+
 ## The ID of the dialogue node producing this state.
 var node_id: String = ""
 

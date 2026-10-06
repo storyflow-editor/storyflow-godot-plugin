@@ -276,7 +276,7 @@ func evaluate_boolean_from_node(node_id: String, source_handle: String = "") -> 
 		StoryFlowTypes.NodeType.GET_RANDOM_BOOL_ARRAY_ELEMENT:
 			var arr := evaluate_bool_array_input(node_id, StoryFlowHandles.IN_BOOL_ARRAY)
 			if arr.size() > 0:
-				result = arr[randi_range(0, arr.size() - 1)].get_bool()
+				result = arr[_random_int(0, arr.size() - 1)].get_bool()
 
 		# Map op arms branch on the node's OWN data keyType/valueType strings —
 		# a NEW pattern for this evaluator: catalog map ops carry K/V in node
@@ -449,7 +449,7 @@ func evaluate_integer_from_node(node_id: String, source_handle: String = "") -> 
 				var temp := min_val
 				min_val = max_val
 				max_val = temp
-			result = randi_range(min_val, max_val)
+			result = _random_int(min_val, max_val)
 
 		StoryFlowTypes.NodeType.BOOLEAN_TO_INT:
 			var input := evaluate_boolean_input(node_id, StoryFlowHandles.IN_BOOLEAN, _get_data_bool(data, "value", false))
@@ -580,7 +580,7 @@ func evaluate_integer_from_node(node_id: String, source_handle: String = "") -> 
 		StoryFlowTypes.NodeType.GET_RANDOM_INT_ARRAY_ELEMENT:
 			var arr := evaluate_int_array_input(node_id, StoryFlowHandles.IN_INT_ARRAY)
 			if arr.size() > 0:
-				result = arr[randi_range(0, arr.size() - 1)].get_int()
+				result = arr[_random_int(0, arr.size() - 1)].get_int()
 
 		# Map ops branch on the node's data keyType/valueType (see the boolean
 		# evaluator's map arms for the pattern note)
@@ -734,7 +734,7 @@ func evaluate_float_from_node(node_id: String, source_handle: String = "") -> fl
 				var temp := min_val
 				min_val = max_val
 				max_val = temp
-			result = randf_range(min_val, max_val)
+			result = _random_float(min_val, max_val)
 
 		StoryFlowTypes.NodeType.BOOLEAN_TO_FLOAT:
 			var input := evaluate_boolean_input(node_id, StoryFlowHandles.IN_BOOLEAN, _get_data_bool(data, "value", false))
@@ -757,7 +757,7 @@ func evaluate_float_from_node(node_id: String, source_handle: String = "") -> fl
 		StoryFlowTypes.NodeType.GET_RANDOM_FLOAT_ARRAY_ELEMENT:
 			var arr := evaluate_float_array_input(node_id, StoryFlowHandles.IN_FLOAT_ARRAY)
 			if arr.size() > 0:
-				result = arr[randi_range(0, arr.size() - 1)].get_float()
+				result = arr[_random_int(0, arr.size() - 1)].get_float()
 
 		# Map op branches on the node's data valueType (see the boolean
 		# evaluator's map arms for the pattern note)
@@ -951,7 +951,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 		StoryFlowTypes.NodeType.GET_RANDOM_STRING_ARRAY_ELEMENT:
 			var arr := evaluate_string_array_input(node_id, StoryFlowHandles.IN_STRING_ARRAY)
 			if arr.size() > 0:
-				result = _array_string(arr[randi_range(0, arr.size() - 1)])
+				result = _array_string(arr[_random_int(0, arr.size() - 1)])
 			result_is_resolved = true
 
 		StoryFlowTypes.NodeType.GET_IMAGE_ARRAY_ELEMENT:
@@ -963,7 +963,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 		StoryFlowTypes.NodeType.GET_RANDOM_IMAGE_ARRAY_ELEMENT:
 			var arr := evaluate_image_array_input(node_id, StoryFlowHandles.IN_IMAGE_ARRAY)
 			if arr.size() > 0:
-				result = arr[randi_range(0, arr.size() - 1)].get_string()
+				result = arr[_random_int(0, arr.size() - 1)].get_string()
 
 		StoryFlowTypes.NodeType.GET_CHARACTER_ARRAY_ELEMENT:
 			var arr := evaluate_character_array_input(node_id, StoryFlowHandles.IN_CHARACTER_ARRAY)
@@ -974,7 +974,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 		StoryFlowTypes.NodeType.GET_RANDOM_CHARACTER_ARRAY_ELEMENT:
 			var arr := evaluate_character_array_input(node_id, StoryFlowHandles.IN_CHARACTER_ARRAY)
 			if arr.size() > 0:
-				result = arr[randi_range(0, arr.size() - 1)].get_string()
+				result = arr[_random_int(0, arr.size() - 1)].get_string()
 
 		StoryFlowTypes.NodeType.GET_AUDIO_ARRAY_ELEMENT:
 			var arr := evaluate_audio_array_input(node_id, StoryFlowHandles.IN_AUDIO_ARRAY)
@@ -985,7 +985,7 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 		StoryFlowTypes.NodeType.GET_RANDOM_AUDIO_ARRAY_ELEMENT:
 			var arr := evaluate_audio_array_input(node_id, StoryFlowHandles.IN_AUDIO_ARRAY)
 			if arr.size() > 0:
-				result = arr[randi_range(0, arr.size() - 1)].get_string()
+				result = arr[_random_int(0, arr.size() - 1)].get_string()
 
 		# Map op branches on the node's data valueType (see the boolean
 		# evaluator's map arms for the pattern note). All string-family value
@@ -1045,8 +1045,8 @@ func evaluate_string_from_node(node_id: String, source_handle: String = "") -> S
 		# arm here hands back a value whose string IS a table key, which is why the tail's
 		# _resolve_string_key exists at all; a .sfd read has already been through the store's own
 		# door, which resolved it or deliberately did not, GATED ON PROVENANCE
-		# (StoryFlowDataAssetStore.try_read — declarations localize, overrides and session writes
-		# never do). Running this ladder over the answer would be a SECOND door gated on SHAPE,
+		# (StoryFlowDataAssetStore.try_read — opted-in declarations and version 2 file overrides
+		# localize; session writes never do). Running this ladder over the answer would be a SECOND door gated on SHAPE,
 		# and it would undo exactly the case the gate exists for: a session write whose value
 		# happens to be a real key would come back as somebody else's prose, invisibly in the
 		# source language.
@@ -2466,7 +2466,7 @@ func _evaluate_data_reference(node_id: String, source_handle: String) -> String:
 			var arr := evaluate_data_array_input(node_id, StoryFlowHandles.IN_DATA_ARRAY)
 			var index := evaluate_integer_input(node_id, StoryFlowHandles.IN_INTEGER, _get_data_int(data, "value", 0))
 			if node.get("type") == NT.GET_RANDOM_DATA_ARRAY_ELEMENT and not arr.is_empty():
-				index = randi_range(0, arr.size() - 1)
+				index = _random_int(0, arr.size() - 1)
 			if index >= 0 and index < arr.size() and arr[index] is StoryFlowVariant:
 				return arr[index].get_string()
 		NT.GET_MAP_VALUE:
@@ -2514,3 +2514,10 @@ func _run_script_data_output(state, id: String, data: Dictionary, is_array: bool
 		return value
 	_context.resolution_failures += 1
 	return null
+
+
+func _random_int(minimum: int, maximum: int) -> int:
+	return _context.rollback_rng.random_int(minimum, maximum) if _context and _context.rollback_rng else randi_range(minimum, maximum)
+
+func _random_float(minimum: float, maximum: float) -> float:
+	return _context.rollback_rng.random_float(minimum, maximum) if _context and _context.rollback_rng else randf_range(minimum, maximum)

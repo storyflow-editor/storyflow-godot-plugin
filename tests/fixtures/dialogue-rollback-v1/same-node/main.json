@@ -1,0 +1,82 @@
+{
+  "startNode": "0",
+  "nodes": {
+    "0": {
+      "type": "start",
+      "id": "0"
+    },
+    "A": {
+      "type": "dialogue",
+      "id": "A",
+      "text": "A.text",
+      "choices": [
+        {
+          "id": "again",
+          "text": "again"
+        }
+      ]
+    },
+    "get": {
+      "type": "getInt",
+      "id": "get",
+      "variable": "var_d7e637a6",
+      "isGlobal": true
+    },
+    "plus": {
+      "type": "plus",
+      "id": "plus",
+      "value2": 1
+    },
+    "set": {
+      "type": "setInt",
+      "id": "set",
+      "variable": "var_d7e637a6",
+      "isGlobal": true
+    }
+  },
+  "connections": [
+    {
+      "id": "0--A-0",
+      "source": "0",
+      "target": "A",
+      "sourceHandle": "source-0-",
+      "targetHandle": "target-A-0"
+    },
+    {
+      "id": "A-again-set-0",
+      "source": "A",
+      "target": "set",
+      "sourceHandle": "source-A-again",
+      "targetHandle": "target-set-0"
+    },
+    {
+      "id": "set-1-A-0",
+      "source": "set",
+      "target": "A",
+      "sourceHandle": "source-set-1",
+      "targetHandle": "target-A-0"
+    },
+    {
+      "id": "get-integer--plus-integer-1",
+      "source": "get",
+      "target": "plus",
+      "sourceHandle": "source-get-integer-",
+      "targetHandle": "target-plus-integer-1"
+    },
+    {
+      "id": "plus-integer--set-integer-2",
+      "source": "plus",
+      "target": "set",
+      "sourceHandle": "source-plus-integer-",
+      "targetHandle": "target-set-integer-2"
+    }
+  ],
+  "variables": {},
+  "strings": {
+    "en": {
+      "A.text": "A",
+      "again": "Again"
+    }
+  },
+  "assets": {}
+}

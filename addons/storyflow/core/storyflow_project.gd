@@ -6,11 +6,16 @@ extends RefCounted
 const StoryFlowCharacter = preload("res://addons/storyflow/core/storyflow_character.gd")
 const StoryFlowScript = preload("res://addons/storyflow/core/storyflow_script.gd")
 
+const DEFAULT_MAX_SCRIPT_NESTING := 20
+
 var version: String = ""
 var api_version: String = ""
 var title: String = ""
 var description: String = ""
 var startup_script: String = ""
+## Maximum simultaneous runScript calls, excluding the initial script.
+var max_script_nesting: int = DEFAULT_MAX_SCRIPT_NESTING
+var dialogue_rollback: Dictionary = {"version": 1, "enabled": false, "historyLimit": 100}
 
 ## script_path → StoryFlowScript
 var scripts: Dictionary = {}
@@ -36,6 +41,8 @@ var character_id_index: Dictionary = {}
 ## on an ancestor this table has not reached yet, so StoryFlowDataAssetStore.build_seed types
 ## them in a second pass once every level is present.
 var data_assets: Dictionary = {}
+## data-assets.json localizationVersion. Legacy exports localize declarations only.
+var data_asset_localization_version: int = 1
 
 ## "lang.key" → "value"
 var global_strings: Dictionary = {}
@@ -63,6 +70,16 @@ var language_strings: Dictionary = {}
 
 ## asset_key → Resource (Texture2D, AudioStream, etc.)
 var resolved_assets: Dictionary = {}
+
+
+## Project metadata accepts only finite integer numbers in the supported range.
+## Missing or malformed settings from older exports use the original limit.
+static func normalize_max_script_nesting(value: Variant) -> int:
+	if not (value is int or value is float):
+		return DEFAULT_MAX_SCRIPT_NESTING
+	if not is_finite(value) or value < 1 or value > 100 or value != floor(value):
+		return DEFAULT_MAX_SCRIPT_NESTING
+	return int(value)
 
 
 func get_storyflow_script(path: String) -> StoryFlowScript:

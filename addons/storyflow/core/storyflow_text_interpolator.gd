@@ -17,6 +17,8 @@ const StoryFlowVariant = preload("res://addons/storyflow/core/storyflow_variant.
 
 var _regex: RegEx = null
 var _context: StoryFlowExecutionContext = null
+var snapshot_globals = null
+var snapshot_characters = null
 var _manager: Node = null
 var _language_code: String = "en"
 
@@ -149,19 +151,21 @@ func _field(kind: int, reference: String, field: String) -> Dictionary:
 	if not _manager:
 		return {}
 	if kind == StoryFlowTypes.VariableType.DATA_ASSET:
-		var seed: Dictionary = _manager.get_data_asset_seed()
+		var seed: Dictionary = _context.data_asset_seed if snapshot_globals != null else _manager.get_data_asset_seed()
 		var declaration := Store.find_declaration_by_name(seed, reference, field)
 		if declaration.is_empty():
 			return {}
 		var result := declaration.duplicate()
 		var locale := StoryFlowLocalization.reading_locale(_manager.get_localization(), _manager.get_project().global_strings, _language_code)
-		result["value"] = Store.try_read(seed, _manager.get_data_asset_overlay(), locale, reference, str(declaration.get("id", "")))
+		result["value"] = Store.try_read(seed, _context.data_asset_overlay if snapshot_globals != null else _manager.get_data_asset_overlay(), locale, reference, str(declaration.get("id", "")))
 		result["resolved"] = true
 		return result
 	if kind != StoryFlowTypes.VariableType.CHARACTER:
 		return {}
-	var key: String = StoryFlowCharacter.resolve_character_key(_manager.get_character_id_bridge(), _manager.get_runtime_characters(), reference, _context)
-	var character: StoryFlowCharacter = _manager.get_runtime_character(key)
+	var characters: Dictionary = snapshot_characters if snapshot_characters != null else _manager.get_runtime_characters()
+	var bridge: Dictionary = _context.character_id_bridge if snapshot_characters != null else _manager.get_character_id_bridge()
+	var key: String = StoryFlowCharacter.resolve_character_key(bridge, characters, reference, _context)
+	var character: StoryFlowCharacter = characters.get(StoryFlowCharacter.normalize_path(key))
 	if not character:
 		return {}
 	if StoryFlowCharacter.is_name_token(field):
@@ -190,7 +194,7 @@ func _lookup_variable(display_name: String) -> Dictionary:
 	if result.is_empty():
 		return {}
 	if result.get("is_global", false):
-		return _manager.get_global_variables().get(result["id"], {}) if _manager else {}
+		return (snapshot_globals if snapshot_globals != null else _manager.get_global_variables()).get(result["id"], {}) if _manager else {}
 	return result["variable"]
 
 
