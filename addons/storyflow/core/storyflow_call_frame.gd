@@ -23,6 +23,6 @@ var saved_variables: Dictionary = {}
 ## Saved flow call stack IDs.
 var saved_flow_stack: Array[String] = []
 
-## Rollback-enabled activations own their suspended loops and evaluation caches.
+## Every activation owns its suspended loops and evaluation caches, with or without rollback.
 var saved_loop_stack: Array = []
 var saved_node_runtime_states: Dictionary = {}

@@ -326,6 +326,9 @@ func start_dialogue_with_script(path: String) -> void:
 	# Find start node and begin execution
 	var start_node: Dictionary = script_asset.get_start_node()
 	if not start_node.is_empty():
+		if script_asset.find_connection_by_source_handle(StoryFlowHandles.source("0")).is_empty():
+			_report_error("Start node is not connected")
+			return
 		_process_node(start_node)
 	else:
 		_report_error("Start node (id=0) not found in script")
@@ -417,9 +420,11 @@ func select_option(option_id: String) -> void:
 	_is_processing_chain = true
 	_dialogue_dirty = false
 
-	# Continue from the selected option
+	# Continue from the selected option. With nothing connected it is a dead end, even inside a
+	# forEach body: the dialogue is re-rendered below rather than the loop moved on.
 	var source_handle := StoryFlowHandles.source(dialogue_node_id, option_id)
-	_process_next_node(source_handle)
+	if not _context.current_script.find_connection_by_source_handle(source_handle).is_empty():
+		_process_next_node(source_handle)
 
 	# End processing chain — flush any deferred re-render
 	_is_processing_chain = false
@@ -489,6 +494,14 @@ func advance_dialogue() -> void:
 	_flush_deferred_dialogue_update()
 	if _rollback:
 		_rollback.capture()
+
+	# A walk that ran out of connections leaves this line on screen and usable, as select_option does
+	if not _context.is_waiting_for_input and _context.is_executing:
+		var node: Dictionary = _context.current_script.get_node(dialogue_node_id)
+		if not node.is_empty() and node.get("type", -1) == StoryFlowTypes.NodeType.DIALOGUE:
+			_context.current_dialogue_state = _build_dialogue_state(node)
+			_context.is_waiting_for_input = true
+			dialogue_updated.emit(_context.current_dialogue_state)
 
 
 ## Stop dialogue execution.
@@ -2165,6 +2178,10 @@ func _process_node(node: Dictionary) -> void:
 func _process_next_node(source_handle: String) -> void:
 	var edge: Dictionary = _context.current_script.find_connection_by_source_handle(source_handle)
 	if edge.is_empty():
+		# Nothing connected: inside a forEach body the iteration is finished and the loop moves
+		# on (the HTML runtime's processNextNode). Outside a loop the walk ends here.
+		if not _context.loop_stack.is_empty():
+			_continue_for_each_loop(_context.loop_stack.back().node_id)
 		return
 
 	var target_id: String = edge.get("target", "")
@@ -2211,9 +2228,6 @@ func _handle_end(node: Dictionary) -> void:
 						exit_flow_id = popped_flow_id
 						break
 
-	# Clean up any active loop state for the ending script
-	_context.loop_stack.clear()
-
 	# Check if we're in a nested script (runScript call)
 	if _context.call_stack.size() > 0:
 		# If exit flow, check if exit handle is connected in calling script BEFORE popping
@@ -2225,6 +2239,9 @@ func _handle_end(node: Dictionary) -> void:
 				if check_edge.is_empty():
 					# Exit handle not connected - stay in called script
 					return
+
+		# Clean up any active loop state for the ending script
+		_context.loop_stack.clear()
 
 		# Gather output variable values from the called script (by name for mapping).
 		# Map-typed outputs DETACH (duplicate_variant deep-copies the entries):
@@ -2264,9 +2281,8 @@ func _handle_end(node: Dictionary) -> void:
 
 			# Restore flow call stack
 			_context.flow_call_stack = frame.saved_flow_stack.duplicate()
-			if _rollback:
-				_context.loop_stack.assign(frame.saved_loop_stack)
-				_context.node_runtime_states = frame.saved_node_runtime_states
+			_context.loop_stack.assign(frame.saved_loop_stack)
+			_context.node_runtime_states = frame.saved_node_runtime_states
 			# Caller expression memo predates callee writes; retained execution outputs stay intact.
 			_context.clear_boolean_memo()
 			for caller_node_id in _context.node_runtime_states:
@@ -2316,7 +2332,7 @@ func _handle_end(node: Dictionary) -> void:
 			var edge: Dictionary = _context.current_script.find_connection_by_source_handle(handle)
 			if not edge.is_empty():
 				_process_next_node(handle)
-			elif _rollback and not _context.loop_stack.is_empty():
+			elif not _context.loop_stack.is_empty():
 				_continue_for_each_loop(_context.loop_stack.back().node_id)
 	else:
 		# Main script complete
@@ -2449,17 +2465,17 @@ func _handle_run_script(node: Dictionary) -> void:
 	pending_state.output_values = {}
 	pending_state.output_arrays = {}
 	pending_state.output_types = {}
+	var data: Dictionary = node.get("data", {})
+	var target_script_path: String = data.get("script", "")
+	if target_script_path.is_empty():
+		push_warning("StoryFlow: RunScript node has no script selected")
+		return
+
 	var mgr := get_manager()
 	var project: StoryFlowProject = mgr.get_project() if mgr else null
 	var max_script_nesting := StoryFlowProject.normalize_max_script_nesting(project.max_script_nesting) if project else StoryFlowExecutionContext.MAX_SCRIPT_DEPTH
 	if _context.call_stack.size() >= max_script_nesting:
 		_report_error("Max script nesting depth exceeded (%d)" % max_script_nesting)
-		return
-
-	var data: Dictionary = node.get("data", {})
-	var target_script_path: String = data.get("script", "")
-	if target_script_path.is_empty():
-		_report_error("RunScript node has no script path")
 		return
 
 	if not project:
@@ -2483,8 +2499,7 @@ func _handle_run_script(node: Dictionary) -> void:
 			if is_array:
 				# Array parameters use "{type}-array-param-{id}" handle suffix
 				var handle_suffix := param_type + "-array-param-" + param_id
-				if _context.current_script.find_input_edge(node["id"], handle_suffix).is_empty():
-					continue
+				# Nothing wired passes an empty array (HTML getArrayInput)
 				var arr: Array = []
 				match param_type:
 					"boolean": arr = _evaluator.evaluate_bool_array_input(node.get("id", ""), handle_suffix)
@@ -2495,13 +2510,14 @@ func _handle_run_script(node: Dictionary) -> void:
 					"character": arr = _evaluator.evaluate_character_array_input(node.get("id", ""), handle_suffix)
 					"dataAsset": arr = _evaluator.evaluate_data_array_input(node.get("id", ""), handle_suffix)
 					"audio": arr = _evaluator.evaluate_audio_array_input(node.get("id", ""), handle_suffix)
-				var variant := StoryFlowVariant.new()
-				variant.set_array(arr)
-				param_values[param_name] = variant
+				# By value, like map parameters: the called script never holds the caller's array
+				param_values[param_name] = StoryFlowVariant.from_array(arr).duplicate_variant()
 			else:
 				# Scalar parameters use "{type}-param-{id}" handle suffix
 				var handle_suffix := param_type + "-param-" + param_id
-				if _context.current_script.find_input_edge(node["id"], handle_suffix).is_empty():
+				# Nothing wired passes the type's empty value (HTML getTypedInput); an unwired map
+				# passes nothing and the called script keeps its declared map
+				if param_type == "map" and _context.current_script.find_input_edge(node["id"], handle_suffix).is_empty():
 					continue
 
 				if param_type == "map":
@@ -2551,11 +2567,13 @@ func _handle_run_script(node: Dictionary) -> void:
 	call_frame.script_asset = _context.current_script
 	call_frame.saved_variables = _context.local_variables
 	call_frame.saved_flow_stack = _context.flow_call_stack.duplicate()
-	if _rollback:
-		call_frame.saved_loop_stack = _context.loop_stack
-		call_frame.saved_node_runtime_states = _context.node_runtime_states
-		_context.loop_stack = []
-		_context.node_runtime_states = {}
+	# The caller's loops and node state are parked in its frame with or without rollback: the
+	# called script starts with none of its own, so its End cannot end a loop of the caller and
+	# a loop it leaves unfinished is gone by its next call.
+	call_frame.saved_loop_stack = _context.loop_stack
+	call_frame.saved_node_runtime_states = _context.node_runtime_states
+	_context.loop_stack = []
+	_context.node_runtime_states = {}
 	_context.call_stack.push_back(call_frame)
 
 	_sf_trace('SCRIPT CALL "%s"' % target_script_path)
@@ -2581,6 +2599,9 @@ func _handle_run_script(node: Dictionary) -> void:
 	# Start from node 0 in new script
 	var start_node: Dictionary = target_script.get_start_node()
 	if not start_node.is_empty():
+		if target_script.find_connection_by_source_handle(StoryFlowHandles.source("0")).is_empty():
+			_report_error("Script's Start node is not connected")
+			return
 		_process_node(start_node)
 	else:
 		_report_error("Start node not found in script: %s" % target_script_path)
@@ -2590,7 +2611,7 @@ func _handle_run_flow(node: Dictionary) -> void:
 	var data: Dictionary = node.get("data", {})
 	var flow_id: String = data.get("flowId", "")
 	if flow_id.is_empty():
-		_report_error("RunFlow node has no flow ID")
+		push_warning("StoryFlow: RunFlow node has no flow selected")
 		return
 
 	if _context.flow_call_stack.size() >= StoryFlowExecutionContext.MAX_FLOW_DEPTH:
@@ -2613,7 +2634,10 @@ func _handle_run_flow(node: Dictionary) -> void:
 			return
 
 	# Special case: calling the main "Start" flow
-	if flow_id.to_lower() == "start":
+	if flow_id == "start":
+		if script_asset.find_connection_by_source_handle(StoryFlowHandles.source("0")).is_empty():
+			_report_error("Start node is not connected")
+			return
 		_context.flow_call_stack.push_back(flow_id)
 		var start_node: Dictionary = script_asset.get_start_node()
 		if not start_node.is_empty():
@@ -2630,7 +2654,7 @@ func _handle_run_flow(node: Dictionary) -> void:
 				_process_node(n)
 				return
 
-	_report_error("EntryFlow not found for flowId: %s" % flow_id)
+	_report_error('Flow "%s" not found' % script_asset.flows.get(flow_id, {}).get("name", flow_id))
 
 
 func _handle_entry_flow(node: Dictionary) -> void:
@@ -2803,9 +2827,7 @@ func _handle_switch_on_enum(node: Dictionary) -> void:
 			enum_value = val.get_string("")
 
 	var source_handle := StoryFlowHandles.source(node["id"], enum_value)
-	var edge: Dictionary = _context.current_script.find_connection_by_source_handle(source_handle)
-	if not edge.is_empty():
-		_process_next_node(source_handle)
+	_process_next_node(source_handle)
 
 
 func _handle_random_branch(node: Dictionary) -> void:
@@ -2831,9 +2853,7 @@ func _handle_random_branch(node: Dictionary) -> void:
 	if total_weight <= 0:
 		var first_option: Dictionary = options[0]
 		var source_handle := StoryFlowHandles.source(node["id"], first_option.get("id", ""))
-		var edge: Dictionary = _context.current_script.find_connection_by_source_handle(source_handle)
-		if not edge.is_empty():
-			_process_next_node(source_handle)
+		_process_next_node(source_handle)
 		return
 
 	# Pick a random value in [0, total_weight)
@@ -2850,13 +2870,56 @@ func _handle_random_branch(node: Dictionary) -> void:
 
 	var selected_option: Dictionary = options[selected_index]
 	var source_handle := StoryFlowHandles.source(node["id"], selected_option.get("id", ""))
-	var edge: Dictionary = _context.current_script.find_connection_by_source_handle(source_handle)
-	if not edge.is_empty():
-		_process_next_node(source_handle)
+	_process_next_node(source_handle)
 
 # =============================================================================
 # Node Handlers - Array Set
 # =============================================================================
+
+const _SET_ELEMENT_TYPES := {
+	StoryFlowTypes.NodeType.SET_BOOL_ARRAY_ELEMENT: "boolean", StoryFlowTypes.NodeType.SET_INT_ARRAY_ELEMENT: "integer",
+	StoryFlowTypes.NodeType.SET_FLOAT_ARRAY_ELEMENT: "float", StoryFlowTypes.NodeType.SET_STRING_ARRAY_ELEMENT: "string",
+	StoryFlowTypes.NodeType.SET_IMAGE_ARRAY_ELEMENT: "image", StoryFlowTypes.NodeType.SET_CHARACTER_ARRAY_ELEMENT: "character",
+	StoryFlowTypes.NodeType.SET_AUDIO_ARRAY_ELEMENT: "audio",
+}
+
+
+## Whether anything is wired into a Set Array node's array input.
+func _has_array_input(node: Dictionary) -> bool:
+	for connection in _context.current_script.find_connections_to_node(node["id"]):
+		if str(connection.get("target_handle", "")).contains("-array"):
+			return true
+	return false
+
+
+## Set Array Element as the editor runs it (HTML setArrayElement): the array from input "2", the
+## index from input "3" or the exported value1, the value from input "4" or the exported value2,
+## and the changed copy written back to the variable behind the array input.
+func _handle_set_array_element(node: Dictionary, type: String) -> void:
+	var node_id: String = node["id"]
+	var data: Dictionary = node.get("data", {})
+	var array_suffix := type + "-array-2"
+	if _evaluator:
+		var arr := _evaluate_character_var_array_input(node_id, type, array_suffix)
+		var index := _evaluator.evaluate_integer_input(node_id, "integer-3", _evaluator._get_data_int(data, "value1", 0))
+		if index >= 0 and index < arr.size():
+			var inline_value = data.get("value2", null)
+			var element := StoryFlowVariant.new()
+			match type:
+				"boolean":
+					element.set_bool(_evaluator.evaluate_boolean_input(node_id, "boolean-4", inline_value.get_bool(false) if inline_value is StoryFlowVariant else false))
+				"integer":
+					element.set_int(_evaluator.evaluate_integer_input(node_id, "integer-4", inline_value.get_int(0) if inline_value is StoryFlowVariant else 0))
+				"float":
+					element.set_float(_evaluator.evaluate_float_input(node_id, "float-4", inline_value.get_float(0.0) if inline_value is StoryFlowVariant else 0.0))
+				"string":
+					element.set_string(_evaluator.evaluate_string_input(node_id, "string-4", _text.get_string(inline_value.get_string(""), language_code) if inline_value is StoryFlowVariant else ""))
+				_:
+					element.set_string(_evaluator.evaluate_string_input(node_id, type + "-4", inline_value.get_string("") if inline_value is StoryFlowVariant else ""))
+			arr[index] = element
+			_update_connected_array_variable(node, array_suffix, arr)
+	_handle_set_node_end(node, StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_FLOW))
+
 
 func _handle_array_set(node: Dictionary) -> void:
 	if node.get("type") == StoryFlowTypes.NodeType.SET_DATA_ARRAY_ELEMENT:
@@ -2864,14 +2927,18 @@ func _handle_array_set(node: Dictionary) -> void:
 		return
 	var data: Dictionary = node.get("data", {})
 	var var_id: String = data.get("variable", "")
+	var node_type: StoryFlowTypes.NodeType = node.get("type", StoryFlowTypes.NodeType.UNKNOWN)
+	var NT := StoryFlowTypes.NodeType
+	# The export writes no variable on an element setter: its array arrives over the input edge.
+	if var_id.is_empty() and _SET_ELEMENT_TYPES.has(node_type):
+		_handle_set_array_element(node, _SET_ELEMENT_TYPES[node_type])
+		return
 	var is_global: bool = data.get("isGlobal", false)
 	var variable: Dictionary = _find_variable(var_id, is_global)
 	if variable.is_empty():
 		_handle_set_node_end(node, StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_FLOW))
 		return
 
-	var node_type: StoryFlowTypes.NodeType = node.get("type", StoryFlowTypes.NodeType.UNKNOWN)
-	var NT := StoryFlowTypes.NodeType
 
 	# Determine if this is a SetArrayElement
 	var is_set_element := node_type in [
@@ -2928,9 +2995,10 @@ func _handle_array_set(node: Dictionary) -> void:
 					elem.set_string(_evaluator.evaluate_string_input(node.get("id", ""), StoryFlowHandles.IN_STRING, dv))
 			arr[idx] = elem
 	elif not is_set_element and _evaluator:
-		# Set whole array from connected input
-		var new_array: Array = []
-		match node_type:
+		# Set whole array from connected input. With nothing connected the variable keeps its
+		# value (HTML updateArrayVariable).
+		var new_array: Array = variant.get_array()
+		match node_type if _has_array_input(node) else NT.UNKNOWN:
 			NT.SET_BOOL_ARRAY:
 				new_array = _evaluator.evaluate_bool_array_input(node.get("id", ""), StoryFlowHandles.IN_BOOL_ARRAY)
 			NT.SET_INT_ARRAY:
@@ -2947,6 +3015,9 @@ func _handle_array_set(node: Dictionary) -> void:
 				new_array = _evaluator.evaluate_data_array_input(node.get("id", ""), StoryFlowHandles.IN_DATA_ARRAY)
 			NT.SET_AUDIO_ARRAY:
 				new_array = _evaluator.evaluate_audio_array_input(node.get("id", ""), StoryFlowHandles.IN_AUDIO_ARRAY)
+		if not is_same(new_array, variant.get_array()):
+			# A copy, so the variable does not follow later changes to the array it was set from
+			new_array = StoryFlowVariant.from_array(new_array).duplicate_variant().get_array()
 		variant.set_array(new_array)
 
 	var _arr_var_name: String = variable.get("name", var_id)
@@ -2992,6 +3063,8 @@ func _handle_array_modify(node: Dictionary) -> void:
 				arr = _evaluator.evaluate_data_array_input(node_id, StoryFlowHandles.IN_DATA_ARRAY).duplicate()
 			NT.ADD_TO_AUDIO_ARRAY, NT.REMOVE_FROM_AUDIO_ARRAY, NT.CLEAR_AUDIO_ARRAY:
 				arr = _evaluator.evaluate_audio_array_input(node_id, StoryFlowHandles.IN_AUDIO_ARRAY)
+		# The op changes a copy and writes it back to the variable behind the input, if there is one
+		arr = arr.duplicate()
 
 	var inline_value = data.get("value", null)
 
@@ -3031,11 +3104,11 @@ func _handle_array_modify(node: Dictionary) -> void:
 				dv = _resolve_string(raw)
 			elif inline_value is String:
 				dv = _resolve_string(inline_value)
-			var eval_result: String = _evaluator.evaluate_string_input(node_id, StoryFlowHandles.IN_STRING, dv) if _evaluator else dv
-			# If evaluator returned empty but we have a resolved default, use the default
-			# (the input edge may evaluate a localization key that the string evaluator can't resolve)
-			if eval_result.is_empty() and not dv.is_empty():
-				eval_result = dv
+			# A wired value is added as it is, empty included; the inline value is for an unwired
+			# pin. A bare "string-array" handle also answers the "string" lookup, and is not the value.
+			var eval_result := dv
+			if _evaluator and _context.current_script.find_input_edge(node_id, StoryFlowHandles.IN_STRING) != _context.current_script.find_input_edge(node_id, StoryFlowHandles.IN_STRING_ARRAY):
+				eval_result = _evaluator.evaluate_string_input(node_id, StoryFlowHandles.IN_STRING, dv)
 			var elem := StoryFlowVariant.new()
 			elem.set_string(eval_result)
 			arr.append(elem)
@@ -3267,7 +3340,16 @@ func _get_array_handle_suffix(node_type: StoryFlowTypes.NodeType) -> String:
 # Node Handlers - ForEach Loop
 # =============================================================================
 
+## Iterations run one after another here rather than each inside the last one's call chain, so
+## a long loop does not run out of call depth: a body that finishes while this is still on the
+## stack asks for the next iteration (see _continue_for_each_loop) and unwinds back to it.
 func _handle_for_each_loop(node: Dictionary) -> void:
+	while _for_each_loop_step(node):
+		pass
+
+
+## One iteration, or the loop's end. True when the body finished and the next iteration is due.
+func _for_each_loop_step(node: Dictionary) -> bool:
 	var node_id: String = node["id"]
 	var node_state: StoryFlowNodeRuntimeState = _context.get_node_state(node_id)
 	var node_type: StoryFlowTypes.NodeType = node.get("type", StoryFlowTypes.NodeType.UNKNOWN)
@@ -3295,7 +3377,8 @@ func _handle_for_each_loop(node: Dictionary) -> void:
 				NT.FOR_EACH_AUDIO_LOOP:
 					loop_array = _evaluator.evaluate_audio_array_input(node.get("id", ""), StoryFlowHandles.IN_AUDIO_ARRAY)
 
-		node_state.loop_array = loop_array
+		# A copy: the body may change the variable, the walk stays as it began (HTML getArrayInput)
+		node_state.loop_array = loop_array.duplicate()
 		node_state.loop_index = 0
 		node_state.loop_initialized = true
 
@@ -3323,7 +3406,7 @@ func _handle_for_each_loop(node: Dictionary) -> void:
 		_context.loop_stack.push_back(loop_frame)
 
 		# Execute loop body
-		_process_next_node(StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_LOOP_BODY))
+		return _run_loop_body(node, node_state)
 	else:
 		# Loop complete - cleanup
 		node_state.loop_initialized = false
@@ -3335,6 +3418,24 @@ func _handle_for_each_loop(node: Dictionary) -> void:
 
 		# Continue after loop
 		_complete_loop(node_id)
+		return false
+
+
+## Run a loop body. True when it finished synchronously and asked for the next iteration.
+func _run_loop_body(node: Dictionary, node_state: StoryFlowNodeRuntimeState) -> bool:
+	var context := _context
+	var was_running := node_state.loop_running
+	node_state.loop_running = true
+	node_state.loop_continue = false
+	_process_next_node(StoryFlowHandles.source(node["id"], StoryFlowHandles.OUT_LOOP_BODY))
+	node_state.loop_running = was_running
+	var again := node_state.loop_continue and context == _context and context.is_executing and not context.is_paused
+	node_state.loop_continue = false
+	if again:
+		# What _process_node does on entering the loop node again
+		context.current_node_id = node["id"]
+		_sf_trace("NODE %s %s" % [node["id"], node.get("type_string", "")])
+	return again
 
 
 func _continue_for_each_loop(node_id: String) -> void:
@@ -3352,6 +3453,11 @@ func _continue_for_each_loop(node_id: String) -> void:
 	# Pop the loop context that was pushed for this iteration
 	if _context.loop_stack.size() > 0 and _context.loop_stack.back().node_id == node_id:
 		_context.loop_stack.pop_back()
+
+	# The loop's handler is still on the stack running this body: unwind to it
+	if node_state.loop_running:
+		node_state.loop_continue = true
+		return
 
 	# Re-process the loop node to continue
 	_process_node(loop_node)
@@ -3525,6 +3631,11 @@ func _handle_map_pure_node(node: Dictionary) -> void:
 
 
 func _handle_for_each_map(node: Dictionary) -> void:
+	while _for_each_map_step(node):
+		pass
+
+
+func _for_each_map_step(node: Dictionary) -> bool:
 	# Mirrors the HTML runtime's processForEachMap: iterate map entries (key +
 	# value) in insertion order. Entries are SNAPSHOT once at loop init — body
 	# mutations (even removeMapKey of the current key) land on the live map but
@@ -3538,7 +3649,7 @@ func _handle_for_each_map(node: Dictionary) -> void:
 	# "completed" immediately with zero iterations (and no LOOP trace).
 	if str(data.get("keyType", "")).is_empty() or str(data.get("valueType", "")).is_empty():
 		_complete_loop(node_id)
-		return
+		return false
 
 	var node_state: StoryFlowNodeRuntimeState = _context.get_node_state(node_id)
 
@@ -3590,7 +3701,7 @@ func _handle_for_each_map(node: Dictionary) -> void:
 		_context.loop_stack.push_back(loop_frame)
 
 		# Execute loop body
-		_process_next_node(StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_LOOP_BODY))
+		return _run_loop_body(node, node_state)
 	else:
 		# Loop complete - cleanup all loop state
 		node_state.loop_initialized = false
@@ -3606,6 +3717,7 @@ func _handle_for_each_map(node: Dictionary) -> void:
 
 		# Continue after loop
 		_complete_loop(node_id)
+		return false
 
 
 ## Deep-duplicate a map's entries into a fresh Dictionary (per-value
@@ -4658,7 +4770,7 @@ func _handle_set_data_array_element(node: Dictionary) -> void:
 
 func _complete_loop(node_id: String) -> void:
 	var handle := StoryFlowHandles.source(node_id, StoryFlowHandles.OUT_LOOP_COMPLETED)
-	if _rollback and _context.current_script.find_connection_by_source_handle(handle).is_empty() and not _context.loop_stack.is_empty():
+	if _context.current_script.find_connection_by_source_handle(handle).is_empty() and not _context.loop_stack.is_empty():
 		_continue_for_each_loop(_context.loop_stack.back().node_id)
 	else:
 		_process_next_node(handle)
